@@ -2,7 +2,7 @@
 
 > **내 주변에서 지금 무슨 일이 일어나고 있는지, 가장 가까운 사람들과 실시간으로 공유하는 위치 기반 정보 서비스**
 
-![로고](/Users/tony/WebstormProjects/WGO/Backend/2e912640-ㅇㅇ7ace-443a-8a5d-030c0c9e7baa.png)
+![What's Going On](./images/banner.png)
 
 ## 📌 Service Overview
 
