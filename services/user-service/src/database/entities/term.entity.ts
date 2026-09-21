@@ -1,7 +1,8 @@
-import { Column, Entity, PrimaryGeneratedColumn, Unique } from 'typeorm';
+import { Column, Entity, Index, PrimaryGeneratedColumn, Unique } from 'typeorm';
 
 @Entity({ name: 'terms' })
 @Unique('uq_terms_code_version', ['code', 'version'])
+@Index('idx_terms_code_effective_at', { synchronize: false })
 export class TermEntity {
   @PrimaryGeneratedColumn('identity', {
     type: 'bigint',

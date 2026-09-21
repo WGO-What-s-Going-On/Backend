@@ -35,6 +35,19 @@ pnpm migration:revert
 pnpm migration:show
 ```
 
+## Terms
+
+Set the three document URLs in `.env`, seed the initial terms, and query the public endpoint.
+
+```bash
+TERMS_SERVICE_DOCUMENT_URL=https://...
+TERMS_PRIVACY_DOCUMENT_URL=https://...
+TERMS_LOCATION_DOCUMENT_URL=https://...
+
+pnpm seed:terms
+curl http://localhost:3001/api/v1/terms
+```
+
 ## Verification
 
 ```bash
