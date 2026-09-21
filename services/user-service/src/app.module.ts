@@ -5,6 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { configuration } from './config/configuration.js';
 import { createTypeOrmOptions } from './database/typeorm.config.js';
 import { HealthModule } from './health/health.module.js';
+import { TermsModule } from './terms/terms.module.js';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { HealthModule } from './health/health.module.js';
       useFactory: createTypeOrmOptions,
     }),
     HealthModule,
+    TermsModule,
   ],
 })
 export class AppModule {}
