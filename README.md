@@ -127,3 +127,19 @@ What's Going On Backend는 단순한 CRUD 서버가 아니라,
 > **위치 기반 서비스 + 실시간 통신 + 대규모 쓰기 트래픽 + 분산 시스템**
 
 환경을 안정적으로 처리할 수 있는 확장 가능한 Backend Architecture 구축을 목표로 합니다.
+
+---
+
+## ✅ CI 및 코드 포맷
+
+GitHub Actions의 `CI` 워크플로는 변경된 서비스만 골라 서비스별 독립 job에서 Vitest를 실행합니다. Prettier 검사는 변경된 코드와 설정 파일에 적용됩니다. CI 설정이나 공용 코드가 바뀌면 `package.json`이 있는 모든 서비스를 테스트합니다. 브랜치 보호 규칙에는 항상 실행되는 `ci` job을 필수 체크로 지정할 수 있습니다.
+
+각 서비스는 `gateways/<서비스명>/` 또는 `services/<서비스명>/`에 `package.json`, `pnpm-lock.yaml` 또는 `package-lock.json`, 그리고 Vitest 의존성을 갖춰야 합니다. CI는 각 서비스 경로에서 의존성을 설치한 뒤 `vitest run`을 실행합니다.
+
+로컬에서 전체 코드 포맷을 적용하거나 검사할 때는 저장소 루트에서 다음 명령을 실행합니다.
+
+```bash
+npm ci
+npm run format
+npm run format:check
+```
