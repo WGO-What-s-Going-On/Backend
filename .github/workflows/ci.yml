@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.changes.outputs.matrix }}
+      has_services: ${{ steps.changes.outputs.has_services }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Find changed services
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = pull_request ]; then
+            node scripts/ci.mjs detect "$PR_BASE_SHA"
+          elif [ "$EVENT_NAME" = push ]; then
+            node scripts/ci.mjs detect "$PUSH_BEFORE_SHA"
+          else
+            node scripts/ci.mjs detect
+          fi
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check changed files with Prettier
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = pull_request ]; then
+            node scripts/ci.mjs format "$PR_BASE_SHA"
+          elif [ "$EVENT_NAME" = push ]; then
+            node scripts/ci.mjs format "$PUSH_BEFORE_SHA"
+          else
+            npm run format:check
+          fi
+
+  test:
+    needs: detect
+    if: needs.detect.outputs.has_services == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
+    name: Test ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ matrix.path }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies and run Vitest
+        shell: bash
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            npm install --global pnpm@10
+            pnpm install --frozen-lockfile
+            pnpm exec vitest run
+          elif [ -f package-lock.json ]; then
+            npm ci
+            ./node_modules/.bin/vitest run
+          else
+            echo 'A pnpm-lock.yaml or package-lock.json is required for this service.' >&2
+            exit 1
+          fi
+
+  ci:
+    if: always()
+    needs: [detect, format, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check CI results
+        env:
+          DETECT_RESULT: ${{ needs.detect.result }}
+          FORMAT_RESULT: ${{ needs.format.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          test "$DETECT_RESULT" = success
+          test "$FORMAT_RESULT" = success
+          test "$TEST_RESULT" = success -o "$TEST_RESULT" = skipped
