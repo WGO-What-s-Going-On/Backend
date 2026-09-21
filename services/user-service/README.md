@@ -24,6 +24,17 @@ pnpm dev
 curl http://localhost:3001/health/live
 ```
 
+## Database migrations
+
+PostgreSQL을 실행한 뒤 migration을 적용하거나 원복하고 현재 상태를 확인할 수 있다.
+
+```bash
+docker compose up -d
+pnpm migration:run
+pnpm migration:revert
+pnpm migration:show
+```
+
 ## Verification
 
 ```bash
