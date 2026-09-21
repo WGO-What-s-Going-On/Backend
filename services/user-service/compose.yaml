@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: wgo-user-service-postgres
+    environment:
+      POSTGRES_DB: wgo_user
+      POSTGRES_USER: wgo
+      POSTGRES_PASSWORD: wgo
+    ports:
+      - "5432:5432"
+    volumes:
+      - user-service-postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wgo -d wgo_user"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+volumes:
+  user-service-postgres-data:
