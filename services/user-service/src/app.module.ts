@@ -6,6 +6,7 @@ import { configuration } from './config/configuration.js';
 import { createTypeOrmOptions } from './database/typeorm.config.js';
 import { HealthModule } from './health/health.module.js';
 import { TermsModule } from './terms/terms.module.js';
+import { UsersModule } from './users/users.module.js';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { TermsModule } from './terms/terms.module.js';
     }),
     HealthModule,
     TermsModule,
+    UsersModule,
   ],
 })
 export class AppModule {}
