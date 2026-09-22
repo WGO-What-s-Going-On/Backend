@@ -43,6 +43,46 @@ export class RedisSessionStore implements OnModuleDestroy {
     await this.redis.quit().catch(() => this.redis.disconnect());
   }
 
+  async find(sessionId: string): Promise<AuthSession | null> {
+    const raw = await this.redis.get(RedisSessionStore.sessionKey(sessionId));
+    if (raw === null) return null;
+    const session: AuthSession = JSON.parse(raw);
+    if (session.sessionId !== sessionId || typeof session.userId !== 'string' ||
+        typeof session.refreshTokenHash !== 'string' || typeof session.createdAt !== 'string') {
+      throw new Error('Invalid stored authentication session');
+    }
+    return session;
+  }
+
+  async rotate(session: AuthSession, newHash: string): Promise<boolean> {
+    // CAS prevents concurrent refreshes and logout races from reviving an old token/session.
+    // KEEPTTL preserves the exact expiration deadline rather than resetting the lifetime.
+    const result = await this.redis.eval(`
+      local raw = redis.call('GET', KEYS[1])
+      if not raw or redis.call('TTL', KEYS[1]) <= 0 then return 0 end
+      local session = cjson.decode(raw)
+      if session.refreshTokenHash ~= ARGV[1] or session.userId ~= ARGV[2] then return 0 end
+      session.refreshTokenHash = ARGV[3]
+      redis.call('SET', KEYS[1], cjson.encode(session), 'KEEPTTL')
+      return 1
+    `, 1, RedisSessionStore.sessionKey(session.sessionId),
+    session.refreshTokenHash, session.userId, newHash);
+    return result === 1;
+  }
+
+  async deleteSession(userId: string, sessionId: string): Promise<boolean> {
+    const result = await this.redis.eval(`
+      local raw = redis.call('GET', KEYS[1])
+      if raw and cjson.decode(raw).userId ~= ARGV[1] then return 0 end
+      redis.call('SREM', KEYS[2], ARGV[2])
+      redis.call('DEL', KEYS[1])
+      return 1
+    `, 2, RedisSessionStore.sessionKey(sessionId),
+    RedisSessionStore.userSessionsKey(userId), userId, sessionId);
+    // Redis automatically deletes an empty Set after SREM.
+    return result === 1;
+  }
+
   static sessionKey(sessionId: string): string {
     return `auth:session:${sessionId}`;
   }

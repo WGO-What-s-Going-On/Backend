@@ -11,8 +11,9 @@ import { OAuthAccountEntity } from '../database/entities/oauth-account.entity.js
 import { UserEntity, UserStatus } from '../database/entities/user.entity.js';
 import { AccessTokenService } from './access-token.service.js';
 import type { KakaoLoginResponse } from './dto/kakao-login-response.dto.js';
+import type { RefreshResponse } from './dto/refresh-response.dto.js';
 import { KakaoOAuthClient } from './kakao-oauth.client.js';
-import { createRefreshToken, hashRefreshToken } from './refresh-token.js';
+import { createRefreshToken, hashRefreshToken, parseRefreshToken, refreshTokenMatchesHash } from './refresh-token.js';
 import { RedisSessionStore } from './redis-session.store.js';
 
 const KAKAO_PROVIDER = 'KAKAO';
@@ -89,6 +90,35 @@ export class AuthService {
     }
 
     throw new ServiceUnavailableException('Unable to create account');
+  }
+
+  async refresh(refreshToken: string): Promise<RefreshResponse> {
+    const sessionId = parseRefreshToken(refreshToken);
+    if (!sessionId) throw new UnauthorizedException('Invalid authentication credentials');
+
+    const session = await this.redisSessionStore.find(sessionId).catch(() => {
+      throw new ServiceUnavailableException('Authentication session is temporarily unavailable');
+    });
+    if (!session || !refreshTokenMatchesHash(refreshToken, session.refreshTokenHash)) {
+      throw new UnauthorizedException('Invalid authentication credentials');
+    }
+
+    const nextRefreshToken = createRefreshToken(sessionId);
+    const accessToken = await this.accessTokenService.create(session.userId, sessionId);
+    const rotated = await this.redisSessionStore.rotate(session, hashRefreshToken(nextRefreshToken))
+      .catch(() => {
+        throw new ServiceUnavailableException('Authentication session is temporarily unavailable');
+      });
+    if (!rotated) throw new UnauthorizedException('Invalid authentication credentials');
+
+    return { accessToken, refreshToken: nextRefreshToken, expiresIn: this.accessTokenService.expiresIn };
+  }
+
+  async logout(userId: string, sessionId: string): Promise<void> {
+    const deleted = await this.redisSessionStore.deleteSession(userId, sessionId).catch(() => {
+      throw new ServiceUnavailableException('Authentication session is temporarily unavailable');
+    });
+    if (!deleted) throw new UnauthorizedException('Invalid authentication credentials');
   }
 
   private async findUser(providerUserId: string): Promise<UserEntity | null> {

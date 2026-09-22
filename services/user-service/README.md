@@ -74,8 +74,32 @@ curl -X POST http://localhost:3001/api/v1/auth/kakao \
 ```
 
 Access Token은 WGO JWT이며 Refresh Token은 opaque random token이다. 원문 Refresh
-Token은 응답으로 한 번만 전달되고 Redis에는 SHA-256 hash만 저장된다. 현재 범위에는
-refresh 및 logout endpoint가 포함되지 않는다.
+Token은 응답으로 전달되고 Redis에는 전체 토큰의 SHA-256 hash만 저장된다.
+
+## Refresh and logout
+
+`POST /api/v1/auth/refresh`는 Access Token 없이 `{ "refreshToken": "..." }`를 받는다.
+성공 시 HTTP 200과 `{ "accessToken": "...", "refreshToken": "...", "expiresIn": 900 }`를
+반환한다. `expiresIn`은 설정된 Access Token TTL이다.
+
+Refresh Token의 `<sessionId>.<secret>`을 파싱해 세션을 직접 조회하고 timingSafeEqual로
+해시를 검증한다. 같은 sessionId에 새로운 secret을 발급하며, Redis Lua의 비교 후 교체로
+동시 재사용을 차단한다. 현재 TTL이 0 이하이면 거부하고 `SET KEEPTTL`로 기존 만료 시각을
+유지한다. 사용자별 세션 Set은 변경하지 않는다. 잘못된 토큰은 동일한 401, Redis 장애는 503이다.
+
+`POST /api/v1/auth/logout`은 내부 헤더 `x-user-id`, `x-session-id`로 현재 세션을 지정한다.
+기존 Gateway 전달 규약이 없어 이 두 헤더를 사용한다. **이 헤더는 인증 수단이 아니다.**
+운영 시 User Service는 신뢰된 Gateway에서만 접근할 수 있어야 하며, Gateway는 클라이언트가
+보낸 같은 이름의 헤더를 제거하고 검증한 JWT의 `sub`, `sid`로 덮어써야 한다.
+Gateway 연결 및 네트워크 접근 제한은 이번 구현에 포함되지 않는다.
+
+소유자가 일치하면 세션 삭제와 Set의 SREM을 원자적으로 수행하고 HTTP 204를 반환한다.
+이미 없는 세션도 204이며 다른 사용자의 세션은 401, Redis 장애는 503이다.
+다른 기기의 세션과 PostgreSQL은 변경하지 않는다. 기존 Access JWT는 만료까지 유효하며
+blacklist는 사용하지 않는다.
+
+기존 JWT 발급기는 초 단위 iat/exp와 같은 sub/sid를 사용하므로 같은 초 안에 발급한
+Access JWT 문자열은 같을 수 있다. 이번 작업에서는 JWT claim 구조를 변경하지 않는다.
 
 ## Verification
 
