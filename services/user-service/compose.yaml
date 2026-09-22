@@ -16,5 +16,16 @@ services:
       timeout: 2s
       retries: 10
 
+  redis:
+    image: redis:8-alpine
+    container_name: wgo-user-service-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
 volumes:
   user-service-postgres-data:
