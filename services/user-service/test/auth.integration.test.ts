@@ -13,7 +13,7 @@ import { AccessTokenService } from '../src/auth/access-token.service.js';
 import { AuthController } from '../src/auth/auth.controller.js';
 import { AuthService } from '../src/auth/auth.service.js';
 import { KakaoOAuthClient } from '../src/auth/kakao-oauth.client.js';
-import { parseRefreshToken } from '../src/auth/refresh-token.js';
+import { createRefreshToken, hashRefreshToken, parseRefreshToken } from '../src/auth/refresh-token.js';
 import { RedisSessionStore } from '../src/auth/redis-session.store.js';
 import { configuration } from '../src/config/configuration.js';
 import { USER_SERVICE_ENTITIES } from '../src/database/entities/index.js';
@@ -33,7 +33,7 @@ const kakaoOAuthClient = {
   getUserId: vi.fn<(accessToken: string) => Promise<string>>(),
 };
 
-describe('POST /api/v1/auth/kakao', () => {
+describe('Auth API integration', () => {
   let adminDataSource: DataSource;
   let testDataSource: DataSource;
   let redis: Redis;
@@ -299,6 +299,136 @@ describe('POST /api/v1/auth/kakao', () => {
       .post('/api/v1/auth/kakao')
       .send({ authorizationCode: ' code ' })
       .expect(201);
+  }
+
+  it('refreshes without Access JWT, rotates the secret and preserves session expiration', async () => {
+    const loginResponse = await login();
+    const token = loginResponse.body.refreshToken as string;
+    const sid = parseRefreshToken(token)!;
+    const key = RedisSessionStore.sessionKey(sid);
+    const indexKey = RedisSessionStore.userSessionsKey(loginResponse.body.userId as string);
+    await redis.expire(key, 120);
+    const deadline = await redis.call('PEXPIRETIME', key);
+    const indexDeadline = await redis.call('PEXPIRETIME', indexKey);
+    const before = await sessionStore.find(sid);
+
+    const response = await refresh(token).expect(200);
+    expect(Object.keys(response.body).sort()).toEqual(['accessToken', 'expiresIn', 'refreshToken']);
+    expect(response.body.expiresIn).toBe(accessTtlSeconds);
+    const { payload } = await jwtVerify(response.body.accessToken as string,
+      new TextEncoder().encode(accessSecret), {
+        algorithms: ['HS256'], issuer: 'wgo-user-service-test', audience: 'wgo-api-test',
+      });
+    expect(payload.sub).toBe(loginResponse.body.userId);
+    expect(payload.sid).toBe(sid);
+    expect(payload.exp! - payload.iat!).toBe(accessTtlSeconds);
+    expect(parseRefreshToken(response.body.refreshToken as string)).toBe(sid);
+    expect((response.body.refreshToken as string).split('.')[1]).not.toBe(token.split('.')[1]);
+    const raw = (await redis.get(key))!;
+    expect(JSON.parse(raw)).toEqual({ ...before,
+      refreshTokenHash: hashRefreshToken(response.body.refreshToken as string) });
+    expect(raw).not.toContain(token);
+    expect(raw).not.toContain(response.body.refreshToken as string);
+    expect(await redis.call('PEXPIRETIME', key)).toBe(deadline);
+    expect(await redis.call('PEXPIRETIME', indexKey)).toBe(indexDeadline);
+    expect(await redis.smembers(indexKey)).toEqual([sid]);
+    await refresh(token).expect(401);
+    await refresh(response.body.refreshToken as string).expect(200);
+  });
+
+  it.each([{}, { refreshToken: null }, { refreshToken: 123 },
+    { refreshToken: '' }, { refreshToken: 'malformed' }])('rejects invalid refresh body %j', async (body) => {
+    await request(app.getHttpServer()).post('/api/v1/auth/refresh').send(body).expect(401);
+  });
+
+  it('rejects missing sessions and mismatched hashes', async () => {
+    await refresh(createRefreshToken(randomUUID())).expect(401);
+    const response = await login();
+    const sid = parseRefreshToken(response.body.refreshToken as string)!;
+    await refresh(createRefreshToken(sid)).expect(401);
+    await refresh(response.body.refreshToken as string).expect(200);
+  });
+
+  it.each(['expired', 'no-ttl', 'below-one-second'])('rejects %s sessions', async (mode) => {
+    const response = await login();
+    const key = RedisSessionStore.sessionKey(parseRefreshToken(response.body.refreshToken as string)!);
+    if (mode === 'expired') await redis.pexpire(key, 0);
+    else if (mode === 'no-ttl') await redis.persist(key);
+    else await redis.pexpire(key, 400);
+    await refresh(response.body.refreshToken as string).expect(401);
+  });
+
+  it('allows only one concurrent refresh using the same old token', async () => {
+    const response = await login();
+    const responses = await Promise.all([
+      refresh(response.body.refreshToken as string), refresh(response.body.refreshToken as string),
+    ]);
+    expect(responses.map((item) => item.status).sort()).toEqual([200, 401]);
+    await refresh(responses.find((item) => item.status === 200)!.body.refreshToken as string).expect(200);
+  });
+
+  it.each(['find', 'rotate'] as const)('returns 503 for Redis %s failure during refresh', async (method) => {
+    const response = await login();
+    vi.spyOn(sessionStore, method).mockRejectedValueOnce(new Error('Redis unavailable'));
+    const failed = await refresh(response.body.refreshToken as string).expect(503);
+    expect(failed.body).not.toHaveProperty('accessToken');
+  });
+
+  it('logs out only the current session, supports repeat logout and rejects its refresh token', async () => {
+    const first = await login();
+    const second = await login();
+    const sid = parseRefreshToken(first.body.refreshToken as string)!;
+    const otherSid = parseRefreshToken(second.body.refreshToken as string)!;
+    const userId = first.body.userId as string;
+    await logout(userId, sid).expect(204).expect('');
+    expect(await redis.get(RedisSessionStore.sessionKey(sid))).toBeNull();
+    expect(await redis.smembers(RedisSessionStore.userSessionsKey(userId))).toEqual([otherSid]);
+    expect(await redis.exists(RedisSessionStore.sessionKey(otherSid))).toBe(1);
+    await logout(userId, sid).expect(204);
+    await refresh(first.body.refreshToken as string).expect(401);
+    await refresh(second.body.refreshToken as string).expect(200);
+    await logout(userId, otherSid).expect(204);
+    expect(await redis.exists(RedisSessionStore.userSessionsKey(userId))).toBe(0);
+  });
+
+  it('does not delete a session belonging to another user', async () => {
+    const response = await login();
+    const sid = parseRefreshToken(response.body.refreshToken as string)!;
+    await logout(randomUUID(), sid).expect(401);
+    expect(await redis.sismember(RedisSessionStore.userSessionsKey(response.body.userId as string), sid)).toBe(1);
+    await refresh(response.body.refreshToken as string).expect(200);
+  });
+
+  it('requires valid internal context for logout', async () => {
+    await request(app.getHttpServer()).post('/api/v1/auth/logout').expect(401);
+    await logout('invalid', randomUUID()).expect(401);
+    await logout(randomUUID(), 'invalid').expect(401);
+  });
+
+  it('returns 503 for Redis failure during logout', async () => {
+    const response = await login();
+    const sid = parseRefreshToken(response.body.refreshToken as string)!;
+    vi.spyOn(sessionStore, 'deleteSession').mockRejectedValueOnce(new Error('Redis unavailable'));
+    await logout(response.body.userId as string, sid).expect(503);
+    expect(await redis.exists(RedisSessionStore.sessionKey(sid))).toBe(1);
+  });
+
+  it('cannot rotate a session deleted after it was read', async () => {
+    const response = await login();
+    const sid = parseRefreshToken(response.body.refreshToken as string)!;
+    const snapshot = (await sessionStore.find(sid))!;
+    await logout(response.body.userId as string, sid).expect(204);
+    expect(await sessionStore.rotate(snapshot, hashRefreshToken(createRefreshToken(sid)))).toBe(false);
+    expect(await redis.exists(RedisSessionStore.sessionKey(sid))).toBe(0);
+  });
+
+  function refresh(refreshToken: string): request.Test {
+    return request(app.getHttpServer()).post('/api/v1/auth/refresh').send({ refreshToken });
+  }
+
+  function logout(userId: string, sessionId: string): request.Test {
+    return request(app.getHttpServer()).post('/api/v1/auth/logout')
+      .set('x-user-id', userId).set('x-session-id', sessionId);
   }
 
   async function insertAccount(
