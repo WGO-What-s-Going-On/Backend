@@ -101,6 +101,28 @@ blacklist는 사용하지 않는다.
 기존 JWT 발급기는 초 단위 iat/exp와 같은 sub/sid를 사용하므로 같은 초 안에 발급한
 Access JWT 문자열은 같을 수 있다. 이번 작업에서는 JWT claim 구조를 변경하지 않는다.
 
+## Current user profile
+
+`GET /api/v1/users/me`와 `PATCH /api/v1/users/me`는 Gateway가 검증한 내부
+`x-user-id`를 사용한다. 위 logout과 동일한 Gateway 신뢰 경계가 적용된다.
+응답에는 userId, nickname, profileImageKey, status, onboardingRequired, createdAt만 포함한다.
+
+PATCH는 nickname 및 profileImageKey의 부분 수정을 지원한다. 빈 요청과 알 수 없는 필드는
+400이다. nickname은 availability API와 같은 trim/최대 30자 검증을 적용하며 다른 사용자와의
+대소문자 무시 중복은 409다. profileImageKey는 최대 500자의 문자열 또는 null(삭제)을 받으며
+별도 trim, 파일 존재 확인은 하지 않는다.
+
+온보딩 미완료 사용자가 유효한 nickname을 직접 제출하면 최초 완료로 처리한다.
+이미 저장된 임시 닉네임과 동일한 값을 제출해도 명시적인 설정으로 인정한다.
+이미지만 수정하면 온보딩은 계속 미완료이며 이벤트를 생성하지 않는다.
+온보딩 완료 이후 실제 프로필 값이 바뀔 때만 USER_PROFILE_UPDATED를 생성한다.
+
+사용자 행의 FOR UPDATE 잠금, 프로필 수정, Outbox INSERT를 하나의 PostgreSQL 트랜잭션에서
+수행한다. 최초 완료에는 USER_CREATED를 한 번만 생성한다. Outbox payload에는 전체
+eventId/type/target/occurredAt/version/payload envelope를 저장한다. 초기 상태는 PENDING,
+publishAttempts는 0, publishedAt은 null이다. domain payload는 userId/nickname/profileImageKey만
+포함한다. Kafka 발행 및 Outbox worker는 구현하지 않았다.
+
 ## Verification
 
 ```bash
