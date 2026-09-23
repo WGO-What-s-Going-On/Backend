@@ -17,7 +17,8 @@ Fastify 기반의 WGO WebSocket 진입점이다. WebSocket 연결과 일시적�
 - liveness/readiness endpoint
 
 Map Service 참여 권한 adapter가 아직 연결되지 않았으므로 기본 실행 상태에서는
-`board.join`이 거부된다. Kafka와 Redis Pub/Sub fan-out도 다음 마일스톤 범위다.
+`board.join`이 거부된다. Redis Streams 이벤트 소비와 Redis Pub/Sub fan-out도
+다음 마일스톤 범위다.
 상세 진행 상태는 `IMPLEMENTATION_STATUS.md`를 참고한다.
 
 ## 로컬 실행
