@@ -9,7 +9,7 @@ Backend architecture:
 - Node.js
 - Microservices
 - Event-driven architecture
-- Kafka for asynchronous events
+- Redis Streams for asynchronous domain events
 - gRPC/HTTP for synchronous communication
 - ECS Fargate deployment
 
@@ -97,7 +97,7 @@ Never access another service's database directly.
 Use:
 
 - gRPC/HTTP for synchronous communication
-- Kafka for asynchronous domain events
+- Redis Streams for asynchronous domain events
 
 Do not put domain business logic inside gateways.
 
@@ -111,7 +111,8 @@ Do not put domain business logic inside gateways.
 - Notification → PostgreSQL
 - Moderation → PostgreSQL
 
-Redis is not a persistent source of truth.
+Redis GEO is a rebuildable index. Redis Streams retains events for bounded
+delivery and replay, but each service's database remains the source of truth.
 
 ---
 
@@ -140,7 +141,7 @@ Shared packages should contain contracts or infrastructure concerns.
 Good:
 
 - contracts
-- Kafka event schemas
+- Redis Streams event schemas
 - gRPC definitions
 - observability
 - configuration
@@ -151,7 +152,7 @@ Avoid sharing domain entities or business logic between services.
 
 ## Contracts
 
-Treat HTTP APIs, gRPC definitions, and Kafka events as contracts.
+Treat HTTP APIs, gRPC definitions, and Redis Streams events as contracts.
 
 Before changing a contract:
 

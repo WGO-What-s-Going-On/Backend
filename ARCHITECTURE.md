@@ -51,7 +51,8 @@ flowchart LR
         Moderation[Moderation Service]
     end
 
-    Kafka[(Kafka)]
+    Streams[(Redis Streams)]
+    PubSub[(Redis Pub/Sub)]
     UserDB[(User PostgreSQL)]
     PostDB[(Post MongoDB)]
     MapDB[(Map Cassandra)]
@@ -78,16 +79,18 @@ flowchart LR
     Notification <--> NotificationDB
     Moderation <--> ModerationDB
 
-    User <-->|도메인 이벤트| Kafka
-    Post <-->|도메인 이벤트| Kafka
-    Map <-->|도메인 이벤트| Kafka
-    Notification <-->|도메인 이벤트| Kafka
-    Moderation <-->|도메인 이벤트| Kafka
-    RT <-->|실시간 이벤트| Kafka
+    User <-->|도메인 이벤트| Streams
+    Post <-->|도메인 이벤트| Streams
+    Map <-->|도메인 이벤트| Streams
+    Notification <-->|도메인 이벤트| Streams
+    Moderation <-->|도메인 이벤트| Streams
+    Streams -->|실시간 이벤트 소비| RT
+    RT -->|인스턴스 간 전파| PubSub
+    PubSub -->|연결 중인 클라이언트 전달| RT
 ```
 
-외부에 공개되는 애플리케이션은 두 Gateway뿐이다. 도메인 서비스, Kafka,
-Redis 및 데이터베이스는 사설 네트워크에 배치하고 명시적으로 허용한 경로로만
+외부에 공개되는 애플리케이션은 두 Gateway뿐이다. 도메인 서비스, Redis 및
+데이터베이스는 사설 네트워크에 배치하고 명시적으로 허용한 경로로만
 접근한다.
 
 ## 4. 애플리케이션별 책임
@@ -127,28 +130,42 @@ Gateway는 가능한 한 얇게 유지한다. 도메인 규칙은 해당 데이�
 
 ### 5.2 비동기 통신
 
-**Kafka**는 완료된 도메인 사실을 이벤트로 전달하고 후속 작업을 원본 요청에서
+**Redis Streams**는 완료된 도메인 사실을 이벤트로 전달하고 후속 작업을 원본 요청에서
 분리한다. 대표적인 이벤트는 `UserUpdated`, `LocationUpdated`, `BoardCreated`,
 `BoardJoined`, `PostCreated`, `ModerationDecisionApplied`,
 `NotificationRequested`다.
+
+한 이벤트를 사용하는 서비스마다 독립된 Consumer Group을 둔다. 같은 서비스의
+여러 Worker는 그룹 안에서 작업을 나눠 처리한다. Redis Pub/Sub은 Realtime
+Gateway instance 사이에서 연결 중인 클라이언트에게 전파할 때만 사용하며,
+복구가 필요한 도메인 이벤트 전달에는 사용하지 않는다.
 
 이벤트 처리 원칙은 다음과 같다.
 
 - 이벤트는 실행 명령이 아니라 이미 발생한 도메인 사실을 표현한다.
 - Event ID, Event Type, Schema Version, 발생 시각, Producer, Correlation ID,
   Aggregate ID를 포함한다.
-- 전달 방식은 **At-least-once**로 간주한다. Consumer는 멱등하게 동작하고,
-  필요하면 처리한 Event ID 또는 동등한 중복 방지 상태를 저장한다.
+- 보존된 이벤트는 재전달될 수 있으므로 **At-least-once 처리 모델**로 설계한다.
+  Consumer는 멱등하게 동작하고, 필요하면 처리한 Event ID 또는 동등한 중복 방지
+  상태를 저장한다. Redis 장애 시 최근 이벤트 유실 가능성은 별도로 다룬다.
+- Consumer는 소유 데이터 저장을 완료한 뒤 `XACK`한다. 중단된 Consumer의
+  Pending 메시지는 `XPENDING`과 `XAUTOCLAIM`으로 회수해 다시 처리한다.
 - 데이터 변경과 이벤트 발행이 함께 필요한 Producer는 Transactional Outbox
   또는 동등하게 검증된 방식을 사용한다.
 - 재시도를 제한하고 처리할 수 없는 메시지는 진단과 재처리에 필요한 문맥과
-  함께 Dead Letter Topic으로 이동한다.
+  함께 별도의 Dead Letter Stream에 기록한다. 기록을 확인한 뒤 원본 이벤트를
+  `XACK`한다.
 - Schema는 하위 호환되게 변경하며 호환되지 않는 변경에는 새 버전을 사용한다.
 - 이벤트에는 식별자와 꼭 필요한 정보만 담는다. 비밀 정보나 다른 서비스의
   전체 레코드를 복제하지 않는다.
 
-Kafka의 순서는 Partition 안에서만 보장된다. Aggregate별 순서가 필요하면
-Aggregate ID를 Partition Key로 사용한다.
+Stream ID는 한 Stream 안에서 순서를 제공하지만, 여러 Consumer가 병렬 처리한
+결과의 완료 순서까지 보장하지 않는다. Aggregate별 처리 순서가 필요한 이벤트는
+같은 Aggregate의 이벤트를 순차 처리하도록 Stream Key와 Consumer 구성을 정한다.
+Stream은 무한한 이벤트 이력이 아니다. 보존 기간과 크기는 가장 느린 필수
+Consumer의 복구 시간과 재처리 요구를 고려해 정하고, 만료 또는 Trim으로
+처리되지 않은 이벤트가 사라지지 않게 감시한다. Redis Streams도 각 서비스
+데이터베이스를 대신하는 기준 저장소가 아니다.
 
 ## 6. 데이터 소유권과 저장소
 
@@ -204,14 +221,16 @@ sequenceDiagram
     participant M as Map Service
     participant R as Redis GEO
     participant D as Cassandra
-    participant K as Kafka
+    participant S as Redis Streams
 
     C->>H: 위치 갱신 요청
     H->>M: 인증된 위치 갱신
     M->>M: 좌표 검증 및 H3 Cell 계산
     M->>D: 영속 위치와 인덱스 상태 저장
     M->>R: GEO 정보 갱신 및 TTL 설정
-    M-->>K: LocationUpdated
+    opt 구독 서비스에 필요한 위치 변경
+        M-->>S: LocationUpdated
+    end
     M-->>H: 처리 완료
     H-->>C: 성공 응답
 
@@ -236,10 +255,11 @@ sequenceDiagram
     participant P as Post Service
     participant M as Map Service
     participant D as MongoDB
-    participant K as Kafka
+    participant S as Redis Streams
     participant N as Notification Service
     participant ND as Notification PostgreSQL
     participant R as Realtime Gateway
+    participant F as Redis Pub/Sub
 
     C->>H: 보드 게시물 작성
     H->>P: 인증 정보와 Idempotency Key 전달
@@ -248,11 +268,13 @@ sequenceDiagram
     P->>D: 게시물과 Outbox 저장
     P-->>H: 생성 완료
     H-->>C: 게시물 응답
-    P-->>K: PostCreated
-    K-->>N: PostCreated
+    P-->>S: PostCreated
+    S-->>N: PostCreated (Notification Consumer Group)
     N->>ND: 수신 설정 확인 및 알림 상태 저장
-    N-->>K: NotificationRequested / NotificationCreated
-    K-->>R: PostCreated / NotificationCreated
+    N-->>S: NotificationRequested / NotificationCreated
+    S-->>R: PostCreated / NotificationCreated (Realtime Consumer Group)
+    R-->>F: 전달 대상 이벤트 게시
+    F-->>R: 각 Gateway instance에 전파
     R-->>C: 접속 중인 보드 참여자에게 전달
 ```
 
@@ -268,7 +290,8 @@ sequenceDiagram
     participant R as Realtime Gateway
     participant U as User Service
     participant M as Map Service
-    participant K as Kafka
+    participant S as Redis Streams
+    participant F as Redis Pub/Sub
 
     C->>R: 인증 정보로 WSS 연결
     R->>U: 사용자와 계정 상태 확인
@@ -278,16 +301,20 @@ sequenceDiagram
     R->>M: 보드, 거리, 참여 정책 확인
     M-->>R: 참여 허용
     R->>R: 로컬 보드 Room에 연결 추가
-    R-->>K: BoardJoined
     R-->>C: 참여 완료
-    K-->>R: 보드 도메인 이벤트
+    S-->>R: 보드 도메인 이벤트
+    R-->>F: 전달 대상 이벤트 게시
+    F-->>R: 각 Gateway instance에 전파
     R-->>C: 인가된 실시간 업데이트
 ```
 
-WebSocket Room은 연결 상태일 뿐 영속적인 도메인 데이터가 아니다. 클라이언트는
-지수 Backoff로 재연결하고 놓친 영속 상태를 HTTP로 다시 조회한다. Realtime
-Gateway는 Kafka 이벤트 중 현재 연결에 허용된 정보만 전달한다. 여러 Instance에
-걸친 전달이 특정 Task의 In-memory Room에 의존해서는 안 된다.
+WebSocket Room은 연결 상태일 뿐 영속적인 도메인 데이터가 아니다. `BoardJoined`가
+영속적인 도메인 사실이라면 참여 상태를 소유하는 Map Service가 발행한다.
+클라이언트는 지수 Backoff로 재연결하고 놓친 영속 상태를 HTTP로 다시 조회한다.
+Realtime Gateway는 Redis Streams 이벤트 중 현재 연결에 허용된 정보만 전달한다.
+Realtime Consumer Group이 받은 이벤트를 Redis Pub/Sub으로 각 Gateway instance에
+전파한 뒤 로컬 Room에 전달한다. 하나의 Consumer Group에 속한 Gateway instance는
+이벤트를 나눠 받으므로 직접 로컬 Room에만 전달해서는 안 된다.
 
 ## 8. 일관성과 장애 격리
 
@@ -297,9 +324,14 @@ Gateway는 Kafka 이벤트 중 현재 연결에 허용된 정보만 전달한다
 - 조회 모델과 알림은 원본 도메인과 최종적 일관성을 가진다.
 - 재시도될 수 있는 중요 Command는 Idempotency Key를 지원한다.
 - Timeout, 동시성 제한과 Circuit Breaker로 연쇄 장애를 방지한다.
-- Consumer Lag과 Dead Letter를 감시하고 재처리는 운영 절차에 따라 수행한다.
-- Redis 장애는 검색 성능을 낮출 수 있지만 영속 지도 데이터를 잃게 해서는 안
-  된다. Map Service는 Cassandra 또는 이벤트로 실시간 인덱스를 복원한다.
+- Stream의 미처리 메시지, 가장 오래된 Pending 시간과 Dead Letter Stream을
+  감시하고 재처리는 운영 절차에 따라 수행한다.
+- Redis 장애는 이벤트 전달과 실시간 검색에 영향을 줄 수 있다. 미발행 Outbox는
+  재시도하고, 이미 발행한 이벤트의 유실 가능성은 소유 서비스의 데이터베이스와
+  소비 결과를 대조해 복구한다. Map Service는 Cassandra에서 Redis GEO 인덱스를
+  복원한다.
+- Redis Streams는 보존 기간이 제한되며 장애 조치 중 최근 쓰기가 유실될 수 있다.
+  Redis 지속성, 복제, 백업과 복구 절차를 운영 환경에 맞게 검증한다.
 - 알림 Provider 장애가 게시물 생성을 실패시키지 않는다. Notification Service가
   시도 결과를 기록하고 정책에 따라 재시도한다.
 - Realtime Gateway 장애는 해당 Task의 연결에만 영향을 준다. 클라이언트는
@@ -314,12 +346,14 @@ Image는 불변으로 관리하고 설정과 Secret은 Runtime에 주입한다. 
 - HTTP Gateway는 요청량, 지연 시간, CPU와 Memory를 기준으로 확장한다.
 - Realtime Gateway는 활성 연결 수, 이벤트 처리량, CPU와 Memory를 기준으로
   확장한다.
-- 도메인 서비스는 요청 부하, Kafka Consumer Lag과 자원 사용량에 따라 확장한다.
-- Kafka Consumer Group의 실질적인 최대 병렬성은 Topic Partition 수의 영향을
-  받는다.
+- 도메인 서비스는 요청 부하, Redis Streams Pending 수와 처리 지연, 자원
+  사용량에 따라 확장한다.
+- Stream Key와 Consumer Group별 처리량, 메모리 사용량을 측정해 병목이 되는
+  Stream은 도메인별 또는 Aggregate별로 분리한다.
 - 고가용성이 필요한 환경에서는 여러 Availability Zone을 사용한다.
-- 데이터베이스, Kafka, Redis의 용량과 고가용성은 무상태 Compute와 별도로
-  관리한다.
+- 데이터베이스와 Redis의 용량과 고가용성은 무상태 Compute와 별도로 관리한다.
+- 이벤트 Stream의 보존·지속성 정책이 Redis GEO, Rate Limit 같은 만료 가능한
+  데이터의 Eviction 정책에 종속되지 않도록 별도 Redis 배포 등으로 격리한다.
 
 애플리케이션 Task는 로컬 Disk에 영속 상태를 저장하지 않는다. 모든 Cache는
 폐기 가능해야 한다. WebSocket 연결 자체는 실행 중인 Task에 종속되지만 사용자
@@ -329,13 +363,14 @@ Image는 불변으로 관리하고 설정과 Secret은 Runtime에 주입한다. 
 
 모든 애플리케이션은 공통 Service, Environment, Version Field를 포함한 구조화
 Log, Metric, Distributed Trace를 제공한다. Correlation ID와 Trace ID는 HTTP,
-gRPC, Kafka, WebSocket 경계를 넘어 전달한다.
+gRPC, Redis Streams, WebSocket 경계를 넘어 전달한다.
 
 최소 수집 대상은 다음과 같다.
 
 - Route/RPC별 요청량, 오류율, 지연 시간
 - 활성 WebSocket 연결, 참여, 연결 해제, 전달 실패
-- Kafka 발행 실패, Consumer Lag, 재시도, Dead Letter 수
+- Redis Streams 발행 실패, Stream 길이, Consumer Group별 Pending 수와
+  가장 오래된 Pending 시간, 재시도, Dead Letter Stream 수
 - 데이터베이스와 Redis의 지연, 오류, 포화도, Connection Pool 압력
 - 알림 Fan-out 크기, 전송 상태, Provider 실패율
 - ECS Task 상태, 재시작, CPU와 Memory
@@ -352,7 +387,7 @@ Secret, 비공개 본문 또는 불필요한 원본 좌표를 기록하지 않�
   소유한 서비스가 수행한다. 클라이언트가 보낸 사용자 ID와 Role을 신뢰하지 않는다.
 - 공개 및 비공개 Workload를 네트워크로 분리하고 최소 권한 Security Group을
   적용한다.
-- 서비스마다 독립된 Runtime Identity, 데이터베이스 계정, Kafka ACL과 Secret
+- 서비스마다 독립된 Runtime Identity, 데이터베이스 계정, Redis ACL과 Secret
   접근 권한을 사용한다.
 - Secret은 승인된 Secret Manager에 보관하며 Image에 포함하지 않는다.
 - 입력은 Gateway와 도메인 불변 조건을 적용하는 서비스 양쪽에서 검증한다.
@@ -371,7 +406,7 @@ Secret, 비공개 본문 또는 불필요한 원본 좌표를 기록하지 않�
 | 7개 애플리케이션 독립 배포 | 외부 Protocol과 도메인 부하 분리 | 배포 및 운영 조율 비용 증가 |
 | 얇은 HTTP/Realtime Gateway | 진입점에 도메인 로직과 데이터가 모이는 것을 방지 | Gateway는 소유 서비스에 작업 위임 |
 | 동기 통신에 gRPC/HTTP 사용 | 즉시 결과가 필요한 타입 기반 요청·응답 지원 | Deadline과 짧은 호출 체인 필수 |
-| 도메인 이벤트에 Kafka 사용 | 후속 작업 분리와 독립 Consumer 지원 | 최종적 일관성, 멱등성, Outbox와 재처리 체계 필요 |
+| 도메인 이벤트에 Redis Streams 사용 | 후속 작업 분리와 서비스별 독립 Consumer Group 지원 | 보존·지속성 정책, 멱등성, Outbox와 Pending 재처리 체계 필요 |
 | 서비스별 데이터 소유권 | 자율성과 장애 경계 보존 | 서비스 간 DB 접근과 Join 금지 |
 | Post에 MongoDB 사용 | 문서 중심이며 변화 가능한 콘텐츠 구조에 적합 | 여러 Document에 걸친 불변 조건은 별도 설계 필요 |
 | User/Notification/Moderation에 PostgreSQL 사용 | 관계형 제약, 트랜잭션, 감사 데이터에 적합 | 도메인마다 계정, Schema, Migration 분리 |

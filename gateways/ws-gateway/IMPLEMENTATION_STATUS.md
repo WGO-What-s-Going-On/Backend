@@ -55,13 +55,16 @@ URL query를 통한 token 전달은 지원하지 않는다.
 경로를 구현한다.
 
 ```text
-Domain Service -> Kafka -> Realtime consumer group
+Domain Service -> Redis Streams -> Realtime consumer group
                -> Redis Pub/Sub -> Gateway instances
                -> local board/user sockets
 ```
 
-Redis는 연결 중인 클라이언트 fan-out에만 사용하고 영속적인 이벤트 저장소로
-사용하지 않는다.
+Redis Streams는 제한된 기간 동안 도메인 이벤트를 보관한다. Realtime consumer
+group은 이벤트를 한 번 처리하고 Redis Pub/Sub으로 각 Gateway instance에
+전파한다. 같은 group을 공유하는 Gateway instance에 직접 WebSocket 전달을
+맡기면 일부 instance의 클라이언트가 이벤트를 받지 못한다. Pub/Sub은 연결 중인
+클라이언트에만 전달하며, 재연결한 클라이언트는 영속 상태를 HTTP로 다시 조회한다.
 
 ### Rate limit and backpressure
 
@@ -73,7 +76,7 @@ Redis는 연결 중인 클라이언트 fan-out에만 사용하고 영속적인 �
 1. User Service/Map Service 인증·인가 계약 확정
 2. Map Service `BoardAccessAuthorizer` adapter 구현
 3. Redis publisher/subscriber 연결과 동적 board channel ref-count 구현
-4. Kafka event consumer와 명시적 event routing table 구현
+4. Redis Streams consumer group과 명시적 event routing table 구현
 5. `USER`, `BOARD_ROOM`, `BROADCAST` 전달 통합 테스트
 6. rate limit, backpressure, graceful draining, 운영 metric 추가
 
