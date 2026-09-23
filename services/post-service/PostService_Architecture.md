@@ -290,7 +290,7 @@ PostCreated
     "longitude": 127.0276,
     "radiusM": 250,
     "category": "INCIDENT",
-    "expiresAt": "2026-09-19T03:00:00Z"
+    "expiresAt": null
   }
 }
 ```
@@ -856,7 +856,7 @@ MongoDB
 
   "updatedAt": "2026-09-19T01:10:00Z",
 
-  "expiresAt": "2026-09-19T03:00:00Z"
+  "expiresAt": null
 }
 ```
 
@@ -1289,9 +1289,9 @@ Event-driven Counter
 | GET | `/api/v1/posts/{postId}/comments` | 댓글 조회 |
 | POST | `/api/v1/posts/{postId}/comments` | 댓글 작성 |
 | DELETE | `/api/v1/posts/{postId}/comments/{commentId}` | 댓글 삭제 |
-| PUT | `/api/v1/posts/{postId}/reactions/like` | 좋아요 |
+| POST | `/api/v1/posts/{postId}/reactions` | 좋아요 (`{"type":"LIKE"}`) |
 | DELETE | `/api/v1/posts/{postId}/reactions/like` | 좋아요 취소 |
-| POST | `/api/v1/posts/{postId}/join` | 게시판 참여 |
+| POST | `/api/v1/posts/{postId}/participants` | 게시판 참여 |
 | POST | `/api/v1/posts/{postId}/leave` | 게시판 참여 종료 |
 
 ---
