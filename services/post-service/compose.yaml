@@ -1,0 +1,34 @@
+services:
+  mongo:
+    image: mongo:8.0
+    container_name: wgo-post-service-mongo
+    command: ['mongod', '--replSet', 'rs0', '--bind_ip_all']
+    ports:
+      - '27017:27017'
+    volumes:
+      - post-service-mongo-data:/data/db
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'mongosh',
+          '--quiet',
+          '--eval',
+          'db.adminCommand({ ping: 1 }).ok',
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  mongo-init:
+    image: mongo:8.0
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - ./docker/init-replica-set.sh:/init-replica-set.sh:ro
+    entrypoint: ['bash', '/init-replica-set.sh']
+    restart: 'no'
+
+volumes:
+  post-service-mongo-data:
