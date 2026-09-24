@@ -35,7 +35,9 @@ export class UsersService {
     return toProfile(user);
   }
 
-  async updateProfile(userId: string, input: UpdateUserProfile): Promise<UserProfileResponse> {
+  async updateProfile(
+    userId: string, input: UpdateUserProfile, correlationId: string = randomUUID(),
+  ): Promise<UserProfileResponse> {
     try {
       return await this.usersRepository.manager.transaction(async (manager) => {
         const users = manager.getRepository(UserEntity);
@@ -68,6 +70,7 @@ export class UsersService {
             payload: {
               eventId, type: eventType, target: { type: 'USER', id: user.id },
               occurredAt: now.toISOString(), version: 1,
+              producer: 'user-service', correlationId,
               payload: { userId: user.id, nickname: user.nickname, profileImageKey: user.profileImageKey },
             },
             status: 'PENDING', publishAttempts: 0, createdAt: now, publishedAt: null,

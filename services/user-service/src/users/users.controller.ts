@@ -23,7 +23,11 @@ export class UsersController {
   }
 
   @Patch('me')
-  updateMe(@Headers('x-user-id') userId: unknown, @Body() body: unknown): Promise<UserProfileResponse> {
+  updateMe(
+    @Headers('x-user-id') userId: unknown,
+    @Body() body: unknown,
+    @Headers('x-request-id') requestId: unknown,
+  ): Promise<UserProfileResponse> {
     const id = requireUserId(userId);
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       throw new BadRequestException('Invalid profile update');
@@ -42,7 +46,9 @@ export class UsersController {
       }
       update.profileImageKey = input.profileImageKey as string | null;
     }
-    return this.usersService.updateProfile(id, update);
+    return this.usersService.updateProfile(
+      id, update, typeof requestId === 'string' && requestId.trim() ? requestId : undefined,
+    );
   }
 }
 

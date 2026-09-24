@@ -169,7 +169,8 @@ describe('GET /api/v1/users/nickname/availability', () => {
 
   it('completes onboarding and writes exactly one complete USER_CREATED envelope', async () => {
     const id = await insertUser('Temporary');
-    const response = await patch(id, { nickname: '  FinalName  ', profileImageKey: 'profiles/image' }).expect(200);
+    const response = await patch(id, { nickname: '  FinalName  ', profileImageKey: 'profiles/image' })
+      .set('x-request-id', 'onboarding-request').expect(200);
     expect(response.body).toMatchObject({ nickname: 'FinalName', profileImageKey: 'profiles/image', onboardingRequired: false });
     const user = await usersRepository.findOneByOrFail({ id });
     expect(user.onboardingCompletedAt).toBeInstanceOf(Date);
@@ -179,6 +180,7 @@ describe('GET /api/v1/users/nickname/availability', () => {
     expect(event).toMatchObject({ aggregateId: id, eventType: 'USER_CREATED', status: 'PENDING', publishAttempts: 0, publishedAt: null });
     expect(event.payload).toEqual({ eventId: event.eventId, type: 'USER_CREATED', target: { type: 'USER', id },
       occurredAt: event.createdAt.toISOString(), version: 1,
+      producer: 'user-service', correlationId: 'onboarding-request',
       payload: { userId: id, nickname: 'FinalName', profileImageKey: 'profiles/image' } });
   });
 
@@ -211,6 +213,8 @@ describe('GET /api/v1/users/nickname/availability', () => {
       target: { type: 'USER', id: event.aggregateId },
       occurredAt: event.createdAt.toISOString(),
       version: 1,
+      producer: 'user-service',
+      correlationId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
       payload: {
         userId: id,
         nickname: input.nickname ?? 'Original',

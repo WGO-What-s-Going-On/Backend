@@ -119,9 +119,15 @@ PATCH는 nickname 및 profileImageKey의 부분 수정을 지원한다. 빈 요�
 
 사용자 행의 FOR UPDATE 잠금, 프로필 수정, Outbox INSERT를 하나의 PostgreSQL 트랜잭션에서
 수행한다. 최초 완료에는 USER_CREATED를 한 번만 생성한다. Outbox payload에는 전체
-eventId/type/target/occurredAt/version/payload envelope를 저장한다. 초기 상태는 PENDING,
+eventId/type/target/occurredAt/version/producer/correlationId/payload envelope를 저장한다. 초기 상태는 PENDING,
 publishAttempts는 0, publishedAt은 null이다. domain payload는 userId/nickname/profileImageKey만
-포함한다. Kafka 발행 및 Outbox worker는 구현하지 않았다.
+포함한다. Redis Streams 발행 및 Outbox worker는 구현하지 않았다.
+
+`producer`는 `user-service`이며, `correlationId`는 HTTP Gateway가 전달하는
+`x-request-id`를 사용한다. 헤더가 없거나 비어 있는 직접 호출은 요청 처리 시 UUID를 생성한다.
+두 필드는 USER_CREATED와 USER_PROFILE_UPDATED 전체 envelope의 최상위에 저장한다.
+기존 eventId, target, occurredAt, 숫자 version 1 및 domain payload는 유지한다.
+이미 저장된 Outbox row는 소급 변경하지 않는다.
 
 ## Verification
 
