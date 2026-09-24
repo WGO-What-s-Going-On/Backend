@@ -4,6 +4,8 @@ NestJS와 MongoDB 기반의 Post Service다. 생성 API는 MongoDB 트랜잭션�
 도메인 데이터와 Outbox 이벤트를 함께 기록한다. Outbox Worker는 Redis Streams의
 `post:events`에 이벤트를 발행한다.
 
+완료 범위와 다음 작업은 [작업 현황](./POST_SERVICE_STATUS.md)에 기록한다.
+
 ## 코드 구조
 
 - `src/post/presentation`: HTTP 요청·헤더 검증과 도메인 오류의 HTTP 응답 변환
