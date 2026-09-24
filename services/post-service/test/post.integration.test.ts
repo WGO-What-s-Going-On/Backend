@@ -7,8 +7,8 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../src/app.module.js';
-import { OutboxWorker } from '../src/post/outbox.worker.js';
-import { PostService } from '../src/post/post.service.js';
+import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
+import { JoinPost } from '../src/post/application/commands.js';
 
 const suite = process.env.RUN_INTEGRATION === '1' ? describe : describe.skip;
 
@@ -122,7 +122,7 @@ suite('post creation integration', () => {
     try {
       await request(app.getHttpServer()).post('/api/v1/posts').set(header).send({}).expect(503);
       await request(app.getHttpServer()).post(`/api/v1/posts/${id}/participants`).set(header).send({}).expect(503);
-      await expect(app.get(PostService).join(id, {}, 123)).rejects.toMatchObject({ status: 503 });
+      await expect(app.get(JoinPost).execute(id, 123)).rejects.toMatchObject({ message: 'Map participation authorization unavailable' });
     } finally {
       process.env.NODE_ENV = 'test';
     }

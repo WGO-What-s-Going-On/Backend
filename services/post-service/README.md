@@ -4,6 +4,18 @@ NestJS와 MongoDB 기반의 Post Service다. 생성 API는 MongoDB 트랜잭션�
 도메인 데이터와 Outbox 이벤트를 함께 기록한다. Outbox Worker는 Redis Streams의
 `post:events`에 이벤트를 발행한다.
 
+## 코드 구조
+
+- `src/post/presentation`: HTTP 요청·헤더 검증과 도메인 오류의 HTTP 응답 변환
+- `src/post/application`: 네 생성 Command와 필요한 상태 조회·쓰기·참여 허가 포트
+- `src/post/domain`: Post 상태, 생성 결과, 중복 참여·재참여 규칙
+- `src/post/infrastructure`: Mongoose 저장소·Outbox Worker와 로컬 참여 허가 대역
+
+Command는 포트 인터페이스에만 의존한다. `PostModule`이 포트를 Mongoose 구현과
+로컬 참여 허가 대역에 연결한다. 조회 포트는 생성 전 상태 확인에만 사용하며 별도의
+조회 모델이나 CQRS 프레임워크는 두지 않는다. 저장소 구현은 도메인 데이터와 Outbox를
+같은 MongoDB 트랜잭션에서 기록한다.
+
 ## 준비 사항
 
 - Node.js 24
