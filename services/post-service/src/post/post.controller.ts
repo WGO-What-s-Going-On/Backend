@@ -100,6 +100,7 @@ export class PostController {
 }
 
 @Controller('internal/v1/posts')
+// 서비스 간 호출 경로다. 메타·상태 조회의 로컬 호환 동작과 인증 정책은 각 메서드에서 결정한다.
 @ApiTags('Internal Posts')
 @ApiBadRequestResponse({ description: '입력값 또는 게시물 ID가 유효하지 않음' })
 @UseFilters(PostErrorFilter)

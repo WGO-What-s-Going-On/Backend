@@ -31,6 +31,7 @@ export const CommentSchema = new Schema({
   updatedAt: { type: Date, default: null },
 }, options);
 CommentSchema.index({ postId: 1, createdAt: -1, _id: -1 });
+// 기존 HTTP 댓글에는 mutationId가 없으므로 값이 있는 WS 요청에만 유일성을 적용한다.
 CommentSchema.index({ postId: 1, authorId: 1, mutationId: 1 }, { unique: true, partialFilterExpression: { mutationId: { $type: 'string' } } });
 
 export const ReactionSchema = new Schema({

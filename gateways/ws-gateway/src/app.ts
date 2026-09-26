@@ -145,6 +145,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     });
 
     let messageQueue = Promise.resolve();
+    // 같은 연결의 join → 조회/작성 순서가 네트워크 요청 중에도 뒤바뀌지 않게 한다.
     socket.on('message', (raw: RawData) => {
       messageQueue = messageQueue
         .then(async () => {
@@ -188,6 +189,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           } else if (command.type === 'board.leave') {
             subscriptions.leave(socket, command.payload.boardId);
           } else {
+            // room 참여 전에 영속 데이터 조회나 작성을 수행하지 않는다.
             if (!subscriptions.roomsForSocket(socket).has(command.payload.boardId)) {
               send(socket, commandError('WS_BOARD_NOT_JOINED', 'Join the board first.', command.requestId));
               return;

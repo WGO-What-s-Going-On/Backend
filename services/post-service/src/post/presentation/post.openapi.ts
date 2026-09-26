@@ -1,5 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 
+// 이 클래스들은 OpenAPI 스키마 전용이다. 실제 요청 검증은 post.input.ts와 post-query.input.ts에서 수행한다.
+
 const postIdExample = 'post_123e4567-e89b-12d3-a456-426614174000';
 const dateTime = { type: String, format: 'date-time', example: '2026-09-26T04:00:00.000Z' } as const;
 

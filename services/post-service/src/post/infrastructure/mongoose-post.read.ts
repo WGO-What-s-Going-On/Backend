@@ -27,6 +27,7 @@ export class MongoosePostRead implements PostReadQueries {
 
   async findComments(postId: string, cursor: CommentCursor | null, limit: number) {
     const filter: Record<string, unknown> = { postId, status: 'ACTIVE' };
+    // 작성 시각이 같은 댓글은 _id로 순서를 고정해 페이지 사이의 중복·누락을 막는다.
     if (cursor) filter.$or = [
       { createdAt: { $lt: cursor.createdAt } },
       { createdAt: cursor.createdAt, _id: { $lt: new Types.ObjectId(cursor.id) } },

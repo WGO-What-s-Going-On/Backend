@@ -30,6 +30,7 @@ export function commentCursor(raw: unknown, requestedPostId: string): CommentCur
   if (raw === undefined) return null;
   if (typeof raw !== 'string' || !/^[A-Za-z0-9_-]+$/.test(raw) || raw.length > 1024) throw new BadRequestException('Invalid cursor');
   try {
+    // 커서를 다른 게시물에 재사용하지 못하게 postId까지 검증한다.
     const decoded: unknown = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
     if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) throw new Error('cursor');
     const value = decoded as Record<string, unknown>;

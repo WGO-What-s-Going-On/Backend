@@ -73,6 +73,7 @@ class MongoCommands implements PostCommands {
   }
 
   async increment(postId: string, counter: 'commentCount' | 'reactionCount' | 'participantCount', now: Date): Promise<void> {
+    // 상태를 다시 조건에 넣어 조회 이후 게시물이 비활성화된 경우에도 카운터 갱신을 막는다.
     const result = await this.posts.updateOne({ postId, status: 'ACTIVE' }, { $inc: { [`counters.${counter}`]: 1 }, $set: { updatedAt: now } }, { session: this.session });
     if (result.matchedCount !== 1) throw new PostInactiveError('Post is not active');
   }
@@ -120,10 +121,12 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
 
   async execute<T>(work: (transaction: PostTransaction) => Promise<T>): Promise<T> {
     try {
+      // 도메인 데이터·카운터·Outbox가 함께 커밋되거나 함께 롤백된다.
       const result = await this.connection.transaction((session) => work({
         queries: this.queries(session),
         commands: new MongoCommands(this.posts, this.comments, this.reactions, this.participants, this.outbox, session),
       }));
+      // 커밋이 끝난 뒤에만 발행을 깨운다. 실패한 트랜잭션의 이벤트는 보이지 않아야 한다.
       this.outboxWorker.wake();
       return result;
     } catch (error) {

@@ -89,6 +89,7 @@ export function parseClientCommand(raw: string): ClientCommand {
     throw new ProtocolError('WS_INVALID_BOARD_ID', 'A valid boardId is required.', requestId);
   }
 
+  // mutationId는 requestId와 달리 재연결 뒤에도 같은 작성 시도를 가리켜야 한다.
   if (message.type === 'comment.create' && (
     typeof payload.content !== 'string' || !payload.content.trim() || payload.content.length > 2000
     || typeof payload.mutationId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(payload.mutationId)

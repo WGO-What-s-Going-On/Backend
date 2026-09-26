@@ -13,7 +13,7 @@ export interface OutboxEvent {
   payload: Record<string, unknown>;
 }
 
-// Queries required by the create commands.
+// 작성 규칙 확인에 필요한 최소 조회와 API 응답용 조회를 분리한다.
 export interface PostStateQueries {
   findPost(postId: string): Promise<PostState | null>;
   findCommentByMutation(postId: string, authorId: number, mutationId: string): Promise<CommentRecord | null>;

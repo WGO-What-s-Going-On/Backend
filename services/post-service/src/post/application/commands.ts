@@ -34,6 +34,7 @@ export class CreateComment {
     try {
       return await this.unitOfWork.execute(async (transaction) => {
         await active(transaction, postId);
+        // 재연결 후 같은 작성 요청이 다시 와도 댓글과 카운터를 한 번만 기록한다.
         if (mutationId) {
           const existing = await transaction.queries.findCommentByMutation(postId, authorId, mutationId);
           if (existing) return existing;
@@ -44,6 +45,7 @@ export class CreateComment {
         return comment;
       });
     } catch (error) {
+      // 두 요청이 동시에 기존 댓글을 못 본 경우에는 유일 인덱스 충돌 뒤 저장된 결과를 읽는다.
       if (mutationId && error instanceof UniqueConflictError) {
         const existing = await this.queries.findCommentByMutation(postId, authorId, mutationId);
         if (existing) return existing;
@@ -73,6 +75,7 @@ export class CreateReaction {
         return reaction;
       });
     } catch (error) {
+      // 동시에 들어온 LIKE 요청도 기존 반응을 반환해 카운터와 이벤트가 늘지 않게 한다.
       if (error instanceof UniqueConflictError) {
         const existing = await this.queries.findReaction(postId, userId);
         if (existing) return existing;
@@ -98,6 +101,7 @@ export class JoinPost {
         const existing = await transaction.queries.findParticipant(postId, userId);
         const decision = joinParticipant(existing, postId, userId, now);
         if (!decision.joined) return decision.participant;
+        // 떠났다가 돌아온 사용자는 기존 참여 기록을 되살리고 새 참여 이벤트를 남긴다.
         if (existing) {
           const rejoined = await transaction.commands.rejoinParticipant(decision.participant);
           if (!rejoined) return (await transaction.queries.findParticipant(postId, userId)) ?? decision.participant;

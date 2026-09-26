@@ -33,6 +33,7 @@ export class PostEvents implements RealtimeBus {
 
   async start(): Promise<void> {
     await Promise.all([this.reader.connect(), this.publisher.connect(), this.subscriber.connect()]);
+    // 그룹이 처음 만들어질 때는 보관 중인 Stream 이벤트부터 읽는다.
     try { await this.reader.xGroupCreate(stream, group, '0', { MKSTREAM: true }); }
     catch (error) { if (!String(error).includes('BUSYGROUP')) throw error; }
     await this.subscriber.subscribe(channel, (raw) => this.deliver(raw));
@@ -56,6 +57,7 @@ export class PostEvents implements RealtimeBus {
   private async loop(): Promise<void> {
     while (!this.stopped) {
       try {
+        // ACK 전에 소비자가 죽은 이벤트를 먼저 회수한 뒤 새 이벤트를 읽는다.
         const claimed = await this.reader.sendCommand(['XAUTOCLAIM', stream, group, this.consumer, '5000', '0-0', 'COUNT', '20']) as unknown[];
         const pending = Array.isArray(claimed?.[1]) ? claimed[1] as unknown[] : [];
         for (const entry of pending) await this.processRaw(entry);
@@ -90,6 +92,7 @@ export class PostEvents implements RealtimeBus {
       case 'PostParticipantJoined': message = { type: 'post.participant.joined' }; break;
       default: await this.reader.xAck(stream, group, id); return;
     }
+    // 모든 Gateway 인스턴스가 같은 Pub/Sub 채널을 듣는다. 게시 후에 ACK해야 실패 시 재시도할 수 있다.
     const subscribers = await this.publisher.publish(channel, JSON.stringify({ version: 1, eventId, postId, boardId: postId, ...message }));
     if (subscribers === 0) throw new Error('No realtime subscribers; leaving event pending for retry');
     await this.reader.xAck(stream, group, id);
@@ -103,6 +106,7 @@ export class PostEvents implements RealtimeBus {
         ? String((message.comment as Record<string, unknown>).commentId) : undefined;
       const key = commentId ?? message.eventId;
       const now = Date.now();
+      // Stream 재전달이나 ACK 실패로 같은 이벤트가 다시 게시돼도 이 인스턴스에서는 한 번만 보낸다.
       if (this.seen.has(key)) return;
       this.seen.set(key, now);
       for (const [id, at] of this.seen) if (at < now - 300_000) this.seen.delete(id);

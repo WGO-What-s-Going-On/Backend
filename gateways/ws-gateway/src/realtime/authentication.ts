@@ -26,6 +26,7 @@ export class JwtAuthenticator implements Authenticator {
   readonly #cookieName: string;
 
   constructor(config: AppConfig['jwt']) {
+    // 로컬은 공유 비밀값으로, 운영은 JWKS 공개키로 사용자 토큰을 검증한다.
     this.#key = config.jwksUrl ? createRemoteJWKSet(new URL(config.jwksUrl)) : new TextEncoder().encode(config.secret);
     this.#issuer = config.issuer;
     this.#audience = config.audience;

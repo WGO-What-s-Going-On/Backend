@@ -16,6 +16,7 @@ export class HttpPostClient implements PostClient {
   constructor(private readonly config: AppConfig['postService']) {}
 
   private async token(userId?: string): Promise<string> {
+    // 사용자 토큰을 전달하지 않고, 검증된 ID만 별도 단기 서비스 토큰에 담는다.
     const numericId = userId === undefined ? undefined : Number(userId);
     if (userId !== undefined && (!Number.isSafeInteger(numericId) || numericId! <= 0)) throw new PostServiceError(400, 'Invalid user ID');
     return new SignJWT(numericId === undefined ? {} : { userId: numericId })
@@ -38,6 +39,7 @@ export class HttpPostClient implements PostClient {
 
   async canJoin({ boardId }: { boardId: string; userId: string }): Promise<boolean> {
     try {
+      // 현재 참여 기준은 Post Service가 소유한 ACTIVE 상태다. 위치 제한은 후속 계약이다.
       const status = await this.request(`/internal/v1/posts/${encodeURIComponent(boardId)}/status`) as { status: string };
       return status.status === 'ACTIVE';
     } catch (error) {
