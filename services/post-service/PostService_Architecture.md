@@ -1,5 +1,15 @@
 # Post Service
 
+## 2026-09-26 WebSocket 연동 계약
+
+WS Gateway의 `boardId`는 `postId`다. Gateway는 서비스 JWT로 내부 status를 조회해
+ACTIVE 게시물만 참여시키고, 게시물 상세·댓글 목록·댓글 작성을 내부 HTTP 경로로
+호출한다. 서비스 JWT는 별도의 secret/issuer/audience를 사용하고 유효 기간은
+최대 60초다. 댓글 작성 토큰에는 검증된 숫자 사용자 ID가 들어간다.
+`mutationId`의 `(postId, authorId, mutationId)` 유일 인덱스로 작성 재시도를
+멱등 처리한다. 댓글·카운터·Outbox의 트랜잭션 커밋 직후 Worker를 깨우며
+`post:events`와 기존 네 생성 이벤트의 스키마는 유지한다.
+
 Nest.js 기반으로 복잡한 비즈니스 로직들 처리.
 
 ```mermaid
@@ -400,13 +410,13 @@ sequenceDiagram
 
     M-->>P: Post
 
-    P->>M: 조회 집계용 Outbox 이벤트 저장
-
     P-->>G: Post Detail
     G-->>C: Post Detail
-
-    O->>K: XADD PostViewed
 ```
+
+현재 구현은 익명 요청에 ACTIVE 게시물만 반환한다. 없는·비활성 게시물은 `404`다.
+응답은 아래 게시물 필드에서 MongoDB `_id`를 제외한다. 조회 시 카운터와 Outbox를
+변경하지 않는다. 아래 `PostViewed` 조회수 집계 설계는 후속 작업이다.
 
 게시판 조회 횟수를 증가시키기 위해 매번 다음과 같은 Query를 수행하는 것은 피한다.
 
@@ -471,6 +481,9 @@ MongoDB
 # 4. 실시간 게시판 참여
 
 게시판의 실시간 연결 자체는 Real-Time Gateway가 관리한다.
+
+현재 WS Gateway는 WebSocket 연결과 로컬 room 상태만 구현했다. 기본 join은 인가
+adapter 미연결로 거부되며, 아래 join 및 이벤트 전달 시퀀스는 연동 목표다.
 
 Post Service는 다음 정보만 관리한다.
 
@@ -588,7 +601,13 @@ sequenceDiagram
 
 댓글을 작성하면 Post Service가 같은 MongoDB 트랜잭션에서 댓글과 Outbox를 저장한다. Outbox Worker가 `PostCommentCreated`를 Redis Streams에 발행한다.
 
-Real-Time Gateway는 해당 이벤트를 Subscribe하고 게시판에 연결되어 있는 사용자들에게 WebSocket으로 전달한다.
+연동이 완료되면 Real-Time Gateway가 해당 이벤트를 구독하고 게시판에 연결된 사용자에게 WebSocket으로 전달한다.
+
+> 구현 상태 (2026-09-24): 위 시퀀스의 Post Service Outbox 저장과 Redis Streams 발행만
+> 완료됐다. WS Gateway의 Realtime Consumer Group·Redis Pub/Sub·room 브로드캐스트는
+> 아직 구현되지 않았다. WS Gateway의 기본 `board.join`도 인가 adapter가 없어 거부된다.
+> 현재 HTTP 조회는 요청 시 MongoDB의 영속 상태를 반환하며 WebSocket 푸시는 발생하지 않는다.
+> 실제 연결 완료 범위는 [작업 현황](./POST_SERVICE_STATUS.md)을 참고한다.
 
 ```
 Post Service
@@ -950,6 +969,11 @@ GET /api/v1/posts/{postId}/comments
 ```
 
 `skip / limit` 방식은 댓글 개수가 많아질수록 성능이 저하될 수 있다.
+
+현재 응답은 `{"comments":[...],"nextCursor":null}`이며 ACTIVE 게시물의 ACTIVE
+댓글만 `createdAt DESC, _id DESC`로 반환한다. `limit` 기본값은 30이고 1–100을
+허용한다. 커서는 게시물 ID와 두 정렬 키를 담은 불투명한 문자열이다. 유효하지 않거나
+다른 게시물의 커서는 `400`, 없는·비활성 게시물은 `404`다.
 
 ---
 
@@ -1346,6 +1370,13 @@ flowchart LR
 ### POST `/internal/v1/posts/batch-get`
 
 Map Service에서 받은 Post ID 목록의 상세 정보를 조회한다.
+
+현재 구현은 최대 100개를 받고 중복을 제거한다. ACTIVE 게시물만 입력 순서대로
+반환하며 없는·비활성 게시물은 제외한다. 빈 배열은 `{"posts":[]}`다.
+`meta`는 `postId`, `status`, `category`, `locationSnapshot`, `radiusM`, `expiresAt`을,
+`status`는 `postId`, `status`, `expiresAt`을 반환한다. 두 경로 모두 비활성 게시물의
+실제 상태를 `200`으로 제공하고 없는 게시물은 `404`다. 서비스 간 인증 계약 전까지
+세 내부 조회 경로는 운영에서 `503`으로 차단한다.
 
 ### Request
 

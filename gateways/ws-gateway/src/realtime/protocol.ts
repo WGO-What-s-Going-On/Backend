@@ -2,10 +2,14 @@ export const protocolVersion = 1 as const;
 
 export interface ClientCommand {
   version: typeof protocolVersion;
-  type: 'board.join' | 'board.leave';
+  type: 'board.join' | 'board.leave' | 'post.get' | 'comment.list' | 'comment.create';
   requestId: string;
   payload: {
     boardId: string;
+    content?: string;
+    mutationId?: string;
+    cursor?: string;
+    limit?: number;
   };
 }
 
@@ -30,7 +34,9 @@ export type ServerMessage =
       code: string;
       message: string;
       timestamp: string;
-    };
+    }
+  | { version: typeof protocolVersion; type: 'command.result'; requestId: string; result: unknown; timestamp: string }
+  | { version: typeof protocolVersion; type: 'comment.created' | 'post.created' | 'post.reaction.created' | 'post.participant.joined'; eventId: string; postId: string; boardId: string; comment?: unknown };
 
 export class ProtocolError extends Error {
   constructor(
@@ -64,7 +70,7 @@ export function parseClientCommand(raw: string): ClientCommand {
       requestId,
     );
   }
-  if (message.type !== 'board.join' && message.type !== 'board.leave') {
+  if (!['board.join', 'board.leave', 'post.get', 'comment.list', 'comment.create'].includes(String(message.type))) {
     throw new ProtocolError('WS_UNKNOWN_MESSAGE_TYPE', 'The message type is not supported.', requestId);
   }
   if (!requestId || requestId.length > 128) {
@@ -83,11 +89,20 @@ export function parseClientCommand(raw: string): ClientCommand {
     throw new ProtocolError('WS_INVALID_BOARD_ID', 'A valid boardId is required.', requestId);
   }
 
+  if (message.type === 'comment.create' && (
+    typeof payload.content !== 'string' || !payload.content.trim() || payload.content.length > 2000
+    || typeof payload.mutationId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(payload.mutationId)
+  )) throw new ProtocolError('WS_INVALID_PAYLOAD', 'Valid content and mutationId are required.', requestId);
+  if (message.type === 'comment.list' && (
+    (payload.cursor !== undefined && (typeof payload.cursor !== 'string' || payload.cursor.length > 1024))
+    || (payload.limit !== undefined && (!Number.isInteger(payload.limit) || Number(payload.limit) < 1 || Number(payload.limit) > 100))
+  )) throw new ProtocolError('WS_INVALID_PAYLOAD', 'Invalid cursor or limit.', requestId);
+
   return {
     version: protocolVersion,
-    type: message.type,
+    type: message.type as ClientCommand['type'],
     requestId,
-    payload: { boardId: payload.boardId },
+    payload: { boardId: payload.boardId, ...(message.type === 'comment.create' ? { content: payload.content as string, mutationId: payload.mutationId as string } : {}), ...(message.type === 'comment.list' && payload.cursor !== undefined ? { cursor: payload.cursor as string } : {}), ...(message.type === 'comment.list' && payload.limit !== undefined ? { limit: payload.limit as number } : {}) },
   };
 }
 

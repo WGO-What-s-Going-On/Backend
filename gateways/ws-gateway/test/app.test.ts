@@ -5,6 +5,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig, type AppConfig } from '../src/config.js';
 import type { Authenticator } from '../src/realtime/authentication.js';
 import type { BoardAccessAuthorizer } from '../src/realtime/board-access.js';
+import type { PostClient } from '../src/realtime/post-client.js';
 
 const apps: Array<{ close(): Promise<void> }> = [];
 const sockets: WebSocket[] = [];
@@ -62,6 +63,33 @@ async function connect(allowed: boolean): Promise<WebSocket> {
 }
 
 describe('realtime gateway', () => {
+  it('requires room membership and returns post and comment results', async () => {
+    const calls: unknown[] = [];
+    const postClient: PostClient = {
+      async canJoin() { return true; },
+      async detail(id) { calls.push(['detail', id]); return { postId: id }; },
+      async comments(id, cursor, limit) { calls.push(['comments', id, cursor, limit]); return { comments: [], nextCursor: null }; },
+      async createComment(id, userId, content, mutationId) {
+        calls.push(['create', id, userId, content, mutationId]); return { commentId: 'comment-1' };
+      },
+    };
+    const app = await buildApp({ config: testConfig(), logger: false, authenticator, postClient });
+    apps.push(app);
+    await app.ready();
+    const socket = await app.injectWS('/ws/v1');
+    sockets.push(socket);
+    socket.send(JSON.stringify({ version: 1, type: 'post.get', requestId: '1', payload: { boardId: 'post-1' } }));
+    await expect(nextMessage(socket)).resolves.toMatchObject({ type: 'command.error', code: 'WS_BOARD_NOT_JOINED' });
+    socket.send(JSON.stringify({ version: 1, type: 'board.join', requestId: '2', payload: { boardId: 'post-1' } }));
+    await expect(nextMessage(socket)).resolves.toMatchObject({ type: 'command.ack' });
+    socket.send(JSON.stringify({ version: 1, type: 'post.get', requestId: '3', payload: { boardId: 'post-1' } }));
+    await expect(nextMessage(socket)).resolves.toMatchObject({ type: 'command.result', requestId: '3', result: { postId: 'post-1' } });
+    socket.send(JSON.stringify({ version: 1, type: 'comment.list', requestId: '4', payload: { boardId: 'post-1', limit: 10 } }));
+    await expect(nextMessage(socket)).resolves.toMatchObject({ type: 'command.result', requestId: '4', result: { comments: [], nextCursor: null } });
+    socket.send(JSON.stringify({ version: 1, type: 'comment.create', requestId: '5', payload: { boardId: 'post-1', content: 'hello', mutationId: 'm1' } }));
+    await expect(nextMessage(socket)).resolves.toMatchObject({ type: 'command.result', requestId: '5', result: { commentId: 'comment-1' } });
+    expect(calls).toEqual([['detail', 'post-1'], ['comments', 'post-1', undefined, 10], ['create', 'post-1', 'user-123', 'hello', 'm1']]);
+  });
   it('reports liveness and dependency readiness', async () => {
     const app = await buildApp({
       config: testConfig(),

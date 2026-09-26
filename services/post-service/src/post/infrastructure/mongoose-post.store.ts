@@ -1,14 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
-import { ClientSession, Connection, Model } from 'mongoose';
+import type { ClientSession, Connection, Model } from 'mongoose';
 import type { PostCommands, PostStateQueries, PostUnitOfWork, PostTransaction, OutboxEvent } from '../application/ports.js';
 import { UniqueConflictError } from '../application/errors.js';
 import type { CommentRecord, ParticipantRecord, PostRecord, PostState, ReactionRecord } from '../domain/post.js';
 import { PostInactiveError } from '../domain/post.js';
+import { OutboxWorker } from './outbox.worker.js';
 
 class MongoQueries implements PostStateQueries {
   constructor(
     private readonly posts: Model<any>,
+    private readonly comments: Model<any>,
     private readonly reactions: Model<any>,
     private readonly participants: Model<any>,
     private readonly session?: ClientSession,
@@ -17,6 +19,11 @@ class MongoQueries implements PostStateQueries {
   async findPost(postId: string): Promise<PostState | null> {
     const post = await this.posts.findOne({ postId }).session(this.session ?? null).lean();
     return post ? { postId: post.postId, status: post.status } : null;
+  }
+
+  async findCommentByMutation(postId: string, authorId: number, mutationId: string): Promise<CommentRecord | null> {
+    const comment = await this.comments.findOne({ postId, authorId, mutationId }).session(this.session ?? null).lean();
+    return comment ? { commentId: comment.commentId, postId, authorId, content: comment.content, status: comment.status, createdAt: comment.createdAt, updatedAt: comment.updatedAt } : null;
   }
 
   async findReaction(postId: string, userId: number): Promise<ReactionRecord | null> {
@@ -44,8 +51,8 @@ class MongoCommands implements PostCommands {
     await this.posts.create([post], { session: this.session });
   }
 
-  async insertComment(comment: CommentRecord): Promise<void> {
-    await this.comments.create([comment], { session: this.session });
+  async insertComment(comment: CommentRecord, mutationId?: string): Promise<void> {
+    await this.comments.create([{ ...comment, ...(mutationId ? { mutationId } : {}) }], { session: this.session });
   }
 
   async insertReaction(reaction: ReactionRecord): Promise<void> {
@@ -88,10 +95,15 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
     @InjectModel('Reaction') private readonly reactions: Model<any>,
     @InjectModel('Participant') private readonly participants: Model<any>,
     @InjectModel('Outbox') private readonly outbox: Model<any>,
+    private readonly outboxWorker: OutboxWorker,
   ) {}
 
   findPost(postId: string): Promise<PostState | null> {
     return this.queries().findPost(postId);
+  }
+
+  findCommentByMutation(postId: string, authorId: number, mutationId: string): Promise<CommentRecord | null> {
+    return this.queries().findCommentByMutation(postId, authorId, mutationId);
   }
 
   findReaction(postId: string, userId: number): Promise<ReactionRecord | null> {
@@ -103,15 +115,17 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
   }
 
   private queries(session?: ClientSession): PostStateQueries {
-    return new MongoQueries(this.posts, this.reactions, this.participants, session);
+    return new MongoQueries(this.posts, this.comments, this.reactions, this.participants, session);
   }
 
   async execute<T>(work: (transaction: PostTransaction) => Promise<T>): Promise<T> {
     try {
-      return await this.connection.transaction((session) => work({
+      const result = await this.connection.transaction((session) => work({
         queries: this.queries(session),
         commands: new MongoCommands(this.posts, this.comments, this.reactions, this.participants, this.outbox, session),
       }));
+      this.outboxWorker.wake();
+      return result;
     } catch (error) {
       if ((error as { code?: number }).code === 11000) throw new UniqueConflictError('Unique constraint violated');
       throw error;

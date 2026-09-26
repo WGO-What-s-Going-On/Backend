@@ -1,5 +1,15 @@
 # WGO Post Service
 
+## WebSocket Gateway 내부 계약 (2026-09-26)
+
+`boardId=postId`다. Gateway는 서비스 JWT로
+`GET /internal/v1/posts/{postId}/status`의 ACTIVE 상태를 확인한다. 같은 인증으로
+`GET /internal/v1/posts/{postId}`, `GET /internal/v1/posts/{postId}/comments`,
+`POST /internal/v1/posts/{postId}/comments`를 호출한다. 서비스 JWT는 30초 수명이며
+댓글 작성에는 검증된 숫자 `userId`를 담는다. `mutationId`는 사용자·게시물별로
+유일하고 반복 요청은 기존 댓글을 반환한다. Outbox Worker는 트랜잭션 커밋 직후
+깨우고 1초 주기 폴링을 복구용으로 유지한다.
+
 NestJS와 MongoDB 기반의 Post Service다. 생성 API는 MongoDB 트랜잭션에
 도메인 데이터와 Outbox 이벤트를 함께 기록한다. Outbox Worker는 Redis Streams의
 `post:events`에 이벤트를 발행한다.
@@ -9,13 +19,12 @@ NestJS와 MongoDB 기반의 Post Service다. 생성 API는 MongoDB 트랜잭션�
 ## 코드 구조
 
 - `src/post/presentation`: HTTP 요청·헤더 검증과 도메인 오류의 HTTP 응답 변환
-- `src/post/application`: 네 생성 Command와 필요한 상태 조회·쓰기·참여 허가 포트
+- `src/post/application`: 네 생성 Command와 별도 조회 유스케이스·포트
 - `src/post/domain`: Post 상태, 생성 결과, 중복 참여·재참여 규칙
 - `src/post/infrastructure`: Mongoose 저장소·Outbox Worker와 로컬 참여 허가 대역
 
-Command는 포트 인터페이스에만 의존한다. `PostModule`이 포트를 Mongoose 구현과
-로컬 참여 허가 대역에 연결한다. 조회 포트는 생성 전 상태 확인에만 사용하며 별도의
-조회 모델이나 CQRS 프레임워크는 두지 않는다. 저장소 구현은 도메인 데이터와 Outbox를
+Command와 조회 유스케이스는 포트 인터페이스에만 의존한다. `PostModule`이 포트를 Mongoose 구현과
+로컬 참여 허가 대역에 연결한다. 생성 전 상태 조회 포트와 API 조회 포트는 분리되어 있다. 저장소 구현은 도메인 데이터와 Outbox를
 같은 MongoDB 트랜잭션에서 기록한다.
 
 ## 준비 사항
@@ -55,6 +64,33 @@ curl -X POST http://localhost:3002/api/v1/posts \
 `/reactions` (`{"type":"LIKE"}`), `/participants` (`{}`)에 POST할 수 있다.
 새 게시물의 `expiresAt`은 `null`이며 Moderation 연동 후 설정된다. Redis Stream은
 `docker compose exec redis redis-cli XRANGE post:events - +`로 확인한다.
+
+## 조회 API
+
+공개 조회는 인증 없이 `ACTIVE` 게시물만 반환한다. `GET /api/v1/posts/{postId}`는
+게시물 상세를 반환하며, 없는·비활성 게시물은 `404`다. `GET
+/api/v1/posts/{postId}/comments?limit=30&cursor=...`는 ACTIVE 댓글을 최신순으로
+`{"comments":[...],"nextCursor":null}` 형태로 반환한다. `limit`은 기본 30,
+허용 범위 1–100이다. 다음 페이지가 있을 때만 `nextCursor`에 불투명한 문자열이
+들어간다. 잘못된 커서와 다른 게시물의 커서는 `400`이다. 응답에는 MongoDB `_id`가 없다.
+
+내부 조회는 다음과 같다. 운영에서 batch-get은 기존대로 `503`이며,
+meta/status는 서비스 JWT를 요구한다.
+
+| 경로 | 요청·응답 |
+| --- | --- |
+| `POST /internal/v1/posts/batch-get` | `{"postIds":[...]}` → `{"posts":[{"postId","title","category","status","createdAt"}]}`. 최대 100개, 중복 제거, ACTIVE만 입력 순서대로 반환 |
+| `GET /internal/v1/posts/{postId}/meta` | `postId`, `status`, `category`, `locationSnapshot`, `radiusM`, `expiresAt` |
+| `GET /internal/v1/posts/{postId}/status` | `postId`, `status`, `expiresAt` |
+
+내부 meta/status는 없는 게시물에 `404`를 반환하고 비활성 게시물에는 실제 상태를
+포함한 `200`을 반환한다. 조회는 카운터와 Outbox를 변경하지 않는다. 주변 검색과
+응답 조합은 Map Service·Gateway가 담당한다.
+
+WS Gateway의 Stream 소비·room 브로드캐스트는 구현됐다. Map 검색을 통한 주변
+조회 조합은 후속 작업이다. 진행 상태는 [작업 현황](./POST_SERVICE_STATUS.md)을 참고한다.
+
+## 상태 확인
 
 ```bash
 curl http://localhost:3002/health/live

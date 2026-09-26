@@ -24,12 +24,14 @@ export const CommentSchema = new Schema({
   commentId: { type: String, required: true, unique: true },
   postId: { type: String, required: true },
   authorId: { type: Number, required: true },
+  mutationId: { type: String },
   content: { type: String, required: true },
   status: { type: String, required: true },
   createdAt: { type: Date, required: true },
   updatedAt: { type: Date, default: null },
 }, options);
 CommentSchema.index({ postId: 1, createdAt: -1, _id: -1 });
+CommentSchema.index({ postId: 1, authorId: 1, mutationId: 1 }, { unique: true, partialFilterExpression: { mutationId: { $type: 'string' } } });
 
 export const ReactionSchema = new Schema({
   postId: { type: String, required: true },

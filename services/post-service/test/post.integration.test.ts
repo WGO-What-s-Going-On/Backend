@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import type { Connection, Model } from 'mongoose';
 import { createClient } from 'redis';
+import { createHmac } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -11,6 +12,13 @@ import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
 import { JoinPost } from '../src/post/application/commands.js';
 
 const suite = process.env.RUN_INTEGRATION === '1' ? describe : describe.skip;
+const serviceSecret = 'integration-ws-service-secret-at-least-32';
+function serviceToken(userId?: number): string {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const payload = Buffer.from(JSON.stringify({ sub: 'ws-gateway', iss: 'wgo-ws-gateway', aud: 'wgo-post-service', iat: now, exp: now + 30, ...(userId ? { userId } : {}) })).toString('base64url');
+  return `${header}.${payload}.${createHmac('sha256', serviceSecret).update(`${header}.${payload}`).digest('base64url')}`;
+}
 
 suite('post creation integration', () => {
   let app: INestApplication;
@@ -28,6 +36,7 @@ suite('post creation integration', () => {
   beforeAll(async () => {
     process.env.NODE_ENV = 'test';
     process.env.MONGODB_URI = 'mongodb://localhost:27017/wgo_post_integration?replicaSet=rs0';
+    process.env.WS_SERVICE_JWT_SECRET = serviceSecret;
     const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = module.createNestApplication();
     await app.init();
@@ -126,5 +135,100 @@ suite('post creation integration', () => {
     } finally {
       process.env.NODE_ENV = 'test';
     }
+  });
+
+  it('reads active details and paginates active comments without writes', async () => {
+    const otherId = `post_${'a'.repeat(36)}`;
+    const inactiveId = `post_${'b'.repeat(36)}`;
+    const original = await posts.findOne({ postId: id }).lean();
+    await posts.create({ ...original, _id: undefined, postId: inactiveId, status: 'DELETED' });
+    const timestamp = new Date('2030-09-20T00:00:00.000Z');
+    await comments.insertMany([
+      { commentId: 'read-1', postId: id, authorId: 1, content: 'first', status: 'ACTIVE', createdAt: timestamp },
+      { commentId: 'read-2', postId: id, authorId: 1, content: 'second', status: 'ACTIVE', createdAt: timestamp },
+      { commentId: 'read-3', postId: id, authorId: 1, content: 'third', status: 'ACTIVE', createdAt: timestamp },
+      { commentId: 'read-4', postId: id, authorId: 1, content: 'deleted', status: 'DELETED', createdAt: timestamp },
+    ]);
+    const before = await posts.findOne({ postId: id }).lean();
+    const outboxBefore = await outbox.countDocuments({});
+    const detail = await request(app.getHttpServer()).get(`/api/v1/posts/${id}`).expect(200);
+    expect(detail.body).toMatchObject({ postId: id, title: 'Test', status: 'ACTIVE' });
+    expect(detail.body).not.toHaveProperty('_id');
+    await request(app.getHttpServer()).get(`/api/v1/posts/${otherId}`).expect(404);
+    await request(app.getHttpServer()).get(`/api/v1/posts/${inactiveId}`).expect(404);
+    await request(app.getHttpServer()).get(`/api/v1/posts/${inactiveId}/comments`).expect(404);
+    const first = await request(app.getHttpServer()).get(`/api/v1/posts/${id}/comments?limit=1`).expect(200);
+    const second = await request(app.getHttpServer()).get(`/api/v1/posts/${id}/comments?limit=1&cursor=${first.body.nextCursor}`).expect(200);
+    const rest = await request(app.getHttpServer()).get(`/api/v1/posts/${id}/comments?limit=10&cursor=${second.body.nextCursor}`).expect(200);
+    const ids = [first.body, second.body, rest.body].flatMap((page) => page.comments.map((comment: any) => comment.commentId));
+    expect(ids).toHaveLength(4);
+    expect(ids.slice(0, 3)).toEqual(['read-3', 'read-2', 'read-1']);
+    expect(ids[3]).toMatch(/^comment_/);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).not.toContain('read-4');
+    expect(rest.body.nextCursor).toBeNull();
+    expect(first.body.comments[0]).not.toHaveProperty('_id');
+    await request(app.getHttpServer()).get(`/api/v1/posts/${id}/comments?cursor=invalid`).expect(400);
+    await request(app.getHttpServer()).get(`/api/v1/posts/${otherId}/comments?cursor=${first.body.nextCursor}`).expect(400);
+    for (const limit of ['0', '101', '1.5', 'abc']) await request(app.getHttpServer()).get(`/api/v1/posts/${id}/comments?limit=${limit}`).expect(400);
+    const after = await posts.findOne({ postId: id }).lean();
+    expect(after.counters).toEqual(before.counters);
+    expect(await outbox.countDocuments({})).toBe(outboxBefore);
+  });
+
+  it('filters and orders batch reads, exposes inactive metadata, and blocks internal routes in production', async () => {
+    const inactiveId = `post_${'b'.repeat(36)}`;
+    const secondId = `post_${'d'.repeat(36)}`;
+    const missing = `post_${'c'.repeat(36)}`;
+    const original = await posts.findOne({ postId: id }).lean();
+    await posts.create({ ...original, _id: undefined, postId: secondId, title: 'Second' });
+    const batch = await request(app.getHttpServer()).post('/internal/v1/posts/batch-get')
+      .send({ postIds: [missing, secondId, id, inactiveId, secondId] }).expect(201);
+    expect(batch.body.posts).toEqual([
+      { postId: secondId, title: 'Second', category: 'INCIDENT', status: 'ACTIVE', createdAt: expect.any(String) },
+      { postId: id, title: 'Test', category: 'INCIDENT', status: 'ACTIVE', createdAt: expect.any(String) },
+    ]);
+    await request(app.getHttpServer()).post('/internal/v1/posts/batch-get').send({ postIds: [] }).expect(201).expect({ posts: [] });
+    await request(app.getHttpServer()).post('/internal/v1/posts/batch-get').send({ postIds: Array(100).fill(id) }).expect(201);
+    await request(app.getHttpServer()).post('/internal/v1/posts/batch-get').send({ postIds: Array(101).fill(id) }).expect(400);
+    await request(app.getHttpServer()).post('/internal/v1/posts/batch-get').send({ postIds: [123] }).expect(400);
+    const meta = await request(app.getHttpServer()).get(`/internal/v1/posts/${inactiveId}/meta`).expect(200);
+    expect(meta.body).toMatchObject({ postId: inactiveId, status: 'DELETED', category: 'INCIDENT', radiusM: 250, locationSnapshot: { latitude: 37.5, longitude: 127 } });
+    expect(meta.body).not.toHaveProperty('_id');
+    await request(app.getHttpServer()).get(`/internal/v1/posts/${inactiveId}/status`).expect(200)
+      .expect({ postId: inactiveId, status: 'DELETED', expiresAt: null });
+    await request(app.getHttpServer()).get(`/internal/v1/posts/${missing}/meta`).expect(404);
+    await request(app.getHttpServer()).get(`/internal/v1/posts/${missing}/status`).expect(404);
+    process.env.NODE_ENV = 'production';
+    try {
+      await request(app.getHttpServer()).post('/internal/v1/posts/batch-get').send({ postIds: [] }).expect(503);
+      await request(app.getHttpServer()).get(`/internal/v1/posts/${id}/meta`).expect(401);
+      await request(app.getHttpServer()).get(`/internal/v1/posts/${id}/status`).expect(401);
+    } finally {
+      process.env.NODE_ENV = 'test';
+    }
+  });
+
+  it('authenticates internal reads and deduplicates repeated mutations after reconnect', async () => {
+    const auth = { Authorization: `Bearer ${serviceToken(123)}` };
+    const before = await posts.findOne({ postId: id }).lean();
+    const first = await request(app.getHttpServer()).post(`/internal/v1/posts/${id}/comments`).set(auth)
+      .send({ content: 'via websocket', mutationId: 'reconnect-1' }).expect(201);
+    const again = await request(app.getHttpServer()).post(`/internal/v1/posts/${id}/comments`).set(auth)
+      .send({ content: 'via websocket', mutationId: 'reconnect-1' }).expect(201);
+    expect(again.body.commentId).toBe(first.body.commentId);
+    expect(await comments.countDocuments({ postId: id, authorId: 123, mutationId: 'reconnect-1' })).toBe(1);
+    expect((await posts.findOne({ postId: id }).lean()).counters.commentCount).toBe(before.counters.commentCount + 1);
+    await request(app.getHttpServer()).get(`/internal/v1/posts/${id}`).set(auth).expect(200);
+    await request(app.getHttpServer()).get(`/internal/v1/posts/${id}/comments?limit=1`).set(auth).expect(200);
+    await request(app.getHttpServer()).post(`/internal/v1/posts/${id}/comments`).set({ Authorization: `Bearer ${serviceToken()}` })
+      .send({ content: 'invalid', mutationId: 'missing-user' }).expect(400);
+    await request(app.getHttpServer()).post(`/internal/v1/posts/${id}/comments`).set({ Authorization: 'Bearer invalid' })
+      .send({ content: 'invalid', mutationId: 'bad-token' }).expect(401);
+    process.env.NODE_ENV = 'production';
+    try {
+      await request(app.getHttpServer()).get(`/internal/v1/posts/${id}/status`).expect(401);
+      await request(app.getHttpServer()).get(`/internal/v1/posts/${id}/status`).set(auth).expect(200);
+    } finally { process.env.NODE_ENV = 'test'; }
   });
 });

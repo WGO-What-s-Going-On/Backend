@@ -23,6 +23,8 @@ import {
   type ServerMessage,
 } from './realtime/protocol.js';
 import { SubscriptionManager } from './realtime/subscription-manager.js';
+import { HttpPostClient, PostServiceError, type PostClient } from './realtime/post-client.js';
+import { PostEvents, type RealtimeBus } from './realtime/post-events.js';
 
 interface AuthenticatedRequest extends FastifyRequest {
   authenticatedUser: AuthenticatedUser;
@@ -33,6 +35,9 @@ export interface BuildAppOptions {
   logger?: boolean;
   authenticator?: Authenticator;
   boardAccessAuthorizer?: BoardAccessAuthorizer;
+  postClient?: PostClient;
+  realtimeBus?: RealtimeBus;
+  enableEvents?: boolean;
 }
 
 function send(socket: WebSocket, message: ServerMessage): void {
@@ -72,13 +77,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   const app = Fastify({ logger, trustProxy: false });
   const authenticator = options.authenticator ?? new JwtAuthenticator(config.jwt);
-  const boardAccessAuthorizer = options.boardAccessAuthorizer
-    ?? new UnavailableBoardAccessAuthorizer();
+  const postClient = options.postClient ?? new HttpPostClient(config.postService);
+  const boardAccessAuthorizer = options.boardAccessAuthorizer ?? (config.nodeEnv === 'test' && !options.postClient ? new UnavailableBoardAccessAuthorizer() : postClient);
   const connections = new ConnectionManager(
     config.websocket.heartbeatIntervalMs,
     config.websocket.heartbeatTimeoutMs,
   );
   const subscriptions = new SubscriptionManager(config.websocket.maxRoomsPerSocket);
+  const bus = options.realtimeBus ?? (options.enableEvents || (config.nodeEnv !== 'test' && !options.boardAccessAuthorizer) ? new PostEvents(config.redisUrl, subscriptions, app.log) : undefined);
+  if (bus) await bus.start();
 
   await app.register(cookie);
   await app.register(websocket, {
@@ -90,14 +97,17 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.get('/health/live', async () => ({ status: 'ok' }));
   app.get('/health/ready', async (_request, reply) => {
-    const boardAuthorization = options.boardAccessAuthorizer ? 'configured' : 'unavailable';
+    const boardAuthorization = boardAccessAuthorizer instanceof UnavailableBoardAccessAuthorizer ? 'unavailable' : 'configured';
+    const events = bus ? (bus.ready() ? 'ready' : 'unavailable') : 'unavailable';
+    const metrics = events === 'ready' ? await bus?.metrics?.() : undefined;
     const body = {
-      status: boardAuthorization === 'configured' ? 'ready' : 'not-ready',
-      dependencies: { boardAuthorization },
+      status: boardAuthorization === 'configured' && (events === 'ready' || options.boardAccessAuthorizer) ? 'ready' : 'not-ready',
+      dependencies: { boardAuthorization, events },
       connections: connections.connectionCount,
+      ...(metrics ? { consumerPending: metrics.consumerPending, deliveryFailures: metrics.deliveryFailures } : {}),
     };
 
-    return boardAuthorization === 'configured' ? body : reply.code(503).send(body);
+    return body.status === 'ready' ? body : reply.code(503).send(body);
   });
 
   app.get(config.websocket.path, {
@@ -175,8 +185,25 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
               ));
               return;
             }
-          } else {
+          } else if (command.type === 'board.leave') {
             subscriptions.leave(socket, command.payload.boardId);
+          } else {
+            if (!subscriptions.roomsForSocket(socket).has(command.payload.boardId)) {
+              send(socket, commandError('WS_BOARD_NOT_JOINED', 'Join the board first.', command.requestId));
+              return;
+            }
+            try {
+              const result = command.type === 'post.get'
+                ? await postClient.detail(command.payload.boardId)
+                : command.type === 'comment.list'
+                  ? await postClient.comments(command.payload.boardId, command.payload.cursor, command.payload.limit)
+                  : await postClient.createComment(command.payload.boardId, userId, command.payload.content!, command.payload.mutationId!);
+              send(socket, { version: protocolVersion, type: 'command.result', requestId: command.requestId, result, timestamp: new Date().toISOString() });
+            } catch (error) {
+              const code = error instanceof PostServiceError && error.status < 500 ? 'WS_POST_REJECTED' : 'WS_POST_UNAVAILABLE';
+              send(socket, commandError(code, error instanceof PostServiceError && error.status < 500 ? error.message : 'Post Service is temporarily unavailable.', command.requestId));
+            }
+            return;
           }
 
           send(socket, {
@@ -206,6 +233,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   connections.startHeartbeat();
   app.addHook('onClose', async () => {
     connections.stopHeartbeat();
+    if (bus) await bus.close();
   });
 
   return app;

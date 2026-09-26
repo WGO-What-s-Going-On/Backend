@@ -13,16 +13,29 @@ export interface OutboxEvent {
   payload: Record<string, unknown>;
 }
 
-// Queries required by the create commands; no general read API is exposed yet.
+// Queries required by the create commands.
 export interface PostStateQueries {
   findPost(postId: string): Promise<PostState | null>;
+  findCommentByMutation(postId: string, authorId: number, mutationId: string): Promise<CommentRecord | null>;
   findReaction(postId: string, userId: number): Promise<ReactionRecord | null>;
   findParticipant(postId: string, userId: number): Promise<ParticipantRecord | null>;
 }
 
+export type PostDetail = PostRecord;
+export type CommentDetail = CommentRecord;
+export type CommentCursor = { createdAt: Date; id: string };
+
+export interface PostReadQueries {
+  findDetail(postId: string): Promise<PostDetail | null>;
+  findComments(postId: string, cursor: CommentCursor | null, limit: number): Promise<{ comment: CommentDetail; id: string }[]>;
+  findActiveBatch(postIds: string[]): Promise<Pick<PostRecord, 'postId' | 'title' | 'category' | 'status' | 'createdAt'>[]>;
+  findMeta(postId: string): Promise<Pick<PostRecord, 'postId' | 'status' | 'category' | 'locationSnapshot' | 'radiusM' | 'expiresAt'> | null>;
+  findStatus(postId: string): Promise<Pick<PostRecord, 'postId' | 'status' | 'expiresAt'> | null>;
+}
+
 export interface PostCommands {
   insertPost(post: PostRecord): Promise<void>;
-  insertComment(comment: CommentRecord): Promise<void>;
+  insertComment(comment: CommentRecord, mutationId?: string): Promise<void>;
   insertReaction(reaction: ReactionRecord): Promise<void>;
   insertParticipant(participant: ParticipantRecord): Promise<void>;
   rejoinParticipant(participant: ParticipantRecord): Promise<ParticipantRecord | null>;
@@ -45,4 +58,5 @@ export interface ParticipationAuthorization {
 
 export const POST_UNIT_OF_WORK = Symbol('POST_UNIT_OF_WORK');
 export const POST_STATE_QUERIES = Symbol('POST_STATE_QUERIES');
+export const POST_READ_QUERIES = Symbol('POST_READ_QUERIES');
 export const PARTICIPATION_AUTHORIZATION = Symbol('PARTICIPATION_AUTHORIZATION');

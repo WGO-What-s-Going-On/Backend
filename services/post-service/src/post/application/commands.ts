@@ -26,18 +26,30 @@ export class CreatePost {
 }
 
 export class CreateComment {
-  constructor(private readonly unitOfWork: PostUnitOfWork) {}
+  constructor(private readonly unitOfWork: PostUnitOfWork, private readonly queries: PostStateQueries) {}
 
-  async execute(postId: string, content: string, authorId: number): Promise<CommentRecord> {
+  async execute(postId: string, content: string, authorId: number, mutationId?: string): Promise<CommentRecord> {
     const now = new Date();
     const comment = createComment(postId, authorId, content, `comment_${randomUUID()}`, now);
-    await this.unitOfWork.execute(async (transaction) => {
-      await active(transaction, postId);
-      await transaction.commands.insertComment(comment);
-      await transaction.commands.increment(postId, 'commentCount', now);
-      await transaction.commands.appendEvent(event(postId, 'PostCommentCreated', { comment }, now));
-    });
-    return comment;
+    try {
+      return await this.unitOfWork.execute(async (transaction) => {
+        await active(transaction, postId);
+        if (mutationId) {
+          const existing = await transaction.queries.findCommentByMutation(postId, authorId, mutationId);
+          if (existing) return existing;
+        }
+        await transaction.commands.insertComment(comment, mutationId);
+        await transaction.commands.increment(postId, 'commentCount', now);
+        await transaction.commands.appendEvent(event(postId, 'PostCommentCreated', { comment }, now));
+        return comment;
+      });
+    } catch (error) {
+      if (mutationId && error instanceof UniqueConflictError) {
+        const existing = await this.queries.findCommentByMutation(postId, authorId, mutationId);
+        if (existing) return existing;
+      }
+      throw error;
+    }
   }
 }
 

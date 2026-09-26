@@ -17,7 +17,10 @@ export interface AppConfig {
     issuer: string;
     audience: string;
     cookieName: string;
+    jwksUrl?: string;
   };
+  postService: { url: string; serviceSecret: string; issuer: string; audience: string };
+  redisUrl: string;
 }
 
 function integer(name: string, fallback: number, minimum = 0): number {
@@ -54,9 +57,14 @@ export function loadConfig(): AppConfig {
 
   const jwtSecret = process.env.JWT_SECRET
     ?? (nodeEnv === 'production' ? '' : 'local-development-secret-change-me');
-  if (jwtSecret.length < 32) {
-    throw new Error('JWT_SECRET must contain at least 32 characters');
+  if (nodeEnv === 'production' && (!process.env.JWT_JWKS_URL || !process.env.JWT_ISSUER || !process.env.JWT_AUDIENCE)) {
+    throw new Error('JWT_JWKS_URL, JWT_ISSUER and JWT_AUDIENCE are required in production');
   }
+  if (nodeEnv !== 'production' && jwtSecret.length < 32) {
+    throw new Error('JWT_SECRET must contain at least 32 characters in development');
+  }
+  const serviceSecret = process.env.WS_SERVICE_JWT_SECRET ?? (nodeEnv === 'production' ? '' : 'local-ws-service-secret-change-me-at-least-32');
+  if (serviceSecret.length < 32) throw new Error('WS_SERVICE_JWT_SECRET must contain at least 32 characters');
 
   const path = process.env.WS_PATH ?? '/ws/v1';
   if (!path.startsWith('/')) throw new Error('WS_PATH must start with /');
@@ -89,6 +97,14 @@ export function loadConfig(): AppConfig {
       issuer: process.env.JWT_ISSUER ?? 'wgo-user-service',
       audience: process.env.JWT_AUDIENCE ?? 'wgo-realtime-gateway',
       cookieName: process.env.JWT_COOKIE_NAME ?? 'wgo_access_token',
+      ...(process.env.JWT_JWKS_URL ? { jwksUrl: process.env.JWT_JWKS_URL } : {}),
     },
+    postService: {
+      url: process.env.POST_SERVICE_URL ?? 'http://127.0.0.1:3002',
+      serviceSecret,
+      issuer: process.env.WS_SERVICE_JWT_ISSUER ?? 'wgo-ws-gateway',
+      audience: process.env.WS_SERVICE_JWT_AUDIENCE ?? 'wgo-post-service',
+    },
+    redisUrl: process.env.REDIS_URL ?? 'redis://127.0.0.1:6380',
   };
 }
