@@ -50,6 +50,16 @@ Primary 선출을 기다린다. 재실행해도 기존 설정을 유지한다. �
 
 애플리케이션은 기본적으로 `http://localhost:3002`에서 실행된다.
 
+## OpenAPI / Swagger
+
+- Swagger UI: `http://localhost:3002/docs`
+- OpenAPI JSON: `http://localhost:3002/docs/openapi.json`
+
+공개 게시물·댓글·반응·참여 API, 내부 조회·작성 API, 생존 확인 경로를 문서화한다.
+Swagger의 `X-User-Id` 헤더는 로컬·테스트용 공개 생성 API에만 사용한다.
+내부 API는 문서의 `service-jwt` Bearer 인증을 사용한다. 내부 batch-get은 운영
+환경에서 비활성화되어 있고, meta/status는 운영에서 서비스 JWT가 필요하다.
+
 로컬·테스트 환경의 생성 API는 `X-User-Id` 헤더에 양의 정수 사용자 ID를 요구한다.
 운영 환경은 실제 인증 연동 전까지 생성 요청을 거부한다. 참여 허가는 로컬·테스트에서만
 개발용 대역으로 허용하고, 운영에서는 Map Service 연동 전까지 거부한다.
