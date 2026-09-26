@@ -17,7 +17,15 @@ export interface AppConfig {
     issuer: string;
     audience: string;
     cookieName: string;
+    jwksUrl?: string;
   };
+  postService: {
+    url: string;
+    serviceSecret: string;
+    issuer: string;
+    audience: string;
+  };
+  redisUrl: string;
 }
 
 function integer(name: string, fallback: number, minimum = 0): number {
@@ -25,7 +33,9 @@ function integer(name: string, fallback: number, minimum = 0): number {
   const value = raw === undefined ? fallback : Number(raw);
 
   if (!Number.isSafeInteger(value) || value < minimum) {
-    throw new Error(`${name} must be an integer greater than or equal to ${minimum}`);
+    throw new Error(
+      `${name} must be an integer greater than or equal to ${minimum}`,
+    );
   }
 
   return value;
@@ -48,15 +58,41 @@ function csv(name: string, fallback: string): string[] {
 
 export function loadConfig(): AppConfig {
   const nodeEnv = process.env.NODE_ENV ?? 'development';
-  if (nodeEnv !== 'development' && nodeEnv !== 'test' && nodeEnv !== 'production') {
+  if (
+    nodeEnv !== 'development' &&
+    nodeEnv !== 'test' &&
+    nodeEnv !== 'production'
+  ) {
     throw new Error('NODE_ENV must be development, test, or production');
   }
 
-  const jwtSecret = process.env.JWT_SECRET
-    ?? (nodeEnv === 'production' ? '' : 'local-development-secret-change-me');
-  if (jwtSecret.length < 32) {
-    throw new Error('JWT_SECRET must contain at least 32 characters');
+  const jwtSecret =
+    process.env.JWT_SECRET ??
+    (nodeEnv === 'production' ? '' : 'local-development-secret-change-me');
+  if (
+    nodeEnv === 'production' &&
+    (!process.env.JWT_JWKS_URL ||
+      !process.env.JWT_ISSUER ||
+      !process.env.JWT_AUDIENCE)
+  ) {
+    throw new Error(
+      'JWT_JWKS_URL, JWT_ISSUER and JWT_AUDIENCE are required in production',
+    );
   }
+  if (nodeEnv !== 'production' && jwtSecret.length < 32) {
+    throw new Error(
+      'JWT_SECRET must contain at least 32 characters in development',
+    );
+  }
+  const serviceSecret =
+    process.env.WS_SERVICE_JWT_SECRET ??
+    (nodeEnv === 'production'
+      ? ''
+      : 'local-ws-service-secret-change-me-at-least-32');
+  if (serviceSecret.length < 32)
+    throw new Error(
+      'WS_SERVICE_JWT_SECRET must contain at least 32 characters',
+    );
 
   const path = process.env.WS_PATH ?? '/ws/v1';
   if (!path.startsWith('/')) throw new Error('WS_PATH must start with /');
@@ -64,7 +100,9 @@ export function loadConfig(): AppConfig {
   const heartbeatIntervalMs = integer('WS_HEARTBEAT_INTERVAL_MS', 30_000, 1);
   const heartbeatTimeoutMs = integer('WS_HEARTBEAT_TIMEOUT_MS', 10_000, 1);
   if (heartbeatTimeoutMs >= heartbeatIntervalMs) {
-    throw new Error('WS_HEARTBEAT_TIMEOUT_MS must be less than WS_HEARTBEAT_INTERVAL_MS');
+    throw new Error(
+      'WS_HEARTBEAT_TIMEOUT_MS must be less than WS_HEARTBEAT_INTERVAL_MS',
+    );
   }
 
   return {
@@ -89,6 +127,16 @@ export function loadConfig(): AppConfig {
       issuer: process.env.JWT_ISSUER ?? 'wgo-user-service',
       audience: process.env.JWT_AUDIENCE ?? 'wgo-realtime-gateway',
       cookieName: process.env.JWT_COOKIE_NAME ?? 'wgo_access_token',
+      ...(process.env.JWT_JWKS_URL
+        ? { jwksUrl: process.env.JWT_JWKS_URL }
+        : {}),
     },
+    postService: {
+      url: process.env.POST_SERVICE_URL ?? 'http://127.0.0.1:3002',
+      serviceSecret,
+      issuer: process.env.WS_SERVICE_JWT_ISSUER ?? 'wgo-ws-gateway',
+      audience: process.env.WS_SERVICE_JWT_AUDIENCE ?? 'wgo-post-service',
+    },
+    redisUrl: process.env.REDIS_URL ?? 'redis://127.0.0.1:6380',
   };
 }

@@ -16,7 +16,8 @@ export interface BuildAppOptions {
 }
 
 function errorCode(statusCode: number, fastifyCode?: string): string {
-  if (fastifyCode === 'FST_ERR_CTP_BODY_TOO_LARGE') return 'GATEWAY_PAYLOAD_TOO_LARGE';
+  if (fastifyCode === 'FST_ERR_CTP_BODY_TOO_LARGE')
+    return 'GATEWAY_PAYLOAD_TOO_LARGE';
   if (statusCode === 400) return 'GATEWAY_BAD_REQUEST';
   if (statusCode === 429) return 'GATEWAY_RATE_LIMITED';
   if (statusCode === 502) return 'GATEWAY_BAD_UPSTREAM';
@@ -25,19 +26,22 @@ function errorCode(statusCode: number, fastifyCode?: string): string {
   return 'GATEWAY_INTERNAL_ERROR';
 }
 
-export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
+export async function buildApp(
+  options: BuildAppOptions = {},
+): Promise<FastifyInstance> {
   const config = options.config ?? loadConfig();
-  const logger = options.logger === false
-    ? false
-    : config.logPretty
-      ? {
-          level: config.logLevel,
-          transport: {
-            target: 'pino-pretty',
-            options: { colorize: true, translateTime: 'SYS:standard' },
-          },
-        }
-      : { level: config.logLevel };
+  const logger =
+    options.logger === false
+      ? false
+      : config.logPretty
+        ? {
+            level: config.logLevel,
+            transport: {
+              target: 'pino-pretty',
+              options: { colorize: true, translateTime: 'SYS:standard' },
+            },
+          }
+        : { level: config.logLevel };
 
   const app = Fastify({
     logger,
@@ -87,38 +91,48 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     status: 'ok',
   }));
 
-  app.get('/health/ready', { config: { rateLimit: false } }, async (_request, reply) => {
-    if (!redis) return { status: 'ready', redis: 'disabled' };
+  app.get(
+    '/health/ready',
+    { config: { rateLimit: false } },
+    async (_request, reply) => {
+      if (!redis) return { status: 'ready', redis: 'disabled' };
 
-    try {
-      await redis.ping();
-      return { status: 'ready', redis: 'up' };
-    } catch {
-      return reply.code(503).send({ status: 'not-ready', redis: 'down' });
-    }
-  });
+      try {
+        await redis.ping();
+        return { status: 'ready', redis: 'up' };
+      } catch {
+        return reply.code(503).send({ status: 'not-ready', redis: 'down' });
+      }
+    },
+  );
 
-  app.setNotFoundHandler(async (request, reply) => reply.code(404).send({
-    code: 'GATEWAY_ROUTE_NOT_FOUND',
-    message: 'No gateway route matches this request.',
-    requestId: request.id,
-    timestamp: new Date().toISOString(),
-  }));
-
-  app.setErrorHandler<Error & { statusCode?: number; code?: string }>(async (error, request, reply) => {
-    const statusCode = error.statusCode && error.statusCode >= 400
-      ? error.statusCode
-      : 500;
-
-    request.log.error({ err: error, statusCode }, 'gateway request failed');
-
-    return reply.code(statusCode).send({
-      code: errorCode(statusCode, error.code),
-      message: statusCode >= 500 ? 'The gateway could not complete the request.' : error.message,
+  app.setNotFoundHandler(async (request, reply) =>
+    reply.code(404).send({
+      code: 'GATEWAY_ROUTE_NOT_FOUND',
+      message: 'No gateway route matches this request.',
       requestId: request.id,
       timestamp: new Date().toISOString(),
-    });
-  });
+    }),
+  );
+
+  app.setErrorHandler<Error & { statusCode?: number; code?: string }>(
+    async (error, request, reply) => {
+      const statusCode =
+        error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+
+      request.log.error({ err: error, statusCode }, 'gateway request failed');
+
+      return reply.code(statusCode).send({
+        code: errorCode(statusCode, error.code),
+        message:
+          statusCode >= 500
+            ? 'The gateway could not complete the request.'
+            : error.message,
+        requestId: request.id,
+        timestamp: new Date().toISOString(),
+      });
+    },
+  );
 
   for (const route of proxyRoutes) {
     await app.register(httpProxy, {
@@ -140,11 +154,19 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             'UND_ERR_CONNECT_TIMEOUT',
             'UND_ERR_HEADERS_TIMEOUT',
           ]);
-          const statusCode = timeoutCodes.has((error as NodeJS.ErrnoException).code ?? '') ? 504 : 502;
+          const statusCode = timeoutCodes.has(
+            (error as NodeJS.ErrnoException).code ?? '',
+          )
+            ? 504
+            : 502;
 
-          reply.request.log.error({ err: error, upstream: route.service }, 'upstream request failed');
+          reply.request.log.error(
+            { err: error, upstream: route.service },
+            'upstream request failed',
+          );
           reply.code(statusCode).send({
-            code: statusCode === 504 ? 'GATEWAY_TIMEOUT' : 'GATEWAY_BAD_UPSTREAM',
+            code:
+              statusCode === 504 ? 'GATEWAY_TIMEOUT' : 'GATEWAY_BAD_UPSTREAM',
             message: 'The gateway could not reach the upstream service.',
             requestId: reply.request.id,
             timestamp: new Date().toISOString(),
