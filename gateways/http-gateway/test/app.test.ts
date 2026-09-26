@@ -87,7 +87,10 @@ describe('HTTP gateway', () => {
     });
     apps.push(app);
 
-    const response = await app.inject({ method: 'GET', url: '/api/v1/posts/nearby' });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/posts/nearby',
+    });
 
     expect(response.statusCode).toBe(502);
     expect(response.json()).toMatchObject({

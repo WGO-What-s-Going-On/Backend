@@ -6,7 +6,8 @@ export class ReadPosts {
 
   async detail(postId: string) {
     const post = await this.queries.findDetail(postId);
-    if (!post || post.status !== 'ACTIVE') throw new PostNotFoundError('Post not found');
+    if (!post || post.status !== 'ACTIVE')
+      throw new PostNotFoundError('Post not found');
     return post;
   }
 
@@ -18,9 +19,16 @@ export class ReadPosts {
     const last = page.at(-1);
     return {
       comments: page.map(({ comment }) => comment),
-      nextCursor: rows.length > limit && last
-        ? Buffer.from(JSON.stringify({ postId, createdAt: last.comment.createdAt.toISOString(), id: last.id })).toString('base64url')
-        : null,
+      nextCursor:
+        rows.length > limit && last
+          ? Buffer.from(
+              JSON.stringify({
+                postId,
+                createdAt: last.comment.createdAt.toISOString(),
+                id: last.id,
+              }),
+            ).toString('base64url')
+          : null,
     };
   }
 
@@ -30,7 +38,12 @@ export class ReadPosts {
     const unique = [...new Set(postIds)];
     const found = await this.queries.findActiveBatch(unique);
     const byId = new Map(found.map((post) => [post.postId, post]));
-    return { posts: unique.flatMap((id) => { const post = byId.get(id); return post ? [post] : []; }) };
+    return {
+      posts: unique.flatMap((id) => {
+        const post = byId.get(id);
+        return post ? [post] : [];
+      }),
+    };
   }
 
   async meta(postId: string) {

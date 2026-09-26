@@ -6,7 +6,10 @@ import { LivenessResponse } from './health.openapi.js';
 @ApiTags('Health')
 export class HealthController {
   @Get('live')
-  @ApiOperation({ summary: '프로세스 생존 확인', description: '데이터베이스 연결 상태는 확인하지 않습니다.' })
+  @ApiOperation({
+    summary: '프로세스 생존 확인',
+    description: '데이터베이스 연결 상태는 확인하지 않습니다.',
+  })
   @ApiOkResponse({ type: LivenessResponse })
   liveness() {
     return {

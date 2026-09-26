@@ -2,29 +2,29 @@ services:
   redis:
     image: redis:8-alpine
     container_name: wgo-http-gateway-redis
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ['redis-server', '--appendonly', 'yes']
     ports:
-      - "6379:6379"
+      - '6379:6379'
     volumes:
       - http-gateway-redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 2s
       timeout: 2s
       retries: 10
 
   gateway:
-    profiles: ["gateway"]
+    profiles: ['gateway']
     build:
       context: .
     ports:
-      - "8080:8080"
+      - '8080:8080'
     environment:
       NODE_ENV: development
       HOST: 0.0.0.0
       PORT: 8080
       LOG_LEVEL: debug
-      LOG_PRETTY: "false"
+      LOG_PRETTY: 'false'
       REDIS_URL: redis://redis:6379
       USER_SERVICE_URL: http://host.docker.internal:3001
       POST_SERVICE_URL: http://host.docker.internal:3002
@@ -32,7 +32,7 @@ services:
       NOTIFICATION_SERVICE_URL: http://host.docker.internal:3004
       MODERATION_SERVICE_URL: http://host.docker.internal:3005
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - 'host.docker.internal:host-gateway'
     depends_on:
       redis:
         condition: service_healthy

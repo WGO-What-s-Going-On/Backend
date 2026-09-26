@@ -27,22 +27,35 @@ export class JwtAuthenticator implements Authenticator {
 
   constructor(config: AppConfig['jwt']) {
     // 로컬은 공유 비밀값으로, 운영은 JWKS 공개키로 사용자 토큰을 검증한다.
-    this.#key = config.jwksUrl ? createRemoteJWKSet(new URL(config.jwksUrl)) : new TextEncoder().encode(config.secret);
+    this.#key = config.jwksUrl
+      ? createRemoteJWKSet(new URL(config.jwksUrl))
+      : new TextEncoder().encode(config.secret);
     this.#issuer = config.issuer;
     this.#audience = config.audience;
     this.#cookieName = config.cookieName;
   }
 
   async authenticate(request: FastifyRequest): Promise<AuthenticatedUser> {
-    const token = bearerToken(request.headers.authorization)
-      ?? request.cookies[this.#cookieName];
+    const token =
+      bearerToken(request.headers.authorization) ??
+      request.cookies[this.#cookieName];
 
-    if (!token) throw new AuthenticationError('A valid access token is required.');
+    if (!token)
+      throw new AuthenticationError('A valid access token is required.');
 
     try {
-      const { payload } = this.#key instanceof Uint8Array
-        ? await jwtVerify(token, this.#key, { algorithms: ['HS256'], issuer: this.#issuer, audience: this.#audience })
-        : await jwtVerify(token, this.#key, { algorithms: ['RS256', 'ES256'], issuer: this.#issuer, audience: this.#audience });
+      const { payload } =
+        this.#key instanceof Uint8Array
+          ? await jwtVerify(token, this.#key, {
+              algorithms: ['HS256'],
+              issuer: this.#issuer,
+              audience: this.#audience,
+            })
+          : await jwtVerify(token, this.#key, {
+              algorithms: ['RS256', 'ES256'],
+              issuer: this.#issuer,
+              audience: this.#audience,
+            });
 
       if (typeof payload.sub !== 'string' || payload.sub.length === 0) {
         throw new AuthenticationError('The access token has no subject.');

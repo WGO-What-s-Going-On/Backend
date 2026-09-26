@@ -31,7 +31,9 @@ function integer(name: string, fallback: number, minimum = 0): number {
   const value = raw === undefined ? fallback : Number(raw);
 
   if (!Number.isSafeInteger(value) || value < minimum) {
-    throw new Error(`${name} must be an integer greater than or equal to ${minimum}`);
+    throw new Error(
+      `${name} must be an integer greater than or equal to ${minimum}`,
+    );
   }
 
   return value;
@@ -50,7 +52,11 @@ function url(name: string, fallback: string): string {
 
   try {
     const parsed = new URL(value);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'redis:') {
+    if (
+      parsed.protocol !== 'http:' &&
+      parsed.protocol !== 'https:' &&
+      parsed.protocol !== 'redis:'
+    ) {
       throw new Error('unsupported protocol');
     }
   } catch {
@@ -63,7 +69,9 @@ function url(name: string, fallback: string): string {
 export function loadConfig(): AppConfig {
   const nodeEnv = process.env.NODE_ENV ?? 'development';
   if (nodeEnv !== 'development' && nodeEnv !== 'test') {
-    throw new Error('NODE_ENV must be development or test for the local gateway setup');
+    throw new Error(
+      'NODE_ENV must be development or test for the local gateway setup',
+    );
   }
 
   return {
@@ -73,7 +81,9 @@ export function loadConfig(): AppConfig {
     logLevel: process.env.LOG_LEVEL ?? 'debug',
     logPretty: boolean('LOG_PRETTY', true),
     bodyLimitBytes: integer('BODY_LIMIT_BYTES', 1_048_576, 1),
-    corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:3000,http://localhost:5173')
+    corsOrigins: (
+      process.env.CORS_ORIGINS ?? 'http://localhost:3000,http://localhost:5173'
+    )
       .split(',')
       .map((origin) => origin.trim())
       .filter(Boolean),

@@ -57,7 +57,8 @@ export class ConnectionManager {
 
     this.#heartbeatInterval = setInterval(() => {
       for (const [socket, session] of this.#sessions) {
-        if (socket.readyState !== WebSocket.OPEN || session.heartbeatTimeout) continue;
+        if (socket.readyState !== WebSocket.OPEN || session.heartbeatTimeout)
+          continue;
 
         socket.ping();
         session.heartbeatTimeout = setTimeout(() => {

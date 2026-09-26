@@ -1,9 +1,21 @@
 import { Injectable } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import type { ClientSession, Connection, Model } from 'mongoose';
-import type { PostCommands, PostStateQueries, PostUnitOfWork, PostTransaction, OutboxEvent } from '../application/ports.js';
+import type {
+  PostCommands,
+  PostStateQueries,
+  PostUnitOfWork,
+  PostTransaction,
+  OutboxEvent,
+} from '../application/ports.js';
 import { UniqueConflictError } from '../application/errors.js';
-import type { CommentRecord, ParticipantRecord, PostRecord, PostState, ReactionRecord } from '../domain/post.js';
+import type {
+  CommentRecord,
+  ParticipantRecord,
+  PostRecord,
+  PostState,
+  ReactionRecord,
+} from '../domain/post.js';
 import { PostInactiveError } from '../domain/post.js';
 import { OutboxWorker } from './outbox.worker.js';
 
@@ -17,23 +29,70 @@ class MongoQueries implements PostStateQueries {
   ) {}
 
   async findPost(postId: string): Promise<PostState | null> {
-    const post = await this.posts.findOne({ postId }).session(this.session ?? null).lean();
+    const post = await this.posts
+      .findOne({ postId })
+      .session(this.session ?? null)
+      .lean();
     return post ? { postId: post.postId, status: post.status } : null;
   }
 
-  async findCommentByMutation(postId: string, authorId: number, mutationId: string): Promise<CommentRecord | null> {
-    const comment = await this.comments.findOne({ postId, authorId, mutationId }).session(this.session ?? null).lean();
-    return comment ? { commentId: comment.commentId, postId, authorId, content: comment.content, status: comment.status, createdAt: comment.createdAt, updatedAt: comment.updatedAt } : null;
+  async findCommentByMutation(
+    postId: string,
+    authorId: number,
+    mutationId: string,
+  ): Promise<CommentRecord | null> {
+    const comment = await this.comments
+      .findOne({ postId, authorId, mutationId })
+      .session(this.session ?? null)
+      .lean();
+    return comment
+      ? {
+          commentId: comment.commentId,
+          postId,
+          authorId,
+          content: comment.content,
+          status: comment.status,
+          createdAt: comment.createdAt,
+          updatedAt: comment.updatedAt,
+        }
+      : null;
   }
 
-  async findReaction(postId: string, userId: number): Promise<ReactionRecord | null> {
-    const reaction = await this.reactions.findOne({ postId, userId, type: 'LIKE' }).session(this.session ?? null).lean();
-    return reaction ? { postId: reaction.postId, userId: reaction.userId, type: 'LIKE', createdAt: reaction.createdAt } : null;
+  async findReaction(
+    postId: string,
+    userId: number,
+  ): Promise<ReactionRecord | null> {
+    const reaction = await this.reactions
+      .findOne({ postId, userId, type: 'LIKE' })
+      .session(this.session ?? null)
+      .lean();
+    return reaction
+      ? {
+          postId: reaction.postId,
+          userId: reaction.userId,
+          type: 'LIKE',
+          createdAt: reaction.createdAt,
+        }
+      : null;
   }
 
-  async findParticipant(postId: string, userId: number): Promise<ParticipantRecord | null> {
-    const participant = await this.participants.findOne({ postId, userId }).session(this.session ?? null).lean();
-    return participant ? { postId: participant.postId, userId: participant.userId, joinedAt: participant.joinedAt, lastSeenAt: participant.lastSeenAt, leftAt: participant.leftAt } : null;
+  async findParticipant(
+    postId: string,
+    userId: number,
+  ): Promise<ParticipantRecord | null> {
+    const participant = await this.participants
+      .findOne({ postId, userId })
+      .session(this.session ?? null)
+      .lean();
+    return participant
+      ? {
+          postId: participant.postId,
+          userId: participant.userId,
+          joinedAt: participant.joinedAt,
+          lastSeenAt: participant.lastSeenAt,
+          leftAt: participant.leftAt,
+        }
+      : null;
   }
 }
 
@@ -51,8 +110,14 @@ class MongoCommands implements PostCommands {
     await this.posts.create([post], { session: this.session });
   }
 
-  async insertComment(comment: CommentRecord, mutationId?: string): Promise<void> {
-    await this.comments.create([{ ...comment, ...(mutationId ? { mutationId } : {}) }], { session: this.session });
+  async insertComment(
+    comment: CommentRecord,
+    mutationId?: string,
+  ): Promise<void> {
+    await this.comments.create(
+      [{ ...comment, ...(mutationId ? { mutationId } : {}) }],
+      { session: this.session },
+    );
   }
 
   async insertReaction(reaction: ReactionRecord): Promise<void> {
@@ -63,27 +128,69 @@ class MongoCommands implements PostCommands {
     await this.participants.create([participant], { session: this.session });
   }
 
-  async rejoinParticipant(participant: ParticipantRecord): Promise<ParticipantRecord | null> {
-    const updated = await this.participants.findOneAndUpdate(
-      { postId: participant.postId, userId: participant.userId, leftAt: { $ne: null } },
-      { $set: { joinedAt: participant.joinedAt, lastSeenAt: participant.lastSeenAt, leftAt: null } },
-      { session: this.session, new: true },
-    ).lean();
-    return updated ? { postId: updated.postId, userId: updated.userId, joinedAt: updated.joinedAt, lastSeenAt: updated.lastSeenAt, leftAt: updated.leftAt } : null;
+  async rejoinParticipant(
+    participant: ParticipantRecord,
+  ): Promise<ParticipantRecord | null> {
+    const updated = await this.participants
+      .findOneAndUpdate(
+        {
+          postId: participant.postId,
+          userId: participant.userId,
+          leftAt: { $ne: null },
+        },
+        {
+          $set: {
+            joinedAt: participant.joinedAt,
+            lastSeenAt: participant.lastSeenAt,
+            leftAt: null,
+          },
+        },
+        { session: this.session, new: true },
+      )
+      .lean();
+    return updated
+      ? {
+          postId: updated.postId,
+          userId: updated.userId,
+          joinedAt: updated.joinedAt,
+          lastSeenAt: updated.lastSeenAt,
+          leftAt: updated.leftAt,
+        }
+      : null;
   }
 
-  async increment(postId: string, counter: 'commentCount' | 'reactionCount' | 'participantCount', now: Date): Promise<void> {
+  async increment(
+    postId: string,
+    counter: 'commentCount' | 'reactionCount' | 'participantCount',
+    now: Date,
+  ): Promise<void> {
     // 상태를 다시 조건에 넣어 조회 이후 게시물이 비활성화된 경우에도 카운터 갱신을 막는다.
-    const result = await this.posts.updateOne({ postId, status: 'ACTIVE' }, { $inc: { [`counters.${counter}`]: 1 }, $set: { updatedAt: now } }, { session: this.session });
-    if (result.matchedCount !== 1) throw new PostInactiveError('Post is not active');
+    const result = await this.posts.updateOne(
+      { postId, status: 'ACTIVE' },
+      { $inc: { [`counters.${counter}`]: 1 }, $set: { updatedAt: now } },
+      { session: this.session },
+    );
+    if (result.matchedCount !== 1)
+      throw new PostInactiveError('Post is not active');
   }
 
   async appendEvent(event: OutboxEvent): Promise<void> {
-    await this.outbox.create([{
-      ...event, status: 'PENDING', claimedBy: null, claimedUntil: null,
-      attemptCount: 0, nextAttemptAt: event.occurredAt, createdAt: event.occurredAt,
-      publishedAt: null, streamId: null,
-    }], { session: this.session });
+    await this.outbox.create(
+      [
+        {
+          ...event,
+          status: 'PENDING',
+          claimedBy: null,
+          claimedUntil: null,
+          attemptCount: 0,
+          nextAttemptAt: event.occurredAt,
+          createdAt: event.occurredAt,
+          publishedAt: null,
+          streamId: null,
+        },
+      ],
+      { session: this.session },
+    );
   }
 }
 
@@ -103,7 +210,11 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
     return this.queries().findPost(postId);
   }
 
-  findCommentByMutation(postId: string, authorId: number, mutationId: string): Promise<CommentRecord | null> {
+  findCommentByMutation(
+    postId: string,
+    authorId: number,
+    mutationId: string,
+  ): Promise<CommentRecord | null> {
     return this.queries().findCommentByMutation(postId, authorId, mutationId);
   }
 
@@ -111,26 +222,47 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
     return this.queries().findReaction(postId, userId);
   }
 
-  findParticipant(postId: string, userId: number): Promise<ParticipantRecord | null> {
+  findParticipant(
+    postId: string,
+    userId: number,
+  ): Promise<ParticipantRecord | null> {
     return this.queries().findParticipant(postId, userId);
   }
 
   private queries(session?: ClientSession): PostStateQueries {
-    return new MongoQueries(this.posts, this.comments, this.reactions, this.participants, session);
+    return new MongoQueries(
+      this.posts,
+      this.comments,
+      this.reactions,
+      this.participants,
+      session,
+    );
   }
 
-  async execute<T>(work: (transaction: PostTransaction) => Promise<T>): Promise<T> {
+  async execute<T>(
+    work: (transaction: PostTransaction) => Promise<T>,
+  ): Promise<T> {
     try {
       // 도메인 데이터·카운터·Outbox가 함께 커밋되거나 함께 롤백된다.
-      const result = await this.connection.transaction((session) => work({
-        queries: this.queries(session),
-        commands: new MongoCommands(this.posts, this.comments, this.reactions, this.participants, this.outbox, session),
-      }));
+      const result = await this.connection.transaction((session) =>
+        work({
+          queries: this.queries(session),
+          commands: new MongoCommands(
+            this.posts,
+            this.comments,
+            this.reactions,
+            this.participants,
+            this.outbox,
+            session,
+          ),
+        }),
+      );
       // 커밋이 끝난 뒤에만 발행을 깨운다. 실패한 트랜잭션의 이벤트는 보이지 않아야 한다.
       this.outboxWorker.wake();
       return result;
     } catch (error) {
-      if ((error as { code?: number }).code === 11000) throw new UniqueConflictError('Unique constraint violated');
+      if ((error as { code?: number }).code === 11000)
+        throw new UniqueConflictError('Unique constraint violated');
       throw error;
     }
   }
