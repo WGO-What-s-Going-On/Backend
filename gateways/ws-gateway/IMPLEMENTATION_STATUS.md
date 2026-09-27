@@ -1,5 +1,15 @@
 # Realtime Gateway 구현 현황
 
+## 2026-09-26 게시판 실시간 기능
+
+- Post Service ACTIVE 상태로 room 참여를 승인한다. `boardId=postId`다.
+- `post.get`, `comment.list`, `comment.create`와 `requestId` 결과 응답을 제공한다.
+- 운영 사용자 토큰은 issuer·audience·JWKS 필수 설정으로 검증한다.
+- 별도 단기 서비스 JWT로 Post Service 내부 조회·댓글 작성을 인증한다.
+- `post-realtime` Consumer Group → Redis Pub/Sub → 각 Gateway room으로 네 생성 이벤트를 전파한다.
+- Redis를 쓰는 두 인스턴스 전파·Pending 복구를 포함해 16개 테스트와 타입 검사·빌드를 통과했다.
+- 로컬 MongoDB·Redis, Post Service, Gateway 2개 인스턴스에서 댓글 100회 전송부터 다른 인스턴스 수신까지 P95 10.98ms(최대 12.38ms)를 측정했다. 커밋 전 시간도 포함하므로 500ms 목표를 충족한다. `pnpm exec tsx scripts/benchmark.ts`로 재측정한다.
+
 최종 갱신: 2026-09-20
 
 ## 기준과 원칙
@@ -32,27 +42,25 @@
 - liveness/readiness endpoint
 - Docker build 정의와 환경변수 예제
 
-## 의도적으로 미완료인 부분
+## 남은 범위
 
 ### Board authorization
 
-`BoardAccessAuthorizer` port는 만들었지만 Map Service의 실제 HTTP/gRPC 계약이
-저장소에 아직 없다. 기본 adapter는 모든 join을 거부한다. 이를 통해 권한 확인이
-없는 room 참여가 운영 코드에 묵시적으로 들어가지 않게 했다.
+현재 `BoardAccessAuthorizer`는 Post Service의 ACTIVE 상태를 확인한다. Map
+Service의 위치 기반 참여 제한 계약은 아직 없다.
 
 다음 작업은 Map Service 계약을 확정하고 timeout/deadline이 있는 adapter를
 연결하는 것이다.
 
 ### Production JWT key distribution
 
-현재 milestone은 HS256 secret 검증을 사용한다. 운영 배포 전 User Service의
-token issuer 계약을 확정하고 공개키 또는 JWKS 기반 검증으로 변경해야 한다.
-URL query를 통한 token 전달은 지원하지 않는다.
+개발 환경은 HS256 secret을 사용한다. 운영 환경은 issuer·audience·JWKS
+설정을 필수로 요구한다. URL query token 전달은 지원하지 않는다.
 
 ### Distributed fan-out
 
-현재 room index는 한 Gateway 프로세스 안에서만 동작한다. 다음 단계에서 아래
-경로를 구현한다.
+room index는 각 Gateway 프로세스의 로컬 상태다. 다음 경로로 여러 인스턴스에
+이벤트를 전파한다.
 
 ```text
 Domain Service -> Redis Streams -> Realtime consumer group
@@ -64,7 +72,7 @@ Redis Streams는 제한된 기간 동안 도메인 이벤트를 보관한다. Re
 group은 이벤트를 한 번 처리하고 Redis Pub/Sub으로 각 Gateway instance에
 전파한다. 같은 group을 공유하는 Gateway instance에 직접 WebSocket 전달을
 맡기면 일부 instance의 클라이언트가 이벤트를 받지 못한다. Pub/Sub은 연결 중인
-클라이언트에만 전달하며, 재연결한 클라이언트는 영속 상태를 HTTP로 다시 조회한다.
+클라이언트에만 전달하며, 재연결한 클라이언트는 WebSocket 명령으로 영속 상태를 다시 조회한다.
 
 ### Rate limit and backpressure
 
@@ -73,12 +81,9 @@ group은 이벤트를 한 번 처리하고 Redis Pub/Sub으로 각 Gateway insta
 
 ## 다음 마일스톤
 
-1. User Service/Map Service 인증·인가 계약 확정
-2. Map Service `BoardAccessAuthorizer` adapter 구현
-3. Redis publisher/subscriber 연결과 동적 board channel ref-count 구현
-4. Redis Streams consumer group과 명시적 event routing table 구현
-5. `USER`, `BOARD_ROOM`, `BROADCAST` 전달 통합 테스트
-6. rate limit, backpressure, graceful draining, 운영 metric 추가
+1. Map Service 위치 기반 참여 허가 계약 확정과 adapter 구현
+2. handshake/message rate limit, backpressure, graceful draining
+3. 운영 알림과 지연 분포 모니터링
 
 ## 완료 기준 기록
 

@@ -1,7 +1,9 @@
 import { ConfigService } from '@nestjs/config';
 import type { TypeOrmModuleOptions } from '@nestjs/typeorm';
 
-export function createTypeOrmOptions(config: ConfigService): TypeOrmModuleOptions {
+export function createTypeOrmOptions(
+  config: ConfigService,
+): TypeOrmModuleOptions {
   return {
     type: 'postgres',
     host: config.getOrThrow<string>('database.host'),

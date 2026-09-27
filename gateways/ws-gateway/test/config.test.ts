@@ -19,10 +19,10 @@ describe('loadConfig', () => {
     expect(config.websocket.maxPayloadBytes).toBe(65_536);
   });
 
-  it('requires an explicit JWT secret in production', () => {
+  it('requires JWKS and service credentials in production', () => {
     process.env = { NODE_ENV: 'production' };
 
-    expect(() => loadConfig()).toThrow('JWT_SECRET');
+    expect(() => loadConfig()).toThrow('JWT_JWKS_URL');
   });
 
   it('rejects a heartbeat timeout longer than its interval', () => {

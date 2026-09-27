@@ -9,12 +9,14 @@ export class SubscriptionManager {
   constructor(readonly maxRoomsPerSocket: number) {}
 
   register(socket: WebSocket): void {
-    if (!this.#roomsBySocket.has(socket)) this.#roomsBySocket.set(socket, new Set());
+    if (!this.#roomsBySocket.has(socket))
+      this.#roomsBySocket.set(socket, new Set());
   }
 
   join(socket: WebSocket, boardId: string): JoinResult {
     const rooms = this.#roomsBySocket.get(socket);
-    if (!rooms) throw new Error('Socket must be registered before joining a board');
+    if (!rooms)
+      throw new Error('Socket must be registered before joining a board');
     if (rooms.has(boardId)) return 'already-joined';
     if (rooms.size >= this.maxRoomsPerSocket) return 'room-limit-reached';
 

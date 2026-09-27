@@ -72,6 +72,23 @@ Every changed line must be related to the requested task.
 
 ---
 
+### Human-Readable Code Comments
+
+Add short, plain-language comments where the intent is easy to miss from the code.
+Explain **why** a rule or sequence exists, especially for domain decisions,
+transaction boundaries, idempotency, retries, authentication, pagination, and
+backward compatibility.
+
+- Place comments next to the behavior they explain.
+- Use the language already used in the affected service; write for the next developer reading the code.
+- Describe constraints and failure cases, not what an individual statement obviously does.
+- Keep comments accurate when behavior changes; remove stale comments.
+- Document HTTP, gRPC, and event shapes in their contract docs or OpenAPI as well. Code comments do not replace those contracts.
+
+Do not add comments to every line or repeat method names in prose.
+
+---
+
 ### Goal-Driven Execution
 
 For non-trivial tasks:

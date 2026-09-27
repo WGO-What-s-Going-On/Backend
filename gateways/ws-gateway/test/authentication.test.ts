@@ -28,7 +28,9 @@ describe('JwtAuthenticator', () => {
       .setExpirationTime('5m')
       .sign(new TextEncoder().encode(jwtConfig.secret));
 
-    const user = await new JwtAuthenticator(jwtConfig).authenticate(requestWithToken(token));
+    const user = await new JwtAuthenticator(jwtConfig).authenticate(
+      requestWithToken(token),
+    );
 
     expect(user).toEqual({ userId: 'user-123' });
   });

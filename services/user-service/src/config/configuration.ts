@@ -1,4 +1,8 @@
-function positiveInteger(value: string | undefined, fallback: number, name: string): number {
+function positiveInteger(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+): number {
   const parsed = Number(value ?? fallback);
 
   if (!Number.isInteger(parsed) || parsed <= 0) {
