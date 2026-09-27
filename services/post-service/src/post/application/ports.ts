@@ -95,13 +95,23 @@ export interface PostUnitOfWork {
   execute<T>(work: (transaction: PostTransaction) => Promise<T>): Promise<T>;
 }
 
-export interface ParticipationAuthorization {
-  assertCanJoin(postId: string, userId: number): Promise<void>;
+export interface LocationAuthorization {
+  assertCanCreate(
+    userId: number,
+    latitude: number,
+    longitude: number,
+    radiusM: number,
+  ): Promise<void>;
+  assertCanJoin(
+    userId: number,
+    postId: string,
+    latitude: number,
+    longitude: number,
+    radiusM: number,
+  ): Promise<void>;
 }
 
 export const POST_UNIT_OF_WORK = Symbol('POST_UNIT_OF_WORK');
 export const POST_STATE_QUERIES = Symbol('POST_STATE_QUERIES');
 export const POST_READ_QUERIES = Symbol('POST_READ_QUERIES');
-export const PARTICIPATION_AUTHORIZATION = Symbol(
-  'PARTICIPATION_AUTHORIZATION',
-);
+export const LOCATION_AUTHORIZATION = Symbol('LOCATION_AUTHORIZATION');

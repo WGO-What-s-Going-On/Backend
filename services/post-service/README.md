@@ -21,10 +21,10 @@ NestJS와 MongoDB 기반의 Post Service다. 생성 API는 MongoDB 트랜잭션�
 - `src/post/presentation`: HTTP 요청·헤더 검증과 도메인 오류의 HTTP 응답 변환
 - `src/post/application`: 네 생성 Command와 별도 조회 유스케이스·포트
 - `src/post/domain`: Post 상태, 생성 결과, 중복 참여·재참여 규칙
-- `src/post/infrastructure`: Mongoose 저장소·Outbox Worker와 로컬 참여 허가 대역
+- `src/post/infrastructure`: Mongoose 저장소·Outbox Worker와 Map gRPC 클라이언트
 
 Command와 조회 유스케이스는 포트 인터페이스에만 의존한다. `PostModule`이 포트를 Mongoose 구현과
-로컬 참여 허가 대역에 연결한다. 생성 전 상태 조회 포트와 API 조회 포트는 분리되어 있다. 저장소 구현은 도메인 데이터와 Outbox를
+Map Service gRPC 클라이언트에 연결한다. 생성 전 상태 조회 포트와 API 조회 포트는 분리되어 있다. 저장소 구현은 도메인 데이터와 Outbox를
 같은 MongoDB 트랜잭션에서 기록한다.
 
 ## 준비 사항
@@ -42,6 +42,11 @@ docker compose run --rm mongo-init
 pnpm install
 pnpm dev
 ```
+
+Map Service도 실행하고 `.env.example`의 `MAP_GRPC_ADDRESS`와
+`MAP_SERVICE_JWT_SECRET`을 양쪽 서비스에 같은 값으로 설정한다. Post Service는
+짧은 deadline(기본 500ms)과 30초 서비스 JWT로 Map Service의 읽기 전용 허가
+RPC를 호출한다. Map Service가 응답하지 않으면 503으로 종료한다.
 
 두 번째 Compose 명령이 MongoDB 8 단일 노드 Replica Set(`rs0`)을 초기화하고
 Primary 선출을 기다린다. 재실행해도 기존 설정을 유지한다. 개발용
@@ -61,8 +66,13 @@ Swagger의 `X-User-Id` 헤더는 로컬·테스트용 공개 생성 API에만 �
 환경에서 비활성화되어 있고, meta/status는 운영에서 서비스 JWT가 필요하다.
 
 로컬·테스트 환경의 생성 API는 `X-User-Id` 헤더에 양의 정수 사용자 ID를 요구한다.
-운영 환경은 실제 인증 연동 전까지 생성 요청을 거부한다. 참여 허가는 로컬·테스트에서만
-개발용 대역으로 허용하고, 운영에서는 Map Service 연동 전까지 거부한다.
+운영 환경은 실제 사용자 인증 연동 전까지 공개 생성·참여 요청을 거부한다.
+로컬·테스트에서도 위치를 먼저 `PUT http://localhost:3003/api/v1/location`에
+`X-User-Id`와 `{ "latitude": 37.4979, "longitude": 127.0276 }`로 갱신해야 한다.
+생성은 요청 중심, 참여는 저장된 게시물 중심·반경에 대해 5분 이내 위치를 검사한다.
+위치 거부는 403, Map 장애·deadline 초과는 503이며 이때 Post와 Outbox는 기록되지 않는다.
+생성 전 gRPC 판정은 공간 인덱스를 변경하지 않는다. 인덱스 등록은 기존
+`PostCreated` 이벤트를 소비하는 별도 Map 작업이다.
 
 ```bash
 curl -X POST http://localhost:3002/api/v1/posts \

@@ -7,7 +7,10 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { ParticipationUnavailableError } from '../application/errors.js';
+import {
+  LocationDeniedError,
+  ParticipationUnavailableError,
+} from '../application/errors.js';
 import {
   InvalidPostError,
   PostInactiveError,
@@ -19,6 +22,7 @@ import {
   PostInactiveError,
   InvalidPostError,
   ParticipationUnavailableError,
+  LocationDeniedError,
 )
 export class PostErrorFilter implements ExceptionFilter {
   catch(error: Error, host: ArgumentsHost): void {
@@ -32,7 +36,9 @@ export class PostErrorFilter implements ExceptionFilter {
           ? new ForbiddenException(error.message)
           : error instanceof InvalidPostError
             ? new BadRequestException(error.message)
-            : new ServiceUnavailableException(error.message);
+            : error instanceof LocationDeniedError
+              ? new ForbiddenException(error.message)
+              : new ServiceUnavailableException(error.message);
     response.status(httpError.getStatus()).json(httpError.getResponse());
   }
 }

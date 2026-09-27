@@ -13,10 +13,13 @@ import type {
   ReactionRecord,
   ParticipantRecord,
 } from '../domain/post.js';
-import { UniqueConflictError } from './errors.js';
+import {
+  ParticipationUnavailableError,
+  UniqueConflictError,
+} from './errors.js';
 import { event } from './event.js';
 import type {
-  ParticipationAuthorization,
+  LocationAuthorization,
   PostStateQueries,
   PostTransaction,
   PostUnitOfWork,
@@ -30,11 +33,21 @@ async function active(
 }
 
 export class CreatePost {
-  constructor(private readonly unitOfWork: PostUnitOfWork) {}
+  constructor(
+    private readonly unitOfWork: PostUnitOfWork,
+    private readonly authorization: LocationAuthorization,
+  ) {}
 
   async execute(input: PostInput, authorId: number): Promise<PostRecord> {
     const now = new Date();
     const post = createPost(input, authorId, `post_${randomUUID()}`, now);
+    // 위치 판정이 실패하면 MongoDB 트랜잭션과 Outbox 기록을 시작하지 않는다.
+    await this.authorization.assertCanCreate(
+      authorId,
+      input.latitude,
+      input.longitude,
+      input.radiusM,
+    );
     await this.unitOfWork.execute(async ({ commands }) => {
       await commands.insertPost(post);
       await commands.appendEvent(
@@ -150,11 +163,21 @@ export class JoinPost {
   constructor(
     private readonly unitOfWork: PostUnitOfWork,
     private readonly queries: PostStateQueries,
-    private readonly authorization: ParticipationAuthorization,
+    private readonly authorization: LocationAuthorization,
   ) {}
 
   async execute(postId: string, userId: number): Promise<ParticipantRecord> {
-    await this.authorization.assertCanJoin(postId, userId);
+    const post = await this.queries.findPost(postId);
+    requireActive(post);
+    if (!post.locationSnapshot || post.radiusM === undefined)
+      throw new ParticipationUnavailableError('Post location unavailable');
+    await this.authorization.assertCanJoin(
+      userId,
+      postId,
+      post.locationSnapshot.latitude,
+      post.locationSnapshot.longitude,
+      post.radiusM,
+    );
     const now = new Date();
     try {
       return await this.unitOfWork.execute(async (transaction) => {

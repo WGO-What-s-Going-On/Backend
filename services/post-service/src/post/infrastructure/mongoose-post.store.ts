@@ -33,7 +33,14 @@ class MongoQueries implements PostStateQueries {
       .findOne({ postId })
       .session(this.session ?? null)
       .lean();
-    return post ? { postId: post.postId, status: post.status } : null;
+    return post
+      ? {
+          postId: post.postId,
+          status: post.status,
+          locationSnapshot: post.locationSnapshot,
+          radiusM: post.radiusM,
+        }
+      : null;
   }
 
   async findCommentByMutation(

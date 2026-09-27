@@ -134,7 +134,7 @@ export class PostController {
   @ApiOperation({
     summary: '게시물 작성',
     description:
-      '로컬·테스트 전용 X-User-Id로 작성합니다. 운영에서는 인증 연동 전까지 503을 반환합니다.',
+      '로컬·테스트 전용 X-User-Id로 작성합니다. Map Service가 최근 위치를 확인합니다. 운영에서는 인증 연동 전까지 503을 반환합니다.',
   })
   @ApiHeader({
     name: 'X-User-Id',
@@ -144,9 +144,11 @@ export class PostController {
   @ApiBody({ type: CreatePostBody })
   @ApiCreatedResponse({ type: PostResponse })
   @ApiForbiddenResponse({
-    description: '사용자 ID 헤더가 없거나 유효하지 않음',
+    description: '사용자 ID가 유효하지 않거나 최근 위치가 없거나 반경 밖임',
   })
-  @ApiServiceUnavailableResponse({ description: '운영 인증 연동 전' })
+  @ApiServiceUnavailableResponse({
+    description: '운영 인증 연동 전 또는 Map Service 장애',
+  })
   create(
     @Headers('x-user-id') header: string | undefined,
     @Body() body: unknown,
@@ -215,7 +217,7 @@ export class PostController {
   @ApiOperation({
     summary: '게시물 참여',
     description:
-      '현재 위치 기반 허가는 로컬·테스트 대역입니다. 재참여를 지원합니다.',
+      'Map Service가 최근 위치와 게시물 반경을 확인합니다. 재참여를 지원합니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiHeader({
@@ -231,9 +233,12 @@ export class PostController {
   @ApiCreatedResponse({ type: ParticipantResponse })
   @ApiNotFoundResponse({ description: '게시물이 없음' })
   @ApiForbiddenResponse({
-    description: '사용자 ID가 유효하지 않거나 게시물이 비활성 상태',
+    description:
+      '사용자 ID가 유효하지 않거나 게시물이 비활성 상태이거나 위치 허가 거부',
   })
-  @ApiServiceUnavailableResponse({ description: '운영 참여 허가 연동 전' })
+  @ApiServiceUnavailableResponse({
+    description: '운영 인증 연동 전 또는 Map Service 장애',
+  })
   participant(
     @Param('postId') id: string,
     @Headers('x-user-id') header: string | undefined,

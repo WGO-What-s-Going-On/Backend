@@ -9,18 +9,18 @@ import {
 } from './application/commands.js';
 import { ReadPosts } from './application/queries.js';
 import {
-  PARTICIPATION_AUTHORIZATION,
+  LOCATION_AUTHORIZATION,
   POST_READ_QUERIES,
   POST_STATE_QUERIES,
   POST_UNIT_OF_WORK,
 } from './application/ports.js';
 import type {
-  ParticipationAuthorization,
+  LocationAuthorization,
   PostReadQueries,
   PostStateQueries,
   PostUnitOfWork,
 } from './application/ports.js';
-import { LocalParticipationAuthorization } from './infrastructure/local-participation.authorization.js';
+import { GrpcLocationAuthorization } from './infrastructure/grpc-location.authorization.js';
 import { MongoosePostRead } from './infrastructure/mongoose-post.read.js';
 import { MongoosePostStore } from './infrastructure/mongoose-post.store.js';
 import {
@@ -63,13 +63,16 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
     { provide: POST_UNIT_OF_WORK, useExisting: MongoosePostStore },
     { provide: POST_STATE_QUERIES, useExisting: MongoosePostStore },
     {
-      provide: PARTICIPATION_AUTHORIZATION,
-      useClass: LocalParticipationAuthorization,
+      provide: LOCATION_AUTHORIZATION,
+      useClass: GrpcLocationAuthorization,
     },
     {
       provide: CreatePost,
-      useFactory: (unitOfWork: PostUnitOfWork) => new CreatePost(unitOfWork),
-      inject: [POST_UNIT_OF_WORK],
+      useFactory: (
+        unitOfWork: PostUnitOfWork,
+        authorization: LocationAuthorization,
+      ) => new CreatePost(unitOfWork, authorization),
+      inject: [POST_UNIT_OF_WORK, LOCATION_AUTHORIZATION],
     },
     {
       provide: CreateComment,
@@ -88,13 +91,9 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
       useFactory: (
         unitOfWork: PostUnitOfWork,
         queries: PostStateQueries,
-        authorization: ParticipationAuthorization,
+        authorization: LocationAuthorization,
       ) => new JoinPost(unitOfWork, queries, authorization),
-      inject: [
-        POST_UNIT_OF_WORK,
-        POST_STATE_QUERIES,
-        PARTICIPATION_AUTHORIZATION,
-      ],
+      inject: [POST_UNIT_OF_WORK, POST_STATE_QUERIES, LOCATION_AUTHORIZATION],
     },
     OutboxWorker,
   ],

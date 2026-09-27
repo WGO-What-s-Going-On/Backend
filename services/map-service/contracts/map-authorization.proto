@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package wgo.map.v1;
+
+service MapAuthorization {
+  rpc CheckPostCreation (LocationCheck) returns (LocationDecision);
+  rpc CheckPostParticipation (ParticipationCheck) returns (LocationDecision);
+}
+
+message LocationCheck {
+  int64 user_id = 1;
+  double latitude = 2;
+  double longitude = 3;
+  double radius_m = 4;
+}
+
+message ParticipationCheck {
+  int64 user_id = 1;
+  string post_id = 2;
+  double latitude = 3;
+  double longitude = 4;
+  double radius_m = 5;
+}
+
+message LocationDecision {
+  bool allowed = 1;
+  string reason = 2; // LOCATION_MISSING, LOCATION_STALE, OUTSIDE_RADIUS
+}

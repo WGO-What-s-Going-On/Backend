@@ -4,6 +4,12 @@ import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import type { Connection, Model } from 'mongoose';
 import { createClient } from 'redis';
 import { createHmac } from 'node:crypto';
+import {
+  Server,
+  ServerCredentials,
+  loadPackageDefinition,
+} from '@grpc/grpc-js';
+import { loadSync } from '@grpc/proto-loader';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -40,6 +46,9 @@ suite('post creation integration', () => {
   let participants: Model<any>;
   let outbox: Model<any>;
   let worker: OutboxWorker;
+  let map: Server;
+  let mapUnavailable = false;
+  let mapTimeout = false;
   const redis = createClient({ url: 'redis://localhost:6380' });
   let id: string;
   const header = { 'X-User-Id': '123' };
@@ -49,6 +58,55 @@ suite('post creation integration', () => {
     process.env.MONGODB_URI =
       'mongodb://localhost:27017/wgo_post_integration?replicaSet=rs0';
     process.env.WS_SERVICE_JWT_SECRET = serviceSecret;
+    const mapSecret = 'integration-map-service-secret-at-least-32';
+    process.env.MAP_SERVICE_JWT_SECRET = mapSecret;
+    map = new Server();
+    const proto = loadPackageDefinition(
+      loadSync('contracts/map-authorization.proto', { longs: String }),
+    ) as any;
+    const check = (call: any, callback: any) => {
+      const token = String(call.metadata.get('authorization')[0] ?? '').replace(
+        /^Bearer /,
+        '',
+      );
+      const [jwtHeader, jwtPayload, jwtSignature] = token.split('.');
+      if (!jwtHeader || !jwtPayload || !jwtSignature)
+        return callback({ code: 16, message: 'Invalid service token' });
+      const signature = createHmac('sha256', mapSecret)
+        .update(`${jwtHeader}.${jwtPayload}`)
+        .digest('base64url');
+      const claims = JSON.parse(
+        Buffer.from(jwtPayload, 'base64url').toString(),
+      );
+      if (
+        jwtSignature !== signature ||
+        claims.aud !== 'wgo-map-service' ||
+        claims.sub !== 'post-service'
+      )
+        return callback({ code: 16, message: 'Invalid service token' });
+      if (mapUnavailable)
+        return callback({ code: 14, message: 'Map unavailable' });
+      if (mapTimeout) {
+        setTimeout(() => callback(null, { allowed: true, reason: '' }), 200);
+        return;
+      }
+      callback(null, {
+        allowed: call.request.userId === '123',
+        reason: call.request.userId === '123' ? '' : 'LOCATION_MISSING',
+      });
+    };
+    map.addService(proto.wgo.map.v1.MapAuthorization.service, {
+      CheckPostCreation: check,
+      CheckPostParticipation: check,
+    });
+    const mapPort = await new Promise<number>((resolve, reject) =>
+      map.bindAsync(
+        '127.0.0.1:0',
+        ServerCredentials.createInsecure(),
+        (error, port) => (error ? reject(error) : resolve(port)),
+      ),
+    );
+    process.env.MAP_GRPC_ADDRESS = `127.0.0.1:${mapPort}`;
     const module = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -74,6 +132,7 @@ suite('post creation integration', () => {
   }, 30000);
 
   afterAll(async () => {
+    map.forceShutdown();
     await redis.quit();
     await app.close();
   });
@@ -127,6 +186,60 @@ suite('post creation integration', () => {
       .send({ type: 'LOVE' })
       .expect(400);
   });
+
+  it('does not record a post or outbox event after location denial or Map failure', async () => {
+    const beforePosts = await posts.countDocuments();
+    const beforeEvents = await outbox.countDocuments();
+    const body = {
+      title: 'Denied',
+      content: 'Details',
+      category: 'INCIDENT',
+      latitude: 37.5,
+      longitude: 127,
+      radiusM: 250,
+    };
+    await request(app.getHttpServer())
+      .post('/api/v1/posts')
+      .set('X-User-Id', '456')
+      .send(body)
+      .expect(403);
+    mapUnavailable = true;
+    try {
+      await request(app.getHttpServer())
+        .post('/api/v1/posts')
+        .set(header)
+        .send(body)
+        .expect(503);
+    } finally {
+      mapUnavailable = false;
+    }
+    process.env.MAP_SERVICE_JWT_SECRET =
+      'incorrect-map-service-secret-at-least-32';
+    try {
+      await request(app.getHttpServer())
+        .post('/api/v1/posts')
+        .set(header)
+        .send(body)
+        .expect(503);
+    } finally {
+      process.env.MAP_SERVICE_JWT_SECRET =
+        'integration-map-service-secret-at-least-32';
+    }
+    mapTimeout = true;
+    process.env.MAP_GRPC_TIMEOUT_MS = '50';
+    try {
+      await request(app.getHttpServer())
+        .post('/api/v1/posts')
+        .set(header)
+        .send(body)
+        .expect(503);
+    } finally {
+      mapTimeout = false;
+      delete process.env.MAP_GRPC_TIMEOUT_MS;
+    }
+    expect(await posts.countDocuments()).toBe(beforePosts);
+    expect(await outbox.countDocuments()).toBe(beforeEvents);
+  }, 10000);
 
   it('creates comments, reactions, and participants once', async () => {
     await request(app.getHttpServer())
@@ -275,10 +388,12 @@ suite('post creation integration', () => {
         .set(header)
         .send({})
         .expect(503);
+      mapUnavailable = true;
       await expect(app.get(JoinPost).execute(id, 123)).rejects.toMatchObject({
-        message: 'Map participation authorization unavailable',
+        message: 'Map authorization unavailable',
       });
     } finally {
+      mapUnavailable = false;
       process.env.NODE_ENV = 'test';
     }
   });

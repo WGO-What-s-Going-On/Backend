@@ -3,6 +3,8 @@ export type PostStatus = 'ACTIVE' | 'EXPIRED' | 'DELETED';
 export interface PostState {
   postId: string;
   status: PostStatus;
+  locationSnapshot?: { latitude: number; longitude: number };
+  radiusM?: number;
 }
 
 export interface PostInput {
