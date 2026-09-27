@@ -42,14 +42,12 @@ describe('Map authorization before Post writes', () => {
 
   it('sends the stored post center and radius before opening a join transaction', async () => {
     const execute = vi.fn();
-    const findPost = vi
-      .fn()
-      .mockResolvedValue({
-        postId: 'post-1',
-        status: 'ACTIVE',
-        locationSnapshot: { latitude: 37.5, longitude: 127 },
-        radiusM: 250,
-      });
+    const findPost = vi.fn().mockResolvedValue({
+      postId: 'post-1',
+      status: 'ACTIVE',
+      locationSnapshot: { latitude: 37.5, longitude: 127 },
+      radiusM: 250,
+    });
     const assertCanJoin = vi
       .fn()
       .mockRejectedValue(new LocationDeniedError('LOCATION_STALE'));
