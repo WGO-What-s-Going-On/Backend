@@ -5,7 +5,7 @@ import type { Location, LocationStore } from './location.js';
 export class CassandraLocationStore implements LocationStore {
   private readonly db: cassandra.Client;
   private readonly cache = createClient({
-    url: process.env.REDIS_URL ?? 'redis://localhost:6380',
+    url: process.env.REDIS_URL ?? 'redis://localhost:6381',
   });
 
   constructor() {

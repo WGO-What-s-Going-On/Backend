@@ -16,6 +16,9 @@ importers:
       cassandra-driver:
         specifier: 4.8.0
         version: 4.8.0
+      h3-js:
+        specifier: 4.3.0
+        version: 4.3.0
       redis:
         specifier: ^5.12.1
         version: 5.12.1
@@ -759,6 +762,13 @@ packages:
       }
     engines: { node: 6.* || 8.* || >= 10.* }
 
+  h3-js@4.3.0:
+    resolution:
+      {
+        integrity: sha512-zgvyHZz5bEKeuyYGh0bF9/kYSxJ2SqroopkXHqKnD3lfjaZawcxulcI9nWbNC54gakl/2eObRLHWueTf1iLSaA==,
+      }
+    engines: { node: ">=4", npm: ">=3", yarn: ">=1.3.0" }
+
   is-fullwidth-code-point@3.0.0:
     resolution:
       {
@@ -1480,6 +1490,8 @@ snapshots:
     optional: true
 
   get-caller-file@2.0.5: {}
+
+  h3-js@4.3.0: {}
 
   is-fullwidth-code-point@3.0.0: {}
 

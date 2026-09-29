@@ -1,6 +1,6 @@
 # Map Service 작업 현황
 
-2026-09-27 기준. 이 문서는 이번 Post Service 연동에서 **실제로 구현한 Map Service 범위**와 후속 작업을 기록한다. 전체 목표 구조는 [백엔드 아키텍처](../../ARCHITECTURE.md), 현재 실행 방법은 [README](./README.md)를 참고한다.
+2026-09-29 기준. 이 문서는 **실제로 구현한 Map Service 범위**와 후속 작업을 기록한다. 전체 목표 구조는 [백엔드 아키텍처](../../ARCHITECTURE.md), 현재 실행 방법은 [README](./README.md)를 참고한다.
 
 ## 이번에 구현한 범위
 
@@ -33,12 +33,20 @@
 - Post 통합 테스트 17개 통과: MongoDB·Redis와 gRPC 테스트 서버를 연결해 위치 거부, 잘못된 서비스 JWT, Map 장애·deadline 초과에서 Post/Outbox 미기록을 확인했다.
 - 두 서비스의 타입 검사와 빌드가 통과했다. 로컬 Cassandra·Redis를 사용한 실제 HTTP → gRPC 왕복에서 위치 갱신 후 게시물 생성·참여 성공과 위치가 없는 사용자에 대한 `403`을 확인했고, Cassandra 저장 행과 Redis TTL도 확인했다.
 
+### 게시물 공간 인덱스
+
+- Post Service의 `post:events`에 독립된 `post-map` Consumer Group을 Stream 시작점 `0`에서 생성한다. `PostCreated` 버전 1의 `data` JSON과 Stream 식별자를 검사한다. 다른 이벤트는 ACK하고, 잘못된 이벤트는 원본 Stream ID·이벤트 ID·오류와 함께 `map:post:dead`에 기록한 뒤 ACK한다.
+- Cassandra `post_locations`는 게시물 ID 기준 복구 원본으로 `event_id`, 위치, 반경, 카테고리, 만료 시각, H3 cell·shard를 저장한다. `posts_by_cell`은 `(cell, shard)` 파티션과 게시물 ID 키를 사용한다. H3 resolution은 **8**, shard 수는 **16**으로 고정한다. 해상도 변경에는 재구축이 필요하다.
+- 처리 순서는 원본 행 → cell 행 → Redis GEO → XACK이다. 같은 이벤트의 재전달은 동일한 값을 다시 기록한다. `XAUTOCLAIM`으로 Pending을 회수하며 5회 실패 후 Dead Letter 기록 성공을 확인하고 ACK한다. 30초마다 Pending 수·최장 대기 시간·처리 실패·Dead Letter 수를 로그에 기록한다.
+- `pnpm rebuild:posts`는 원본을 페이지 단위로 읽어 cell 행을 복구하고 별도 GEO 키를 만든 뒤 포인터를 전환한다. 재구축 중 새 게시물은 소비자가 현재·새 GEO 키 양쪽에 기록한다. 기동 시 전체 스캔은 없다. 상세 실행 및 중단 후 복구는 README에 있다.
+- 로컬 Cassandra·Redis 통합 테스트에서 최초·중복 소비, 원본·cell·GEO 저장 실패 후 Pending 회수, 잘못된 이벤트, 5회 실패 Dead Letter, 다중 소비자 분담, GEO 유실 후 재구축, 재구축 중 새 이벤트를 검증했다. 기존 위치 HTTP/gRPC 테스트와 함께 Node 24.21.0에서 총 12개 테스트가 통과했다. `pnpm typecheck`, `pnpm build`와 관리 재구축 명령도 통과했다.
+
 ## 추후 작업
 
 1. **운영 사용자 인증 연결.** HTTP Gateway가 검증한 사용자 신원을 위치 갱신·게시물 생성·참여에 전달할 계약을 정하고, 현재 운영 `503` 차단을 인증 검증으로 교체한다. 현재 `X-User-Id`는 로컬·테스트 전용이다.
-2. **게시물 공간 인덱스와 이벤트 소비.** Post Service가 발행하는 `PostCreated`를 Map Service의 독립 Redis Streams Consumer Group으로 처리한다. 보드 위치·수명주기 데이터 모델, Cassandra 영속 인덱스, Redis GEO/H3 파생 인덱스, 중복 이벤트 방지와 장애 후 재구축을 구현한다. 현재 생성 전 gRPC 판정은 인덱스를 등록하지 않는다.
-3. **주변 보드 검색.** H3 후보 조회, Redis GEO와 Cassandra 조회·복구, 정확한 거리 필터, 페이지·커서와 Gateway 응답 조합을 구현한다. 현재 주변 검색 API는 없다.
-4. **보드 상태 변경 반영.** 게시물 만료·삭제 등 후속 이벤트와 인덱스 제거/갱신, 참여 판정에 필요한 상태 계약을 정한다. 현재 Map은 게시물 상태를 저장하지 않는다.
-5. **위치 데이터 운영 정책.** 위치 보존·삭제 기간, 접근 통제, 관측 지표와 장애 복구 절차를 확정한다. 클라이언트 좌표의 GPS 위·변조 방지도 현재 계약 범위 밖이다.
+2. **주변 보드 검색.** H3 후보 조회, Redis GEO와 Cassandra 조회·복구, 정확한 거리 필터, 페이지·커서와 Gateway 응답 조합을 구현한다. 현재 주변 검색 API는 없다.
+3. **보드 상태 변경 반영.** 게시물 만료·삭제 등 후속 이벤트와 인덱스 제거/갱신, 참여 판정에 필요한 상태 계약을 정한다. 현재 Map은 게시물의 생성 위치만 저장한다.
+4. **위치 데이터 운영 정책.** 위치 보존·삭제 기간, 접근 통제, 관측 지표와 장애 복구 절차를 확정한다. 클라이언트 좌표의 GPS 위·변조 방지도 현재 계약 범위 밖이다.
+5. **Stream 자체 유실 대조.** Map이 소비하기 전에 Stream 이벤트가 유실되었다면 Post Service 원본과 대조하고 재발행해야 한다.
 
-이번 구현은 **최신 사용자 위치와 생성·참여 허가**까지만 제공한다. 아키텍처 문서의 전체 Map 기능이 이미 구현된 것으로 해석하지 않는다.
+이번 구현은 **최신 사용자 위치, 생성·참여 허가와 PostCreated 공간 인덱스**까지 제공한다. 주변 검색과 게시물 상태 변경은 아직 구현하지 않았다.
