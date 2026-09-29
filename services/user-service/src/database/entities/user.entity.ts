@@ -1,4 +1,4 @@
-import { Check, Column, Entity, Index, PrimaryColumn } from 'typeorm';
+import { Check, Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 
 export enum UserStatus {
   ACTIVE = 'ACTIVE',
@@ -12,9 +12,14 @@ export enum UserStatus {
   'chk_users_status',
   `"status" IN ('ACTIVE', 'SUSPENDED', 'WITHDRAWAL_PENDING', 'WITHDRAWN')`,
 )
+@Check('chk_users_id_safe_integer', '"id" >= 1 AND "id" <= 9007199254740991')
 @Index('uq_users_nickname_lower', { synchronize: false })
 export class UserEntity {
-  @PrimaryColumn({ type: 'uuid', primaryKeyConstraintName: 'pk_users' })
+  @PrimaryGeneratedColumn('identity', {
+    type: 'bigint',
+    generatedIdentity: 'BY DEFAULT',
+    primaryKeyConstraintName: 'pk_users',
+  })
   id!: string;
 
   @Column({ type: 'varchar', length: 30 })

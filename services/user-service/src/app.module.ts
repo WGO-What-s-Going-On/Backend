@@ -9,6 +9,8 @@ import { HealthModule } from './health/health.module.js';
 import { TermsModule } from './terms/terms.module.js';
 import { UsersModule } from './users/users.module.js';
 import { OutboxModule } from './outbox/outbox.module.js';
+import { UserGrpcModule } from './grpc/user-grpc.module.js';
+import { WithdrawalScheduler } from './withdrawal/withdrawal.scheduler.js';
 
 @Module({
   imports: [
@@ -25,6 +27,8 @@ import { OutboxModule } from './outbox/outbox.module.js';
     TermsModule,
     UsersModule,
     OutboxModule,
+    UserGrpcModule,
   ],
+  providers: [WithdrawalScheduler],
 })
 export class AppModule {}

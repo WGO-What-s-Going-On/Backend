@@ -8,6 +8,7 @@ import type { UpdateUserProfile, UserProfileResponse } from './dto/user-profile.
 import { parseTermIds, type TermConsentsResponse } from './dto/term-consents.dto.js';
 import type { UserBadgesResponse } from './dto/user-badges-response.dto.js';
 import type { WithdrawalResponse } from './dto/withdrawal-response.dto.js';
+import { parseUserId } from '../user-id.js';
 
 @Controller('api/v1/users')
 export class UsersController {
@@ -81,9 +82,9 @@ export class UsersController {
 }
 
 function requireUserId(value: unknown): string {
-  if (typeof value !== 'string' ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+  const userId = parseUserId(value);
+  if (!userId) {
     throw new UnauthorizedException('Invalid authentication credentials');
   }
-  return value;
+  return userId;
 }

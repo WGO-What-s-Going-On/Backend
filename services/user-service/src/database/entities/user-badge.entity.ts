@@ -7,7 +7,7 @@ import { UserEntity } from './user.entity.js';
 export class UserBadgeEntity {
   @PrimaryColumn({
     name: 'user_id',
-    type: 'uuid',
+    type: 'bigint',
     primaryKeyConstraintName: 'pk_user_badges',
   })
   userId!: string;

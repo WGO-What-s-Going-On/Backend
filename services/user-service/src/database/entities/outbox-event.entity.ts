@@ -5,7 +5,7 @@ export class OutboxEventEntity {
   @PrimaryColumn({ name: 'event_id', type: 'uuid', primaryKeyConstraintName: 'pk_outbox_events' })
   eventId!: string;
 
-  @Column({ name: 'aggregate_id', type: 'uuid' })
+  @Column({ name: 'aggregate_id', type: 'bigint' })
   aggregateId!: string;
 
   @Column({ name: 'event_type', type: 'varchar' })

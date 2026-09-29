@@ -9,7 +9,7 @@ export class OAuthAccountEntity {
   @PrimaryColumn({ type: 'uuid', primaryKeyConstraintName: 'pk_oauth_accounts' })
   id!: string;
 
-  @Column({ name: 'user_id', type: 'uuid' })
+  @Column({ name: 'user_id', type: 'bigint' })
   userId!: string;
 
   @Column({ type: 'varchar' })

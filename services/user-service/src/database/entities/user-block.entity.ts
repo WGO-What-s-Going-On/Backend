@@ -7,14 +7,14 @@ import { UserEntity } from './user.entity.js';
 export class UserBlockEntity {
   @PrimaryColumn({
     name: 'blocker_user_id',
-    type: 'uuid',
+    type: 'bigint',
     primaryKeyConstraintName: 'pk_user_blocks',
   })
   blockerUserId!: string;
 
   @PrimaryColumn({
     name: 'blocked_user_id',
-    type: 'uuid',
+    type: 'bigint',
     primaryKeyConstraintName: 'pk_user_blocks',
   })
   blockedUserId!: string;

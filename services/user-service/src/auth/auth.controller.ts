@@ -3,6 +3,7 @@ import { BadRequestException, Body, Controller, Headers, HttpCode, Post, Unautho
 import { AuthService } from './auth.service.js';
 import type { KakaoLoginResponse } from './dto/kakao-login-response.dto.js';
 import type { RefreshResponse } from './dto/refresh-response.dto.js';
+import { parseUserId } from '../user-id.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -44,11 +45,12 @@ export class AuthController {
     @Headers('x-user-id') userId: unknown,
     @Headers('x-session-id') sessionId: unknown,
   ): Promise<void> {
-    if (typeof userId !== 'string' || !UUID_PATTERN.test(userId) ||
+    const parsedUserId = parseUserId(userId);
+    if (!parsedUserId ||
         typeof sessionId !== 'string' || !UUID_PATTERN.test(sessionId)) {
       throw new UnauthorizedException('Invalid authentication credentials');
     }
-    return this.authService.logout(userId, sessionId);
+    return this.authService.logout(parsedUserId, sessionId);
   }
 }
 

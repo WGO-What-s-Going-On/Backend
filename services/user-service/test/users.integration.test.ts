@@ -91,7 +91,7 @@ describe('Users API integration', () => {
 
   beforeEach(async () => {
     vi.restoreAllMocks();
-    await testDataSource.query('TRUNCATE TABLE "users" CASCADE');
+    await testDataSource.query('TRUNCATE TABLE "users" RESTART IDENTITY CASCADE');
     await testDataSource.query('TRUNCATE TABLE "outbox_events"');
   });
 
@@ -102,6 +102,49 @@ describe('Users API integration', () => {
       .expect(200)
       .expect({ available: true, reason: null });
   });
+
+  it('generates consecutive decimal string user IDs within the safe integer range', async () => {
+    expect(await insertUser('FirstUser')).toBe('1');
+    expect(await insertUser('SecondUser')).toBe('2');
+    const sequences = await testDataSource.query(
+      `SELECT max_value::text FROM pg_sequences WHERE schemaname = 'public' AND sequencename = 'users_id_seq'`,
+    ) as Array<{ max_value: string }>;
+    expect(sequences[0]?.max_value).toBe('9007199254740991');
+  });
+
+  it('uses BIGINT for the user primary key, every user foreign key, and the outbox aggregate ID', async () => {
+    const columns = await testDataSource.query(
+      `SELECT table_name, column_name, data_type, is_identity, identity_generation
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND (table_name, column_name) IN (
+           ('users', 'id'),
+           ('oauth_accounts', 'user_id'),
+           ('user_term_consents', 'user_id'),
+           ('user_badges', 'user_id'),
+           ('user_blocks', 'blocker_user_id'),
+           ('user_blocks', 'blocked_user_id'),
+           ('outbox_events', 'aggregate_id')
+         )
+       ORDER BY table_name, column_name`,
+    ) as Array<{ table_name: string; column_name: string; data_type: string;
+      is_identity: string; identity_generation: string | null }>;
+
+    expect(columns).toHaveLength(7);
+    expect(columns.every(({ data_type: dataType }) => dataType === 'bigint')).toBe(true);
+    expect(columns.find(({ table_name: tableName, column_name: columnName }) =>
+      tableName === 'users' && columnName === 'id')).toMatchObject({
+      is_identity: 'YES', identity_generation: 'BY DEFAULT',
+    });
+  });
+
+  it.each(['0', '-1', '9007199254740992'])(
+    'rejects manually inserted out-of-range user ID %s', async (id) => {
+      const now = new Date();
+      await expect(usersRepository.insert({ id, nickname: `invalid_${id}`, status: UserStatus.ACTIVE,
+        createdAt: now, updatedAt: now })).rejects.toMatchObject({ driverError: { code: '23514' } });
+    },
+  );
 
   it('returns DUPLICATED for an exact nickname match', async () => {
     await insertUser('DaeJun');
@@ -169,7 +212,7 @@ describe('Users API integration', () => {
       await request(app.getHttpServer())[method]('/api/v1/users/me').send({ nickname: 'Valid' }).expect(401);
       await request(app.getHttpServer())[method]('/api/v1/users/me').set('x-user-id', 'invalid')
         .send({ nickname: 'Valid' }).expect(401);
-      await request(app.getHttpServer())[method]('/api/v1/users/me').set('x-user-id', crypto.randomUUID())
+      await request(app.getHttpServer())[method]('/api/v1/users/me').set('x-user-id', '9007199254740991')
         .send({ nickname: 'Valid' }).expect(404);
     }
   });
@@ -403,9 +446,16 @@ describe('Users API integration', () => {
         await request(app.getHttpServer())[method](`/api/v1/users/me/${path}`)
           .set('x-user-id', 'invalid').send({ termIds: [1] }).expect(401);
         await request(app.getHttpServer())[method](`/api/v1/users/me/${path}`)
-          .set('x-user-id', crypto.randomUUID()).send({ termIds: [1] }).expect(404);
+          .set('x-user-id', '9007199254740991').send({ termIds: [1] }).expect(404);
       }
     });
+
+    it.each(['0', '-1', '01', '1.5', 'abc', '9007199254740992'])(
+      'rejects invalid x-user-id %s', async (userId) => {
+        await request(app.getHttpServer()).get('/api/v1/users/me/badges')
+          .set('x-user-id', userId).expect(401);
+      },
+    );
 
     it('lists only active, unrevoked badges belonging to the current user, newest first', async () => {
       const id = await insertUser('BadgeOwner');
@@ -471,14 +521,12 @@ describe('Users API integration', () => {
 
   async function insertUser(nickname: string): Promise<string> {
     const now = new Date();
-    const id = crypto.randomUUID();
-    await usersRepository.insert({
-      id,
+    const user = await usersRepository.save(usersRepository.create({
       nickname,
       status: UserStatus.ACTIVE,
       createdAt: now,
       updatedAt: now,
-    });
-    return id;
+    }));
+    return user.id;
   }
 });

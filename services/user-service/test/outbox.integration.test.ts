@@ -64,7 +64,7 @@ describe('User Outbox PostgreSQL / Redis integration', () => {
     }
   }, 30_000);
 
-  it.each(['USER_CREATED', 'USER_PROFILE_UPDATED', 'USER_WITHDRAWAL_STARTED', 'USER_RESTORED'])(
+  it.each(['USER_CREATED', 'USER_PROFILE_UPDATED', 'USER_WITHDRAWAL_STARTED', 'USER_RESTORED', 'USER_WITHDRAWN'])(
     'publishes %s without changing any envelope fields', async (type) => {
       const event = await seed(type);
       const { worker } = makeWorker();
@@ -299,10 +299,11 @@ describe('User Outbox PostgreSQL / Redis integration', () => {
   }
 
   function fixture(type = 'USER_PROFILE_UPDATED', id: string = randomUUID(), now = new Date()): OutboxEventEntity {
-    const userId = randomUUID();
+    const userId = '12345';
     const payload = type === 'USER_WITHDRAWAL_STARTED'
       ? { userId, recoverableUntil: new Date(now.getTime() + 30 * 86400000).toISOString() }
       : type === 'USER_RESTORED' ? { userId, status: 'ACTIVE' }
+      : type === 'USER_WITHDRAWN' ? { userId, withdrawnAt: now.toISOString() }
       : { userId, nickname: '테스트', profileImageKey: null };
     return database.getRepository(OutboxEventEntity).create({
       eventId: id, eventType: type, aggregateId: userId, status: 'PENDING', publishAttempts: 0,

@@ -20,7 +20,7 @@ export class UserTermConsentEntity {
   })
   id!: string;
 
-  @Column({ name: 'user_id', type: 'uuid' })
+  @Column({ name: 'user_id', type: 'bigint' })
   userId!: string;
 
   @Column({ name: 'term_id', type: 'bigint' })

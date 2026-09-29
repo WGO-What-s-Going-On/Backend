@@ -127,7 +127,7 @@ describe('Auth API integration', () => {
     vi.restoreAllMocks();
     kakaoOAuthClient.exchangeAuthorizationCode.mockReset().mockResolvedValue('kakao-access-token');
     kakaoOAuthClient.getUserId.mockReset().mockResolvedValue('12345678901234567890');
-    await testDataSource.query('TRUNCATE TABLE "users" CASCADE');
+    await testDataSource.query('TRUNCATE TABLE "users" RESTART IDENTITY CASCADE');
     await testDataSource.query('TRUNCATE TABLE "outbox_events"');
     await redis.flushdb();
   });
@@ -172,6 +172,7 @@ describe('Auth API integration', () => {
       expiresIn: accessTtlSeconds,
     });
     expect(response.body.userId).toEqual(expect.any(String));
+    expect(response.body.userId).toMatch(/^[1-9][0-9]*$/);
     expect(response.body.accessToken).toEqual(expect.any(String));
     expect(response.body.refreshToken).toEqual(expect.any(String));
     expect(Object.keys(response.body).sort()).toEqual([
@@ -402,7 +403,7 @@ describe('Auth API integration', () => {
   it('does not delete a session belonging to another user', async () => {
     const response = await login();
     const sid = parseRefreshToken(response.body.refreshToken as string)!;
-    await logout(randomUUID(), sid).expect(401);
+    await logout('9007199254740991', sid).expect(401);
     expect(await redis.sismember(RedisSessionStore.userSessionsKey(response.body.userId as string), sid)).toBe(1);
     await refresh(response.body.refreshToken as string).expect(200);
   });
@@ -410,8 +411,14 @@ describe('Auth API integration', () => {
   it('requires valid internal context for logout', async () => {
     await request(app.getHttpServer()).post('/api/v1/auth/logout').expect(401);
     await logout('invalid', randomUUID()).expect(401);
-    await logout(randomUUID(), 'invalid').expect(401);
+    await logout('9007199254740991', 'invalid').expect(401);
   });
+
+  it.each(['0', '-1', '01', '1.5', 'abc', '9007199254740992'])(
+    'rejects invalid logout user ID %s', async (userId) => {
+      await logout(userId, randomUUID()).expect(401);
+    },
+  );
 
   it('returns 503 for Redis failure during logout', async () => {
     const response = await login();
@@ -436,8 +443,9 @@ describe('Auth API integration', () => {
       const second = await login();
       const userId = first.body.userId as string;
       const before = await findUser(userId);
+      const { id: _id, ...otherValues } = before;
       const other = await testDataSource.getRepository(UserEntity).save({
-        ...before, id: randomUUID(), nickname: 'OtherUser',
+        ...otherValues, nickname: 'OtherUser',
       });
       const otherSid = randomUUID();
       await sessionStore.save({ sessionId: otherSid, userId: other.id,
@@ -493,9 +501,15 @@ describe('Auth API integration', () => {
     it('requires internal user context and an existing user', async () => {
       await request(app.getHttpServer()).post('/api/v1/users/me/withdrawal').expect(401);
       await withdraw('invalid').expect(401);
-      await withdraw(randomUUID()).expect(404);
+      await withdraw('9007199254740991').expect(404);
       expect(await outbox()).toHaveLength(0);
     });
+
+    it.each(['0', '-1', '01', '1.5', 'abc', '9007199254740992'])(
+      'rejects invalid withdrawal user ID %s', async (userId) => {
+        await withdraw(userId).expect(401);
+      },
+    );
 
     it.each([UserStatus.SUSPENDED, UserStatus.WITHDRAWN])('rejects withdrawal from %s', async (status) => {
       const user = await insertAccount({ status });
@@ -759,7 +773,6 @@ describe('Auth API integration', () => {
   ): Promise<UserEntity> {
     const now = new Date();
     const user = testDataSource.getRepository(UserEntity).create({
-      id: randomUUID(),
       nickname: `existing_${randomUUID().slice(0, 8)}`,
       profileImageKey: null,
       status: overrides.status ?? UserStatus.ACTIVE,

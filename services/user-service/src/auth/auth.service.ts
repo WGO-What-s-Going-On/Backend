@@ -16,6 +16,7 @@ import type { RefreshResponse } from './dto/refresh-response.dto.js';
 import { KakaoOAuthClient } from './kakao-oauth.client.js';
 import { createRefreshToken, hashRefreshToken, parseRefreshToken, refreshTokenMatchesHash } from './refresh-token.js';
 import { RedisSessionStore } from './redis-session.store.js';
+import { parseUserId } from '../user-id.js';
 
 const KAKAO_PROVIDER = 'KAKAO';
 const MAX_CREATE_ATTEMPTS = 5;
@@ -184,7 +185,6 @@ export class AuthService {
     return this.dataSource.transaction(async (manager) => {
       const now = new Date();
       const user = manager.getRepository(UserEntity).create({
-        id: randomUUID(),
         nickname: `user_${randomUUID().replaceAll('-', '').slice(0, 24)}`,
         profileImageKey: null,
         status: UserStatus.ACTIVE,
@@ -197,6 +197,7 @@ export class AuthService {
         updatedAt: now,
       });
       await manager.getRepository(UserEntity).save(user);
+      if (!parseUserId(user.id)) throw new Error('Database generated an invalid user ID');
 
       const account = manager.getRepository(OAuthAccountEntity).create({
         id: randomUUID(),
