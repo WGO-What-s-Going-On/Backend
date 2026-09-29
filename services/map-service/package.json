@@ -12,13 +12,16 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "rebuild:posts": "tsx src/rebuild-post-index.ts",
     "start": "node dist/main.js"
   },
   "dependencies": {
     "@grpc/grpc-js": "1.14.5",
     "@grpc/proto-loader": "0.8.1",
     "cassandra-driver": "4.8.0",
-    "redis": "^5.12.1"
+    "h3-js": "4.3.0",
+    "redis": "^5.12.1",
+    "swagger-ui-dist": "5.33.0"
   },
   "devDependencies": {
     "@types/node": "26.6.2",

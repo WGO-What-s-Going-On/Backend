@@ -9,6 +9,7 @@ import {
 import { loadSync } from '@grpc/proto-loader';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createGrpcServer, createHttpServer } from '../src/server.js';
+import { InvalidCursorError } from '../src/post-index.js';
 import type { Location, LocationStore } from '../src/location.js';
 
 const secret = 'map-test-secret-with-at-least-32-characters';
@@ -16,22 +17,23 @@ const locations = new Map<number, Location>();
 const store: LocationStore = {
   async put(userId, location) {
     locations.set(userId, location);
+    return location;
   },
   async get(userId) {
     return locations.get(userId) ?? null;
   },
 };
 
-function token(key = secret): string {
+function token(key = secret, gateway = false): string {
   const header = Buffer.from(
     JSON.stringify({ alg: 'HS256', typ: 'JWT' }),
   ).toString('base64url');
   const now = Math.floor(Date.now() / 1000);
   const payload = Buffer.from(
     JSON.stringify({
-      iss: 'wgo-post-service',
+      iss: gateway ? 'wgo-http-gateway' : 'wgo-post-service',
       aud: 'wgo-map-service',
-      sub: 'post-service',
+      sub: gateway ? 'http-gateway' : 'post-service',
       iat: now,
       exp: now + 30,
     }),
@@ -41,12 +43,24 @@ function token(key = secret): string {
 
 describe('Map HTTP and gRPC contract', () => {
   const grpc = createGrpcServer(store);
-  const http = createHttpServer(store);
+  const http = createHttpServer(store, {
+    nearby: async (query) => {
+      if (query.cursor) throw new InvalidCursorError();
+      if (query.latitude === 1) throw new Error('Cassandra unavailable');
+      return {
+        items: [
+          { postId: 'post_00000000-0000-0000-0000-000000000001', distanceM: 0 },
+        ],
+        nextCursor: null,
+      };
+    },
+  });
   let client: any;
   let base: string;
   beforeAll(async () => {
     process.env.NODE_ENV = 'test';
     process.env.MAP_SERVICE_JWT_SECRET = secret;
+    process.env.MAP_GATEWAY_JWT_SECRET = secret;
     await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
     base = `http://127.0.0.1:${(http.address() as { port: number }).port}`;
     const port = await new Promise<number>((resolve, reject) =>
@@ -135,5 +149,58 @@ describe('Map HTTP and gRPC contract', () => {
     } finally {
       process.env.NODE_ENV = 'test';
     }
+  });
+
+  it('serves Swagger UI and an OpenAPI contract for the HTTP endpoint', async () => {
+    const ui = await fetch(`${base}/docs`);
+    expect(ui.status).toBe(200);
+    expect(await ui.text()).toContain('/docs/openapi.json');
+    const asset = await fetch(`${base}/docs/swagger-ui-bundle.js`);
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get('content-type')).toContain('javascript');
+    const spec = await fetch(`${base}/docs/openapi.json`);
+    expect(spec.status).toBe(200);
+    const document = await spec.json();
+    expect(document.openapi).toBe('3.0.3');
+    expect(Object.keys(document.paths)).toEqual([
+      '/api/v1/location',
+      '/internal/v1/posts/nearby',
+    ]);
+    expect(
+      Object.keys(document.paths['/api/v1/location'].put.responses),
+    ).toEqual(['200', '400', '403', '503']);
+  });
+
+  it('requires a gateway JWT and validates nearby parameters', async () => {
+    const path = `${base}/internal/v1/posts/nearby?latitude=37.5&longitude=127&radiusM=150`;
+    expect((await fetch(path)).status).toBe(401);
+    expect(
+      (
+        await fetch(path, {
+          headers: { authorization: `Bearer ${token(secret, true)}` },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await fetch(`${path}&limit=101`, {
+          headers: { authorization: `Bearer ${token(secret, true)}` },
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await fetch(`${path}&cursor=bad`, {
+          headers: { authorization: `Bearer ${token(secret, true)}` },
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await fetch(path.replace('latitude=37.5', 'latitude=1'), {
+          headers: { authorization: `Bearer ${token(secret, true)}` },
+        })
+      ).status,
+    ).toBe(503);
   });
 });

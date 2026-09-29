@@ -1,0 +1,179 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "WGO Map Service HTTP API",
+    "version": "1.0.0",
+    "description": "Map Service의 HTTP 계약. 위치 갱신은 현재 로컬·테스트 환경에서만 동작하며 운영에서는 Gateway 사용자 인증 연동 전까지 503을 반환합니다. gRPC와 Redis Streams 계약은 이 OpenAPI 문서의 범위 밖입니다."
+  },
+  "servers": [{ "url": "/" }],
+  "paths": {
+    "/api/v1/location": {
+      "put": {
+        "tags": ["Location"],
+        "summary": "사용자 위치 갱신 이력 기록",
+        "description": "수락된 요청마다 동일 좌표나 HTTP 재시도도 별도 이력으로 기록합니다. 서버 시각을 updatedAt으로 사용하며 Cassandra 이력은 7일간 조회 가능합니다. X-User-Id는 로컬·테스트 전용 식별자이며 운영에서는 이 요청을 503으로 차단합니다. Gateway는 IP별 최근 60초 60건을 초과하면 Map에 전달하지 않고 Retry-After가 있는 429를 반환합니다.",
+        "parameters": [
+          {
+            "name": "X-User-Id",
+            "in": "header",
+            "required": true,
+            "description": "양의 안전 정수. 로컬·테스트 환경에서만 사용합니다.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "example": 123
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LocationUpdate" },
+              "example": { "latitude": 37.4979, "longitude": 127.0276 }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cassandra에 위치 갱신 이력 저장 완료",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Location" }
+              }
+            }
+          },
+          "400": {
+            "description": "본문 크기 초과, 잘못된 JSON, 좌표 범위 오류 또는 알 수 없는 필드"
+          },
+          "403": {
+            "description": "로컬·테스트 환경에서 X-User-Id가 없거나 유효하지 않음"
+          },
+          "503": {
+            "description": "운영 환경에서 인증 연동 전 차단되었거나 위치 저장소를 사용할 수 없음"
+          }
+        }
+      }
+    },
+    "/internal/v1/posts/nearby": {
+      "get": {
+        "tags": ["Posts"],
+        "summary": "주변 ACTIVE 게시물 ID 검색",
+        "description": "Gateway 전용 내부 조회입니다. Map에 반영된 상태가 ACTIVE이고 만료되지 않은 게시물만 반환합니다. 거리는 검색 좌표에서 게시물 중심까지 측정합니다. 상태 이벤트 반영에는 지연이 있을 수 있습니다.",
+        "security": [{ "GatewayBearer": [] }],
+        "parameters": [
+          {
+            "name": "latitude",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "number", "minimum": -90, "maximum": 90 }
+          },
+          {
+            "name": "longitude",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "number", "minimum": -180, "maximum": 180 }
+          },
+          {
+            "name": "radiusM",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "integer", "enum": [150, 250, 350] }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "검색 좌표와 반경에 묶인 이전 응답의 nextCursor",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "거리, 동일 거리에서는 postId 오름차순",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NearbyResult" }
+              }
+            }
+          },
+          "400": { "description": "잘못된 검색 입력 또는 커서" },
+          "401": { "description": "Gateway JWT가 없거나 유효하지 않음" },
+          "503": { "description": "필요한 Cassandra 조회 실패" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "GatewayBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "HS256; issuer wgo-http-gateway; audience wgo-map-service; subject http-gateway; 최대 수명 60초"
+      }
+    },
+    "schemas": {
+      "NearbyResult": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["postId", "distanceM"],
+              "properties": {
+                "postId": { "type": "string" },
+                "distanceM": { "type": "number", "minimum": 0 }
+              }
+            }
+          },
+          "nextCursor": { "type": "string", "nullable": true }
+        }
+      },
+      "LocationUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["latitude", "longitude"],
+        "properties": {
+          "latitude": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90,
+            "example": 37.4979
+          },
+          "longitude": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180,
+            "example": 127.0276
+          }
+        }
+      },
+      "Location": {
+        "type": "object",
+        "required": ["latitude", "longitude", "updatedAt"],
+        "properties": {
+          "latitude": { "type": "number", "example": 37.4979 },
+          "longitude": { "type": "number", "example": 127.0276 },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-29T03:00:00.000Z"
+          }
+        }
+      }
+    }
+  }
+}

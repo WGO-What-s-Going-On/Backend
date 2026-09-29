@@ -1,6 +1,6 @@
 export type Location = { latitude: number; longitude: number; updatedAt: Date };
 export interface LocationStore {
-  put(userId: number, location: Location): Promise<void>;
+  put(userId: number, location: Location): Promise<Location>;
   get(userId: number): Promise<Location | null>;
 }
 

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PostCreated version 1 data",
+  "description": "Redis Stream post:events의 data 필드에 직렬화된 Post Service 이벤트. Stream의 eventId와 eventType 필드도 JSON 값과 일치해야 합니다.",
+  "type": "object",
+  "required": [
+    "eventId",
+    "eventType",
+    "schemaVersion",
+    "producer",
+    "aggregateId",
+    "correlationId",
+    "occurredAt",
+    "post"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "pattern": "^evt_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "eventType": { "const": "PostCreated" },
+    "schemaVersion": { "const": 1 },
+    "producer": { "const": "post-service" },
+    "aggregateId": {
+      "type": "string",
+      "pattern": "^post_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "correlationId": {
+      "type": "string",
+      "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "post": {
+      "type": "object",
+      "required": [
+        "postId",
+        "authorId",
+        "latitude",
+        "longitude",
+        "radiusM",
+        "category",
+        "expiresAt"
+      ],
+      "properties": {
+        "postId": {
+          "type": "string",
+          "pattern": "^post_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "authorId": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180 },
+        "radiusM": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "category": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z_]*$",
+          "maxLength": 40
+        },
+        "expiresAt": {
+          "oneOf": [
+            { "type": "string", "format": "date-time" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
