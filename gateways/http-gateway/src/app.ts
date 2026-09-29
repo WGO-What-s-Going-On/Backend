@@ -10,6 +10,20 @@ import { Redis } from 'ioredis';
 import { loadConfig, type AppConfig } from './config.js';
 import { proxyRoutes } from './routes.js';
 
+const locationWindowScript = `
+local key = KEYS[1]
+local now = redis.call('TIME')
+local now_ms = now[1] * 1000 + math.floor(now[2] / 1000)
+redis.call('ZREMRANGEBYSCORE', key, '-inf', now_ms - 60000)
+if redis.call('ZCARD', key) >= 60 then
+  local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+  return math.max(1, math.ceil((oldest[2] + 60000 - now_ms) / 1000))
+end
+redis.call('ZADD', key, now_ms, ARGV[1])
+redis.call('PEXPIRE', key, 60000)
+return 0
+`;
+
 export interface BuildAppOptions {
   config?: AppConfig;
   logger?: boolean;
@@ -84,6 +98,40 @@ export async function buildApp(
     app.addHook('onClose', async () => {
       if (redis?.status === 'ready') await redis.quit();
       else redis?.disconnect();
+    });
+
+    app.addHook('preHandler', async (request, reply) => {
+      if (
+        request.method !== 'PUT' ||
+        request.url.split('?')[0] !== '/api/v1/location'
+      )
+        return;
+      try {
+        // The Redis script makes the sliding window atomic across gateway instances.
+        const retryAfter = Number(
+          await redis!.eval(
+            locationWindowScript,
+            1,
+            `gateway:location:ip:${request.ip}`,
+            randomUUID(),
+          ),
+        );
+        if (retryAfter > 0)
+          return reply.header('Retry-After', retryAfter).code(429).send({
+            code: 'GATEWAY_RATE_LIMITED',
+            message: 'Too many location updates.',
+            requestId: request.id,
+            timestamp: new Date().toISOString(),
+          });
+      } catch {
+        // Location writes must stop when the shared limit cannot be checked.
+        return reply.code(503).send({
+          code: 'GATEWAY_UPSTREAM_UNAVAILABLE',
+          message: 'Location rate limit unavailable.',
+          requestId: request.id,
+          timestamp: new Date().toISOString(),
+        });
+      }
     });
   }
 

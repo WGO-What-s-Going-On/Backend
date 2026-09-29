@@ -10,8 +10,8 @@
     "/api/v1/location": {
       "put": {
         "tags": ["Location"],
-        "summary": "사용자 최신 위치 갱신",
-        "description": "서버 시각을 updatedAt으로 기록합니다. X-User-Id는 로컬·테스트 전용 식별자이며 운영에서는 이 요청을 503으로 차단합니다.",
+        "summary": "사용자 위치 갱신 이력 기록",
+        "description": "수락된 요청마다 동일 좌표나 HTTP 재시도도 별도 이력으로 기록합니다. 서버 시각을 updatedAt으로 사용하며 Cassandra 이력은 7일간 조회 가능합니다. X-User-Id는 로컬·테스트 전용 식별자이며 운영에서는 이 요청을 503으로 차단합니다. Gateway는 IP별 최근 60초 60건을 초과하면 Map에 전달하지 않고 Retry-After가 있는 429를 반환합니다.",
         "parameters": [
           {
             "name": "X-User-Id",
@@ -37,7 +37,7 @@
         },
         "responses": {
           "200": {
-            "description": "Cassandra에 최신 위치 저장 완료",
+            "description": "Cassandra에 위치 갱신 이력 저장 완료",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/Location" }

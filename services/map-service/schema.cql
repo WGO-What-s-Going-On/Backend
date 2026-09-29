@@ -6,6 +6,18 @@ CREATE TABLE IF NOT EXISTS wgo_map.user_locations (
   updated_at timestamp
 );
 
+CREATE TABLE IF NOT EXISTS wgo_map.user_location_history (
+  user_id bigint,
+  day_bucket date,
+  update_id timeuuid,
+  latitude double,
+  longitude double,
+  updated_at timestamp,
+  PRIMARY KEY ((user_id, day_bucket), update_id)
+) WITH CLUSTERING ORDER BY (update_id DESC)
+  AND default_time_to_live = 604800
+  AND compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_unit': 'HOURS', 'compaction_window_size': '6'};
+
 CREATE TABLE IF NOT EXISTS wgo_map.post_locations (
   post_id text PRIMARY KEY,
   event_id text,

@@ -17,6 +17,7 @@ const locations = new Map<number, Location>();
 const store: LocationStore = {
   async put(userId, location) {
     locations.set(userId, location);
+    return location;
   },
   async get(userId) {
     return locations.get(userId) ?? null;

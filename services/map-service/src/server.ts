@@ -269,10 +269,10 @@ export function createHttpServer(
       updatedAt: new Date(),
     };
     try {
-      await store.put(userId, location);
+      const saved = await store.put(userId, location);
       response
         .writeHead(200, { 'content-type': 'application/json' })
-        .end(JSON.stringify(location));
+        .end(JSON.stringify(saved));
     } catch {
       response.writeHead(503).end();
     }

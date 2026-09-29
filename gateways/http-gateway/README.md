@@ -61,7 +61,7 @@ reached through `host.docker.internal`.
 ## Current scope
 
 - Transparent routing to all local services
-- Redis-backed IP rate limiting
+- Redis-backed IP rate limiting: global 100 requests per minute, plus 60 location PUTs per rolling 60 seconds per IP. A location excess returns 429 with `Retry-After` before reaching Map; a Redis check failure returns 503. Shared IPs share the temporary limit. After user authentication, replace it with a user token bucket averaging one update per five seconds with a burst of two.
 - CORS and security headers
 - Request ID generation and propagation
 - Liveness/readiness endpoints
