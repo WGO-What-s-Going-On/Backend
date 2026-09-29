@@ -1,11 +1,13 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, QueryFailedError, Repository } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import { OutboxEventEntity } from '../database/entities/outbox-event.entity.js';
 import type { UpdateUserProfile, UserProfileResponse } from './dto/user-profile.dto.js';
 
-import { UserEntity } from '../database/entities/user.entity.js';
+import { UserEntity, UserStatus } from '../database/entities/user.entity.js';
+import { RedisSessionStore } from '../auth/redis-session.store.js';
+import type { WithdrawalResponse } from './dto/withdrawal-response.dto.js';
 import type { NicknameAvailabilityResponse } from './dto/nickname-availability-response.dto.js';
 import { TermEntity } from '../database/entities/term.entity.js';
 import { UserTermConsentEntity } from '../database/entities/user-term-consent.entity.js';
@@ -18,6 +20,7 @@ export class UsersService {
   constructor(
     @InjectRepository(UserEntity)
     private readonly usersRepository: Repository<UserEntity>,
+    private readonly redisSessionStore: RedisSessionStore,
   ) {}
 
   async checkNicknameAvailability(nickname: string): Promise<NicknameAvailabilityResponse> {
@@ -99,6 +102,48 @@ export class UsersService {
         grantedAt: grantedAt.toISOString(),
       })),
     };
+  }
+
+  async requestWithdrawal(
+    userId: string, correlationId: string = randomUUID(),
+  ): Promise<WithdrawalResponse> {
+    return this.usersRepository.manager.transaction(async (manager) => {
+      const users = manager.getRepository(UserEntity);
+      const user = await users.findOne({ where: { id: userId }, lock: { mode: 'pessimistic_write' } });
+      if (!user) throw new NotFoundException('User not found');
+      if (user.status !== UserStatus.ACTIVE && user.status !== UserStatus.WITHDRAWAL_PENDING) {
+        throw new ConflictException('Account cannot request withdrawal');
+      }
+
+      if (user.status === UserStatus.ACTIVE) {
+        const now = new Date();
+        user.status = UserStatus.WITHDRAWAL_PENDING;
+        user.withdrawalRequestedAt = now;
+        user.withdrawalDeadlineAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+        user.updatedAt = now;
+        await users.save(user);
+        const eventId = randomUUID();
+        const eventType = 'USER_WITHDRAWAL_STARTED';
+        await manager.getRepository(OutboxEventEntity).insert({
+          eventId, aggregateId: user.id, eventType,
+          payload: {
+            eventId, type: eventType, target: { type: 'USER', id: user.id },
+            occurredAt: now.toISOString(), version: 1, producer: 'user-service', correlationId,
+            payload: { userId: user.id, recoverableUntil: user.withdrawalDeadlineAt.toISOString() },
+          },
+          status: 'PENDING', publishAttempts: 0, createdAt: now, publishedAt: null,
+        });
+      }
+      if (!user.withdrawalDeadlineAt) throw new ConflictException('Withdrawal deadline is missing');
+
+      // Keep the user lock through Redis cleanup and DB commit. A Redis failure rolls back
+      // the transition; a later commit failure may log the user out but cannot enable refresh.
+      // Repeated requests also clean up any stale sessions without extending the deadline.
+      await this.redisSessionStore.deleteAllSessionsForUser(user.id).catch(() => {
+        throw new ServiceUnavailableException('Authentication session is temporarily unavailable');
+      });
+      return { status: 'WITHDRAWAL_PENDING', recoverableUntil: user.withdrawalDeadlineAt.toISOString() };
+    });
   }
 
   async updateProfile(

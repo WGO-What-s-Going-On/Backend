@@ -27,6 +27,11 @@ export function configuration() {
     redis: {
       url: process.env.REDIS_URL,
     },
+    outbox: {
+      pollIntervalMs: positiveInteger(process.env.OUTBOX_POLL_INTERVAL_MS, 1000, 'OUTBOX_POLL_INTERVAL_MS'),
+      batchSize: positiveInteger(process.env.OUTBOX_BATCH_SIZE, 20, 'OUTBOX_BATCH_SIZE'),
+      redisTimeoutMs: positiveInteger(process.env.OUTBOX_REDIS_TIMEOUT_MS, 2000, 'OUTBOX_REDIS_TIMEOUT_MS'),
+    },
     auth: {
       kakao: {
         restApiKey: process.env.KAKAO_REST_API_KEY,

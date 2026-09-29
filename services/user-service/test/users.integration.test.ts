@@ -17,6 +17,7 @@ import { InitialUserServiceSchema1789990707351 } from '../src/database/migration
 import { AddTermsCodeEffectiveAtIndex1789993249262 } from '../src/database/migrations/1789993249262-AddTermsCodeEffectiveAtIndex.js';
 import { UsersController } from '../src/users/users.controller.js';
 import { UsersService } from '../src/users/users.service.js';
+import { RedisSessionStore } from '../src/auth/redis-session.store.js';
 
 const testDatabaseName = `wgo_users_test_${process.pid}_${Date.now()}`;
 
@@ -62,6 +63,8 @@ describe('Users API integration', () => {
       controllers: [UsersController],
       providers: [
         UsersService,
+        // Withdrawal uses the real Redis store in auth.integration.test.ts.
+        { provide: RedisSessionStore, useValue: {} },
         {
           provide: getRepositoryToken(UserEntity),
           useValue: usersRepository,

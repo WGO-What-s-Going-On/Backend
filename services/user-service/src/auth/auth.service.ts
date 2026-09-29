@@ -9,6 +9,7 @@ import { DataSource, QueryFailedError } from 'typeorm';
 
 import { OAuthAccountEntity } from '../database/entities/oauth-account.entity.js';
 import { UserEntity, UserStatus } from '../database/entities/user.entity.js';
+import { OutboxEventEntity } from '../database/entities/outbox-event.entity.js';
 import { AccessTokenService } from './access-token.service.js';
 import type { KakaoLoginResponse } from './dto/kakao-login-response.dto.js';
 import type { RefreshResponse } from './dto/refresh-response.dto.js';
@@ -22,6 +23,7 @@ const MAX_CREATE_ATTEMPTS = 5;
 interface LoginUser {
   user: UserEntity;
   isNewUser: boolean;
+  restoredFromWithdrawal: boolean;
 }
 
 @Injectable()
@@ -33,50 +35,53 @@ export class AuthService {
     private readonly redisSessionStore: RedisSessionStore,
   ) {}
 
-  async loginWithKakao(authorizationCode: string): Promise<KakaoLoginResponse> {
+  async loginWithKakao(
+    authorizationCode: string, correlationId: string = randomUUID(),
+  ): Promise<KakaoLoginResponse> {
     const kakaoAccessToken = await this.kakaoOAuthClient.exchangeAuthorizationCode(authorizationCode);
     const providerUserId = await this.kakaoOAuthClient.getUserId(kakaoAccessToken);
-    const loginUser = await this.findOrCreateUser(providerUserId);
+    const loginUser = await this.findOrCreateUser(providerUserId, correlationId);
 
-    if (loginUser.user.status !== UserStatus.ACTIVE) {
-      throw new UnauthorizedException('Account is not available');
-    }
-
-    const sessionId = randomUUID();
-    const refreshToken = createRefreshToken(sessionId);
-    const accessToken = await this.accessTokenService.create(loginUser.user.id, sessionId);
-
-    try {
-      await this.redisSessionStore.save({
-        sessionId,
-        userId: loginUser.user.id,
-        refreshTokenHash: hashRefreshToken(refreshToken),
-        createdAt: new Date().toISOString(),
+    // Restoration has committed before issuing credentials. Re-lock and recheck so a
+    // concurrent withdrawal cannot finish cleanup before this login writes a new session.
+    return this.dataSource.transaction(async (manager) => {
+      const user = await manager.getRepository(UserEntity).findOne({
+        where: { id: loginUser.user.id }, lock: { mode: 'pessimistic_write' },
       });
-    } catch {
-      throw new ServiceUnavailableException('Authentication session is temporarily unavailable');
-    }
+      if (!user || user.status !== UserStatus.ACTIVE) {
+        throw new UnauthorizedException('Account is not available');
+      }
+      const sessionId = randomUUID();
+      const refreshToken = createRefreshToken(sessionId);
+      const accessToken = await this.accessTokenService.create(user.id, sessionId);
 
-    return {
-      userId: loginUser.user.id,
-      isNewUser: loginUser.isNewUser,
-      onboardingRequired: loginUser.user.onboardingCompletedAt === null,
-      accessToken,
-      refreshToken,
-      expiresIn: this.accessTokenService.expiresIn,
-    };
+      try {
+        await this.redisSessionStore.save({
+          sessionId, userId: user.id, refreshTokenHash: hashRefreshToken(refreshToken),
+          createdAt: new Date().toISOString(),
+        });
+      } catch {
+        throw new ServiceUnavailableException('Authentication session is temporarily unavailable');
+      }
+      return {
+        userId: user.id, isNewUser: loginUser.isNewUser,
+        onboardingRequired: user.onboardingCompletedAt === null,
+        restoredFromWithdrawal: loginUser.restoredFromWithdrawal,
+        accessToken, refreshToken, expiresIn: this.accessTokenService.expiresIn,
+      };
+    });
   }
 
-  private async findOrCreateUser(providerUserId: string): Promise<LoginUser> {
+  private async findOrCreateUser(providerUserId: string, correlationId: string): Promise<LoginUser> {
     const existingUser = await this.findUser(providerUserId);
     if (existingUser) {
-      return { user: existingUser, isNewUser: false };
+      return this.restoreExistingUser(existingUser.id, correlationId);
     }
 
     for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt += 1) {
       try {
         const user = await this.createUser(providerUserId);
-        return { user, isNewUser: true };
+        return { user, isNewUser: true, restoredFromWithdrawal: false };
       } catch (error) {
         if (!isUniqueViolation(error)) {
           throw error;
@@ -84,7 +89,7 @@ export class AuthService {
 
         const racedUser = await this.findUser(providerUserId);
         if (racedUser) {
-          return { user: racedUser, isNewUser: false };
+          return this.restoreExistingUser(racedUser.id, correlationId);
         }
       }
     }
@@ -103,15 +108,61 @@ export class AuthService {
       throw new UnauthorizedException('Invalid authentication credentials');
     }
 
-    const nextRefreshToken = createRefreshToken(sessionId);
-    const accessToken = await this.accessTokenService.create(session.userId, sessionId);
-    const rotated = await this.redisSessionStore.rotate(session, hashRefreshToken(nextRefreshToken))
-      .catch(() => {
-        throw new ServiceUnavailableException('Authentication session is temporarily unavailable');
+    // Share the withdrawal lock through rotation: stale Redis data is never sufficient
+    // to issue credentials for a non-ACTIVE account, even if session cleanup failed.
+    return this.dataSource.transaction(async (manager) => {
+      const user = await manager.getRepository(UserEntity).findOne({
+        where: { id: session.userId }, lock: { mode: 'pessimistic_write' },
       });
-    if (!rotated) throw new UnauthorizedException('Invalid authentication credentials');
+      if (!user || user.status !== UserStatus.ACTIVE) {
+        throw new UnauthorizedException('Invalid authentication credentials');
+      }
+      const nextRefreshToken = createRefreshToken(sessionId);
+      const accessToken = await this.accessTokenService.create(session.userId, sessionId);
+      const rotated = await this.redisSessionStore.rotate(session, hashRefreshToken(nextRefreshToken))
+        .catch(() => {
+          throw new ServiceUnavailableException('Authentication session is temporarily unavailable');
+        });
+      if (!rotated) throw new UnauthorizedException('Invalid authentication credentials');
 
-    return { accessToken, refreshToken: nextRefreshToken, expiresIn: this.accessTokenService.expiresIn };
+      return { accessToken, refreshToken: nextRefreshToken, expiresIn: this.accessTokenService.expiresIn };
+    });
+  }
+
+  private restoreExistingUser(userId: string, correlationId: string): Promise<LoginUser> {
+    return this.dataSource.transaction(async (manager) => {
+      const users = manager.getRepository(UserEntity);
+      const user = await users.findOne({ where: { id: userId }, lock: { mode: 'pessimistic_write' } });
+      if (!user) throw new UnauthorizedException('Account is not available');
+      let restoredFromWithdrawal = false;
+      if (user.status === UserStatus.WITHDRAWAL_PENDING) {
+        // Check time after acquiring the lock; an expired or missing deadline is not recoverable.
+        const now = new Date();
+        if (!user.withdrawalDeadlineAt || user.withdrawalDeadlineAt.getTime() <= now.getTime()) {
+          throw new UnauthorizedException('Withdrawal recovery period has expired');
+        }
+        user.status = UserStatus.ACTIVE;
+        user.withdrawalRequestedAt = null;
+        user.withdrawalDeadlineAt = null;
+        user.updatedAt = now;
+        await users.save(user);
+        const eventId = randomUUID();
+        const eventType = 'USER_RESTORED';
+        await manager.getRepository(OutboxEventEntity).insert({
+          eventId, aggregateId: user.id, eventType,
+          payload: {
+            eventId, type: eventType, target: { type: 'USER', id: user.id },
+            occurredAt: now.toISOString(), version: 1, producer: 'user-service', correlationId,
+            payload: { userId: user.id, status: 'ACTIVE' },
+          },
+          status: 'PENDING', publishAttempts: 0, createdAt: now, publishedAt: null,
+        });
+        restoredFromWithdrawal = true;
+      }
+      // Preserve the existing rejection policy for SUSPENDED and WITHDRAWN.
+      if (user.status !== UserStatus.ACTIVE) throw new UnauthorizedException('Account is not available');
+      return { user, isNewUser: false, restoredFromWithdrawal };
+    });
   }
 
   async logout(userId: string, sessionId: string): Promise<void> {

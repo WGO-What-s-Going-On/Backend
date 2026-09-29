@@ -7,6 +7,7 @@ import { normalizeNickname } from './nickname.js';
 import type { UpdateUserProfile, UserProfileResponse } from './dto/user-profile.dto.js';
 import { parseTermIds, type TermConsentsResponse } from './dto/term-consents.dto.js';
 import type { UserBadgesResponse } from './dto/user-badges-response.dto.js';
+import type { WithdrawalResponse } from './dto/withdrawal-response.dto.js';
 
 @Controller('api/v1/users')
 export class UsersController {
@@ -65,6 +66,17 @@ export class UsersController {
   @Get('me/badges')
   getBadges(@Headers('x-user-id') userId: unknown): Promise<UserBadgesResponse> {
     return this.usersService.getBadges(requireUserId(userId));
+  }
+
+  @Post('me/withdrawal')
+  @HttpCode(200)
+  requestWithdrawal(
+    @Headers('x-user-id') userId: unknown,
+    @Headers('x-request-id') requestId: unknown,
+  ): Promise<WithdrawalResponse> {
+    return this.usersService.requestWithdrawal(
+      requireUserId(userId), typeof requestId === 'string' && requestId.trim() ? requestId : undefined,
+    );
   }
 }
 

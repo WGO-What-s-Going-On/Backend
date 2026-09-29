@@ -87,6 +87,18 @@ export class RedisSessionStore implements OnModuleDestroy {
     return `auth:session:${sessionId}`;
   }
 
+  async deleteAllSessionsForUser(userId: string): Promise<void> {
+    // Read and delete atomically so session rotation cannot recreate a deleted session.
+    await this.redis.eval(`
+      local sessions = redis.call('SMEMBERS', KEYS[1])
+      for _, sessionId in ipairs(sessions) do
+        redis.call('DEL', ARGV[1] .. sessionId)
+      end
+      redis.call('DEL', KEYS[1])
+      return 1
+    `, 1, RedisSessionStore.userSessionsKey(userId), 'auth:session:');
+  }
+
   static userSessionsKey(userId: string): string {
     return `auth:user-sessions:${userId}`;
   }

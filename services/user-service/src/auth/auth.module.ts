@@ -9,5 +9,6 @@ import { RedisSessionStore } from './redis-session.store.js';
 @Module({
   controllers: [AuthController],
   providers: [AuthService, KakaoOAuthClient, AccessTokenService, RedisSessionStore],
+  exports: [RedisSessionStore],
 })
 export class AuthModule {}

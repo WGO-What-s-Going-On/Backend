@@ -11,7 +11,9 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('kakao')
-  loginWithKakao(@Body() body: unknown): Promise<KakaoLoginResponse> {
+  loginWithKakao(
+    @Body() body: unknown, @Headers('x-request-id') requestId: unknown,
+  ): Promise<KakaoLoginResponse> {
     if (!isRecord(body) || typeof body.authorizationCode !== 'string') {
       throw new BadRequestException('authorizationCode is required');
     }
@@ -21,7 +23,9 @@ export class AuthController {
       throw new BadRequestException('authorizationCode must not be empty');
     }
 
-    return this.authService.loginWithKakao(authorizationCode);
+    return this.authService.loginWithKakao(
+      authorizationCode, typeof requestId === 'string' && requestId.trim() ? requestId : undefined,
+    );
   }
 
   @Post('refresh')
