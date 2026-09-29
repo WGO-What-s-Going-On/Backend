@@ -4,6 +4,8 @@ Map Service owns the latest user location. `PUT /api/v1/location` accepts `{ "la
 
 The location endpoint returns 200 with `latitude`, `longitude`, and server assigned `updatedAt`; invalid input returns 400, missing local identity 403, and unavailable storage 503.
 
+사용자별 위치 변경 로그(위치 갱신 요청 이력)를 Cassandra에 남겨 게시물 생성·참여 판정과 위치 조작 의심·부정 이용 조사를 지원할 계획이다. 현재는 최신 위치 한 행만 저장하므로 과거 갱신은 조회할 수 없다. 이력을 판정 원본으로 전환하는 단계와 아직 정해야 할 수집·보존 정책은 [위치 갱신 이력 계획](./LOCATION_HISTORY_PLAN.md)에 기록했다.
+
 `MapAuthorization.CheckPostCreation` and `CheckPostParticipation` are read-only gRPC calls on port 50051. They require an HS256 service JWT in `authorization: Bearer ...` with issuer `wgo-post-service`, audience `wgo-map-service`, subject `post-service`, and a lifetime of at most 60 seconds. Decisions return `allowed` and `reason` (`LOCATION_MISSING`, `LOCATION_STALE`, `OUTSIDE_RADIUS`). Checks use a location updated within five minutes and exact great-circle distance. Participation uses the post center and radius supplied by Post Service; the post ID is validated. The post spatial index is updated later by `PostCreated`.
 
 Start local stores with `docker compose up -d`, wait for Cassandra's health check, then apply `docker cp schema.cql map-service-cassandra-1:/tmp/schema.cql` and `docker compose exec -T cassandra cqlsh -f /tmp/schema.cql`. Set variables from `.env.example` and run `pnpm dev`. `pnpm test`, `pnpm typecheck`, and `pnpm build` verify the service.
