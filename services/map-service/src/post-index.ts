@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import cassandra from 'cassandra-driver';
-import { latLngToCell } from 'h3-js';
+import { gridDisk, latLngToCell } from 'h3-js';
 import { createClient } from 'redis';
-import { validCoordinates } from './location.js';
+import { distanceM, validCoordinates } from './location.js';
 
 export const POST_STREAM = 'post:events';
 export const POST_GROUP = 'post-map';
@@ -10,6 +10,11 @@ export const DEAD_STREAM = 'map:post:dead';
 const ACTIVE_KEY = 'map:posts:geo:active';
 const REBUILD_KEY = 'map:posts:geo:rebuild';
 const DEFAULT_GEO = 'map:posts:geo:v1';
+const GEO_LATITUDE_LIMIT = 85.05112878;
+const POST_ID =
+  /^post_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const EVENT_ID =
+  /^evt_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export type PostCreated = {
   eventId: string;
@@ -23,6 +28,55 @@ export type PostCreated = {
   cell: string;
   shard: number;
 };
+export type PostStatus = 'ACTIVE' | 'EXPIRED' | 'DELETED';
+export type PostStatusEvent = {
+  postId: string;
+  status: 'EXPIRED' | 'DELETED';
+  occurredAt: Date;
+};
+export type NearbyQuery = {
+  latitude: number;
+  longitude: number;
+  radiusM: 150 | 250 | 350;
+  limit: number;
+  cursor?: string;
+};
+export type NearbyResult = {
+  items: Array<{ postId: string; distanceM: number }>;
+  nextCursor: string | null;
+};
+
+export function parsePostStatus(
+  raw: string | undefined,
+  fields: Record<string, string>,
+): PostStatusEvent {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw ?? '');
+  } catch {
+    throw new Error('Invalid data JSON');
+  }
+  if (
+    !object(value) ||
+    !['PostExpired', 'PostDeleted'].includes(String(value.eventType)) ||
+    value.eventType !== fields.eventType ||
+    value.schemaVersion !== 1 ||
+    value.producer !== 'post-service' ||
+    typeof value.eventId !== 'string' ||
+    !EVENT_ID.test(value.eventId) ||
+    value.eventId !== fields.eventId ||
+    typeof value.aggregateId !== 'string' ||
+    !POST_ID.test(value.aggregateId) ||
+    typeof value.occurredAt !== 'string' ||
+    !Number.isFinite(Date.parse(value.occurredAt))
+  )
+    throw new Error('Invalid post status event');
+  return {
+    postId: value.aggregateId,
+    status: value.eventType === 'PostDeleted' ? 'DELETED' : 'EXPIRED',
+    occurredAt: new Date(value.occurredAt),
+  };
+}
 
 const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
@@ -110,6 +164,12 @@ export class PostIndex {
   }
 
   async write(post: PostCreated): Promise<void> {
+    // 생성 이벤트가 늦게 도착해도 이미 기록한 만료·삭제 상태를 되살리지 않는다.
+    await this.db.execute(
+      'INSERT INTO post_status (post_id, status) VALUES (?, ?) IF NOT EXISTS',
+      [post.postId, 'ACTIVE'],
+      { prepare: true },
+    );
     // 원본을 먼저 저장한다. 중간에 실패하면 같은 이벤트를 다시 처리해 빠진 인덱스를 채운다.
     await this.db.execute(
       'INSERT INTO post_locations (post_id, event_id, author_id, latitude, longitude, radius_m, category, expires_at, cell, shard) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -128,8 +188,51 @@ export class PostIndex {
       { prepare: true },
     );
     await this.writeCell(post);
-    if (!post.expiresAt || post.expiresAt.getTime() > Date.now())
+    if (
+      (await this.getStatus(post.postId)) === 'ACTIVE' &&
+      (!post.expiresAt || post.expiresAt.getTime() > Date.now())
+    )
       await this.writeGeo(post);
+  }
+
+  async getStatus(postId: string): Promise<PostStatus | null> {
+    const row = (
+      await this.db.execute(
+        'SELECT status FROM post_status WHERE post_id = ?',
+        [postId],
+        { prepare: true },
+      )
+    ).first();
+    return row ? (row.get('status') as PostStatus) : null;
+  }
+
+  async transition(event: PostStatusEvent): Promise<void> {
+    // 상태 행이 아직 없어도 비활성 상태를 먼저 기록해 늦은 PostCreated를 막는다.
+    await this.db.execute(
+      'INSERT INTO post_status (post_id, status, occurred_at) VALUES (?, ?, ?) IF NOT EXISTS',
+      [event.postId, event.status, event.occurredAt],
+      { prepare: true },
+    );
+    const from =
+      event.status === 'DELETED' ? ['ACTIVE', 'EXPIRED'] : ['ACTIVE'];
+    for (const status of from)
+      await this.db.execute(
+        'UPDATE post_status SET status = ?, occurred_at = ? WHERE post_id = ? IF status = ?',
+        [event.status, event.occurredAt, event.postId, status],
+        { prepare: true },
+      );
+    // ACK 전에 현재 키와 재구축 키 모두에서 제거한다. 실패 시 Pending에서 재시도한다.
+    await this.redis.eval(
+      `local active = redis.call('GET', KEYS[1]) or ARGV[1]
+       redis.call('ZREM', active, ARGV[2])
+       local staging = redis.call('GET', KEYS[2])
+       if staging and staging ~= active then redis.call('ZREM', staging, ARGV[2]) end
+       return 1`,
+      {
+        keys: [ACTIVE_KEY, REBUILD_KEY],
+        arguments: [DEFAULT_GEO, event.postId],
+      },
+    );
   }
 
   async writeCell(post: PostCreated): Promise<void> {
@@ -150,6 +253,7 @@ export class PostIndex {
   }
 
   async writeGeo(post: PostCreated): Promise<void> {
+    if (Math.abs(post.latitude) > GEO_LATITUDE_LIMIT) return;
     // 단일 Redis 명령에서 현재 GEO와 재구축 키에 함께 쓴다. 전환과 경합해도 새 게시물이 빠지지 않는다.
     await this.redis.eval(
       `local active = redis.call('GET', KEYS[1]) or ARGV[1]
@@ -167,6 +271,117 @@ export class PostIndex {
         ],
       },
     );
+  }
+
+  async nearby(query: NearbyQuery): Promise<NearbyResult> {
+    const center = { latitude: query.latitude, longitude: query.longitude };
+    let candidates: string[] = [];
+    if (Math.abs(query.latitude) <= GEO_LATITUDE_LIMIT) {
+      try {
+        const key = (await this.redis.get(ACTIVE_KEY)) ?? DEFAULT_GEO;
+        candidates = (await this.redis.sendCommand([
+          'GEOSEARCH',
+          key,
+          'FROMLONLAT',
+          String(query.longitude),
+          String(query.latitude),
+          'BYRADIUS',
+          String(query.radiusM),
+          'm',
+        ])) as string[];
+      } catch {
+        /* Cassandra H3 조회로 복구한다. */
+      }
+    }
+    let items = await this.filterCandidates(candidates, center, query.radiusM);
+    if (items.length === 0) {
+      const ids = new Set<string>();
+      for (const cell of gridDisk(
+        latLngToCell(query.latitude, query.longitude, 8),
+        2,
+      ))
+        for (let shard = 0; shard < 16; shard++) {
+          const page = await this.db.execute(
+            'SELECT post_id FROM posts_by_cell WHERE cell = ? AND shard = ?',
+            [cell, shard],
+            { prepare: true },
+          );
+          for (const row of page.rows) ids.add(row.get('post_id'));
+        }
+      items = await this.filterCandidates([...ids], center, query.radiusM);
+    }
+    items.sort(
+      (a, b) => a.distanceM - b.distanceM || a.postId.localeCompare(b.postId),
+    );
+    if (query.cursor) {
+      let cursor: {
+        latitude: number;
+        longitude: number;
+        radiusM: number;
+        distanceM: number;
+        postId: string;
+      };
+      try {
+        cursor = JSON.parse(Buffer.from(query.cursor, 'base64url').toString());
+        if (
+          cursor.latitude !== query.latitude ||
+          cursor.longitude !== query.longitude ||
+          cursor.radiusM !== query.radiusM ||
+          !Number.isFinite(cursor.distanceM) ||
+          !POST_ID.test(cursor.postId)
+        )
+          throw new Error();
+      } catch {
+        throw new InvalidCursorError();
+      }
+      items = items.filter(
+        (item) =>
+          item.distanceM > cursor.distanceM ||
+          (item.distanceM === cursor.distanceM && item.postId > cursor.postId),
+      );
+    }
+    const page = items.slice(0, query.limit);
+    const last = page.at(-1);
+    return {
+      items: page,
+      nextCursor:
+        items.length > query.limit && last
+          ? Buffer.from(
+              JSON.stringify({
+                ...center,
+                radiusM: query.radiusM,
+                distanceM: last.distanceM,
+                postId: last.postId,
+              }),
+            ).toString('base64url')
+          : null,
+    };
+  }
+
+  private async filterCandidates(
+    ids: string[],
+    center: { latitude: number; longitude: number },
+    radiusM: number,
+  ): Promise<NearbyResult['items']> {
+    const items: NearbyResult['items'] = [];
+    for (const id of new Set(ids)) {
+      const row = (
+        await this.db.execute(
+          'SELECT latitude, longitude, expires_at FROM post_locations WHERE post_id = ?',
+          [id],
+          { prepare: true },
+        )
+      ).first();
+      if (!row || (await this.getStatus(id)) !== 'ACTIVE') continue;
+      const expiresAt = row.get('expires_at') as Date | null;
+      if (expiresAt && expiresAt.getTime() <= Date.now()) continue;
+      const distance = distanceM(center, {
+        latitude: row.get('latitude'),
+        longitude: row.get('longitude'),
+      });
+      if (distance <= radiusM) items.push({ postId: id, distanceM: distance });
+    }
+    return items;
   }
 
   async rebuild(): Promise<number> {
@@ -196,7 +411,16 @@ export class PostIndex {
             shard: row.get('shard'),
           };
           await this.writeCell(post);
-          if (!post.expiresAt || post.expiresAt.getTime() > Date.now())
+          await this.db.execute(
+            'INSERT INTO post_status (post_id, status) VALUES (?, ?) IF NOT EXISTS',
+            [post.postId, 'ACTIVE'],
+            { prepare: true },
+          );
+          if (
+            (await this.getStatus(post.postId)) === 'ACTIVE' &&
+            Math.abs(post.latitude) <= GEO_LATITUDE_LIMIT &&
+            (!post.expiresAt || post.expiresAt.getTime() > Date.now())
+          )
             await this.redis.geoAdd(staging, {
               longitude: post.longitude,
               latitude: post.latitude,
@@ -224,3 +448,5 @@ export class PostIndex {
     }
   }
 }
+
+export class InvalidCursorError extends Error {}

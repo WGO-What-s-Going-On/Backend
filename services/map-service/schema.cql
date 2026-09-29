@@ -19,6 +19,12 @@ CREATE TABLE IF NOT EXISTS wgo_map.post_locations (
   shard int
 );
 
+CREATE TABLE IF NOT EXISTS wgo_map.post_status (
+  post_id text PRIMARY KEY,
+  status text,
+  occurred_at timestamp
+);
+
 CREATE TABLE IF NOT EXISTS wgo_map.posts_by_cell (
   cell text,
   shard int,

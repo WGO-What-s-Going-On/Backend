@@ -55,10 +55,93 @@
           }
         }
       }
+    },
+    "/internal/v1/posts/nearby": {
+      "get": {
+        "tags": ["Posts"],
+        "summary": "주변 ACTIVE 게시물 ID 검색",
+        "description": "Gateway 전용 내부 조회입니다. Map에 반영된 상태가 ACTIVE이고 만료되지 않은 게시물만 반환합니다. 거리는 검색 좌표에서 게시물 중심까지 측정합니다. 상태 이벤트 반영에는 지연이 있을 수 있습니다.",
+        "security": [{ "GatewayBearer": [] }],
+        "parameters": [
+          {
+            "name": "latitude",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "number", "minimum": -90, "maximum": 90 }
+          },
+          {
+            "name": "longitude",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "number", "minimum": -180, "maximum": 180 }
+          },
+          {
+            "name": "radiusM",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "integer", "enum": [150, 250, 350] }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "검색 좌표와 반경에 묶인 이전 응답의 nextCursor",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "거리, 동일 거리에서는 postId 오름차순",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NearbyResult" }
+              }
+            }
+          },
+          "400": { "description": "잘못된 검색 입력 또는 커서" },
+          "401": { "description": "Gateway JWT가 없거나 유효하지 않음" },
+          "503": { "description": "필요한 Cassandra 조회 실패" }
+        }
+      }
     }
   },
   "components": {
+    "securitySchemes": {
+      "GatewayBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "HS256; issuer wgo-http-gateway; audience wgo-map-service; subject http-gateway; 최대 수명 60초"
+      }
+    },
     "schemas": {
+      "NearbyResult": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["postId", "distanceM"],
+              "properties": {
+                "postId": { "type": "string" },
+                "distanceM": { "type": "number", "minimum": 0 }
+              }
+            }
+          },
+          "nextCursor": { "type": "string", "nullable": true }
+        }
+      },
       "LocationUpdate": {
         "type": "object",
         "additionalProperties": false,

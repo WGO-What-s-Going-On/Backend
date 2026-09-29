@@ -5,6 +5,7 @@ import {
   POST_STREAM,
   PostIndex,
   parsePostCreated,
+  parsePostStatus,
 } from './post-index.js';
 
 type Entry = { id: string; message: Record<string, string> };
@@ -101,14 +102,20 @@ export class PostConsumer {
 
   async process(entry: Entry): Promise<void> {
     const fields = entry.message;
-    // 이 그룹은 PostCreated만 소유한다. 다른 Post 이벤트는 확정 후 ACK한다.
-    if (fields.eventType && fields.eventType !== 'PostCreated') {
+    if (
+      fields.eventType &&
+      !['PostCreated', 'PostExpired', 'PostDeleted'].includes(fields.eventType)
+    ) {
       await this.index.redis.xAck(POST_STREAM, POST_GROUP, entry.id);
       return;
     }
     try {
-      const post = parsePostCreated(fields.data, fields);
-      await this.index.write(post);
+      if (
+        fields.eventType === 'PostExpired' ||
+        fields.eventType === 'PostDeleted'
+      )
+        await this.index.transition(parsePostStatus(fields.data, fields));
+      else await this.index.write(parsePostCreated(fields.data, fields));
       await this.index.redis.xAck(POST_STREAM, POST_GROUP, entry.id);
     } catch (error) {
       this.failures++;

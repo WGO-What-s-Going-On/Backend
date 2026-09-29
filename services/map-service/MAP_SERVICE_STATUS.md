@@ -37,22 +37,22 @@
 
 - HTTP Gateway에 등록된 Map 경로는 `PUT /api/v1/location` 한 개다. 로컬·테스트에서만 실행되며 운영에서는 인증 연동 전까지 `503`이다. [OpenAPI 문서](./contracts/map-http.openapi.json)를 Map 직접 접속 `/docs/openapi.json`으로 제공하고 `/docs`에서 Swagger UI로 확인할 수 있다. 문서 경로는 Gateway에 등록되지 않았다.
 - 두 위치 판정 RPC는 Post Service 전용 내부 API다. [Proto](./contracts/map-authorization.proto)와 [인증·오류 의미](./contracts/map-authorization.md)에 계약이 있다. `PostCreated` 소비, Dead Letter, H3/Cassandra/Redis GEO, 재구축 명령은 HTTP API가 아니다. 이벤트 계약은 [JSON Schema](./contracts/post-created.schema.json)와 [Stream 필드 문서](./contracts/post-events.md)에 기록했다.
-- 주변 검색 API는 아직 없다. Swagger는 HTTP 경로만 명세하며 gRPC와 Stream을 HTTP 경로로 표시하지 않는다.
+- Map 직접 접속의 내부 `GET /internal/v1/posts/nearby`를 구현했다. 별도 Gateway JWT를 모든 환경에서 확인하며 반경 150·250·350m, 기본 20·최대 100개, 좌표·반경에 묶인 커서를 지원한다. Swagger는 HTTP 경로만 명세한다. Gateway의 JWT 발급과 공개 응답 조합은 후속 작업이다.
 
 ### 게시물 공간 인덱스
 
-- Post Service의 `post:events`에 독립된 `post-map` Consumer Group을 Stream 시작점 `0`에서 생성한다. `PostCreated` 버전 1의 `data` JSON과 Stream 식별자를 검사한다. 다른 이벤트는 ACK하고, 잘못된 이벤트는 원본 Stream ID·이벤트 ID·오류와 함께 `map:post:dead`에 기록한 뒤 ACK한다.
+- Post Service의 `post:events`에 독립된 `post-map` Consumer Group을 Stream 시작점 `0`에서 생성한다. `PostCreated`, `PostExpired`, `PostDeleted` 버전 1의 `data` JSON과 Stream 식별자를 검사한다. 다른 이벤트는 ACK하고, 잘못된 이벤트는 원본 Stream ID·이벤트 ID·오류와 함께 `map:post:dead`에 기록한 뒤 ACK한다.
 - Cassandra `post_locations`는 게시물 ID 기준 복구 원본으로 `event_id`, 위치, 반경, 카테고리, 만료 시각, H3 cell·shard를 저장한다. `posts_by_cell`은 `(cell, shard)` 파티션과 게시물 ID 키를 사용한다. H3 resolution은 **8**, shard 수는 **16**으로 고정한다. 해상도 변경에는 재구축이 필요하다.
-- 처리 순서는 원본 행 → cell 행 → Redis GEO → XACK이다. 같은 이벤트의 재전달은 동일한 값을 다시 기록한다. `XAUTOCLAIM`으로 Pending을 회수하며 5회 실패 후 Dead Letter 기록 성공을 확인하고 ACK한다. 30초마다 Pending 수·최장 대기 시간·처리 실패·Dead Letter 수를 로그에 기록한다.
+- 생성 처리는 `post_status`를 없을 때만 `ACTIVE`로 채우고 원본 행 → cell 행 → Redis GEO → XACK 순으로 진행한다. 비활성 상태는 조건부 갱신 후 현재·재구축 GEO에서 제거한다. `XAUTOCLAIM`으로 Pending을 회수하며 5회 실패 후 Dead Letter 기록 성공을 확인하고 ACK한다. 30초마다 Pending 수·최장 대기 시간·처리 실패·Dead Letter 수를 로그에 기록한다.
 - `pnpm rebuild:posts`는 원본을 페이지 단위로 읽어 cell 행을 복구하고 별도 GEO 키를 만든 뒤 포인터를 전환한다. 재구축 중 새 게시물은 소비자가 현재·새 GEO 키 양쪽에 기록한다. 기동 시 전체 스캔은 없다. 상세 실행 및 중단 후 복구는 README에 있다.
-- 로컬 Cassandra·Redis 통합 테스트에서 최초·중복 소비, 원본·cell·GEO 저장 실패 후 Pending 회수, 잘못된 이벤트, 5회 실패 Dead Letter, 다중 소비자 분담, GEO 유실 후 재구축, 재구축 중 새 이벤트를 검증했다. 기존 위치 HTTP/gRPC 및 Swagger 문서 경로 테스트와 함께 Node 24에서 총 13개 테스트가 통과했다. `pnpm typecheck`, `pnpm build`와 관리 재구축 명령도 통과했다.
+- 로컬 Cassandra·Redis 통합 테스트에서 상태 중복·역순, 세 반경 경계, GEO 장애 시 H3 검색, 페이지·커서, 비활성·만료 제외와 재구축을 검증했다. 기존 위치 HTTP/gRPC 및 Swagger 경로와 함께 Node 24에서 총 17개 테스트가 통과했다. `pnpm typecheck`와 `pnpm build`도 통과했다.
 
 ## 추후 작업
 
 1. **운영 사용자 인증 연결.** HTTP Gateway가 검증한 사용자 신원을 위치 갱신·게시물 생성·참여에 전달할 계약을 정하고, 현재 운영 `503` 차단을 인증 검증으로 교체한다. 현재 `X-User-Id`는 로컬·테스트 전용이다.
-2. **주변 보드 검색.** H3 후보 조회, Redis GEO와 Cassandra 조회·복구, 정확한 거리 필터, 페이지·커서와 Gateway 응답 조합을 구현한다. 현재 주변 검색 API는 없다.
-3. **보드 상태 변경 반영.** 게시물 만료·삭제 등 후속 이벤트와 인덱스 제거/갱신, 참여 판정에 필요한 상태 계약을 정한다. 현재 Map은 게시물의 생성 위치만 저장한다.
+2. **Gateway 주변 조회 연결.** 내부 검색을 호출할 단기 JWT를 발급하고 클라이언트용 API와 Post 상세 응답을 조합한다.
+3. **Post 상태 이벤트 생산.** Post Service에서 만료·삭제 전이와 `PostExpired`·`PostDeleted` 발행을 구현한다. Map은 이 이벤트의 상태 사영과 GEO 제거를 처리하지만 생산자가 아직 없다.
 4. **위치 데이터 운영 정책.** 위치 보존·삭제 기간, 접근 통제, 관측 지표와 장애 복구 절차를 확정한다. 클라이언트 좌표의 GPS 위·변조 방지도 현재 계약 범위 밖이다.
 5. **Stream 자체 유실 대조.** Map이 소비하기 전에 Stream 이벤트가 유실되었다면 Post Service 원본과 대조하고 재발행해야 한다.
 
-이번 구현은 **최신 사용자 위치, 생성·참여 허가와 PostCreated 공간 인덱스**까지 제공한다. 주변 검색과 게시물 상태 변경은 아직 구현하지 않았다.
+Map은 내부 주변 검색에서 로컬 상태가 `ACTIVE`이고 만료되지 않은 게시물만 반환한다. 상태 이벤트가 전파되기까지 짧은 지연이 있을 수 있다. GEO 일부 항목이 유실되고 다른 후보가 남아 있다면 재구축 전까지 누락될 수 있다. 기존 `post_locations`의 누락 상태는 관리 재구축에서만 조건부로 `ACTIVE`로 채운다. 극지방 좌표는 GEO에 넣지 않고 H3에서 검색한다.

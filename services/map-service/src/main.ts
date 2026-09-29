@@ -14,7 +14,7 @@ void consumer.run().catch((error) => {
 });
 const grpc = createGrpcServer(store);
 await listenGrpc(grpc, Number(process.env.GRPC_PORT ?? 50051));
-const http = createHttpServer(store);
+const http = createHttpServer(store, index);
 http.listen(Number(process.env.HTTP_PORT ?? 3003));
 const close = async () => {
   consumer.stop();
