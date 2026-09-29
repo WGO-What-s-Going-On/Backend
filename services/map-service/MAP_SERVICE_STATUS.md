@@ -46,7 +46,7 @@
 - Cassandra `post_locations`는 게시물 ID 기준 복구 원본으로 `event_id`, 위치, 반경, 카테고리, 만료 시각, H3 cell·shard를 저장한다. `posts_by_cell`은 `(cell, shard)` 파티션과 게시물 ID 키를 사용한다. H3 resolution은 **8**, shard 수는 **16**으로 고정한다. 해상도 변경에는 재구축이 필요하다.
 - 생성 처리는 `post_status`를 없을 때만 `ACTIVE`로 채우고 원본 행 → cell 행 → Redis GEO → XACK 순으로 진행한다. 비활성 상태는 조건부 갱신 후 현재·재구축 GEO에서 제거한다. `XAUTOCLAIM`으로 Pending을 회수하며 5회 실패 후 Dead Letter 기록 성공을 확인하고 ACK한다. 30초마다 Pending 수·최장 대기 시간·처리 실패·Dead Letter 수를 로그에 기록한다.
 - `pnpm rebuild:posts`는 원본을 페이지 단위로 읽어 cell 행을 복구하고 별도 GEO 키를 만든 뒤 포인터를 전환한다. 재구축 중 새 게시물은 소비자가 현재·새 GEO 키 양쪽에 기록한다. 기동 시 전체 스캔은 없다. 상세 실행 및 중단 후 복구는 README에 있다.
-- 로컬 Cassandra·Redis 통합 테스트에서 상태 중복·역순, 세 반경 경계, GEO 장애 시 H3 검색, 페이지·커서, 비활성·만료 제외와 재구축을 검증했다. 기존 위치 HTTP/gRPC 및 Swagger 경로와 함께 Node 24에서 총 17개 테스트가 통과했다. `pnpm typecheck`와 `pnpm build`도 통과했다.
+- 로컬 Cassandra·Redis 통합 테스트에서 상태 중복·역순, 세 반경 경계, GEO 장애 시 H3 검색, 페이지·커서, 비활성·만료 제외와 재구축을 검증했다. 위치 이력·캐시와 기존 HTTP/gRPC 및 Swagger 경로를 포함해 Node 24에서 Map 테스트 24개가 통과했다. `pnpm typecheck`와 `pnpm build`도 통과했다.
 
 ## 추후 작업
 

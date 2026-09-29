@@ -77,4 +77,4 @@ flowchart LR
     B -->|스캔 완료 후 포인터 전환| P[map:posts:geo:active]
 ```
 
-Run the store backed tests with `RUN_INTEGRATION=1 pnpm test` after applying `schema.cql`. They use Redis database 15 and write test posts to Cassandra.
+Run the store backed tests with `RUN_INTEGRATION=1 pnpm test` after applying `schema.cql`. Post index tests use Redis database 15; location history tests use the configured `REDIS_URL` (port 6381 by default) and write test rows to Cassandra.
