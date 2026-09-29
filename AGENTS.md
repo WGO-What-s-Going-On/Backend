@@ -95,9 +95,10 @@ For non-trivial tasks:
 
 1. Define success criteria.
 2. Implement.
-3. Run relevant tests.
-4. Run typecheck/lint/build when applicable.
-5. Verify the original behavior.
+3. Run `npm run format` from the repository root after code changes.
+4. Run relevant tests.
+5. Run typecheck/lint/build when applicable.
+6. Verify the original behavior.
 
 For bug fixes, reproduce the bug with a test first when practical.
 
@@ -185,6 +186,7 @@ Before changing a contract:
 
 Before finishing:
 
+- `npm run format` has been run from the repository root after code changes; review its diff and remove unrelated formatting changes
 - relevant tests pass
 - typecheck passes
 - lint passes

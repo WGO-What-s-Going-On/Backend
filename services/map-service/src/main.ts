@@ -8,7 +8,10 @@ await store.connect();
 const index = new PostIndex();
 await index.connect();
 const consumer = new PostConsumer(index);
-void consumer.run().catch((error) => { console.error('post-map stopped', error); process.exitCode = 1; });
+void consumer.run().catch((error) => {
+  console.error('post-map stopped', error);
+  process.exitCode = 1;
+});
 const grpc = createGrpcServer(store);
 await listenGrpc(grpc, Number(process.env.GRPC_PORT ?? 50051));
 const http = createHttpServer(store);
