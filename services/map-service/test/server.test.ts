@@ -136,4 +136,21 @@ describe('Map HTTP and gRPC contract', () => {
       process.env.NODE_ENV = 'test';
     }
   });
+
+  it('serves Swagger UI and an OpenAPI contract for the HTTP endpoint', async () => {
+    const ui = await fetch(`${base}/docs`);
+    expect(ui.status).toBe(200);
+    expect(await ui.text()).toContain('/docs/openapi.json');
+    const asset = await fetch(`${base}/docs/swagger-ui-bundle.js`);
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get('content-type')).toContain('javascript');
+    const spec = await fetch(`${base}/docs/openapi.json`);
+    expect(spec.status).toBe(200);
+    const document = await spec.json();
+    expect(document.openapi).toBe('3.0.3');
+    expect(Object.keys(document.paths)).toEqual(['/api/v1/location']);
+    expect(
+      Object.keys(document.paths['/api/v1/location'].put.responses),
+    ).toEqual(['200', '400', '403', '503']);
+  });
 });

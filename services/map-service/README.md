@@ -8,11 +8,22 @@ The location endpoint returns 200 with `latitude`, `longitude`, and server assig
 
 Start local stores with `docker compose up -d`, wait for Cassandra's health check, then apply `docker cp schema.cql map-service-cassandra-1:/tmp/schema.cql` and `docker compose exec -T cassandra cqlsh -f /tmp/schema.cql`. Set variables from `.env.example` and run `pnpm dev`. `pnpm test`, `pnpm typecheck`, and `pnpm build` verify the service.
 
+## Interface and API documentation
+
+| Feature | Boundary | Contract |
+| --- | --- | --- |
+| `PUT /api/v1/location` | HTTP Gateway routes to Map; local/test only, production returns 503 | [OpenAPI](./contracts/map-http.openapi.json), Swagger UI at `http://localhost:3003/docs` and JSON at `/docs/openapi.json` |
+| `MapAuthorization` creation and participation checks | Internal Post Service → Map gRPC | [Protocol Buffers](./contracts/map-authorization.proto), [auth and error semantics](./contracts/map-authorization.md) |
+| `PostCreated` spatial indexing | Internal Redis Stream `post:events` → Map Consumer | [event contract](./contracts/post-events.md), [data JSON Schema](./contracts/post-created.schema.json) |
+| Cassandra/H3/Redis GEO index and `pnpm rebuild:posts` | Map internal storage and operator command | [schema](./schema.cql), rebuild procedure below |
+
+Swagger documents HTTP only. `/docs` is served directly by Map Service and is not routed through HTTP Gateway. There is no nearby search HTTP or gRPC API yet.
+
 ## Post spatial index
 
 Set `REDIS_URL` to the **same Redis instance as Post Service** so Map can consume `post:events`. The local Map compose Redis uses port 6381; when running Post Service's Redis on port 6380, set `REDIS_URL=redis://localhost:6380` instead. The same connection holds the location cache and GEO index. Apply the updated `schema.cql` before starting the service. The `post-map` Consumer Group starts at Stream ID `0` when first created, uses `XREADGROUP`, and reclaims idle Pending entries with `XAUTOCLAIM`. Multiple Map instances share the group.
 
-For `PostCreated`, Stream fields are `eventId`, `eventType`, and `data`. `data` is JSON with `eventId`, `eventType: "PostCreated"`, `schemaVersion: 1`, `producer: "post-service"`, `aggregateId`, and `post: { postId, authorId, latitude, longitude, radiusM, category, expiresAt }`. IDs in the Stream fields and JSON must match. `expiresAt` is an ISO date or `null`. Invalid events go to `map:post:dead`; other event types are ACKed. After five failed deliveries, the original Stream ID, event ID, payload and error are written to that Dead Letter Stream before ACK. Check the logged `post-map metrics` every 30 seconds for Pending count, oldest idle time, processing failures, and Dead Letter count.
+For `PostCreated`, Stream fields are `eventId`, `eventType`, and `data`. `data` is JSON with `eventId`, `eventType: "PostCreated"`, `schemaVersion: 1`, `producer: "post-service"`, `aggregateId`, and `post: { postId, authorId, latitude, longitude, radiusM, category, expiresAt }`. IDs in the Stream fields and JSON must match. `expiresAt` is an ISO date or `null`. The [event contract](./contracts/post-events.md) defines the complete shape and Dead Letter fields. Invalid events go to `map:post:dead`; other event types are ACKed. After five failed deliveries, the original Stream ID, event ID, payload and error are written to that Dead Letter Stream before ACK. Check the logged `post-map metrics` every 30 seconds for Pending count, oldest idle time, processing failures, and Dead Letter count.
 
 Cassandra `post_locations` is Map's recovery source and records `event_id`. `posts_by_cell` is an H3 cell and 16 shard lookup table. H3 resolution is fixed at **8**; changing it requires rebuilding the cell index. A successful delivery writes the source row, cell row, Redis GEO, then ACKs. Redis GEO is a derived index of posts that were active at indexing time. Expiry and deletion events are not handled yet, so do not treat it as an authoritative current activity filter.
 

@@ -12,6 +12,7 @@ import {
 } from '@grpc/grpc-js';
 import { loadSync } from '@grpc/proto-loader';
 import { decide, validCoordinates, type LocationStore } from './location.js';
+import { serveSwagger } from './swagger.js';
 
 type Check = {
   userId: string;
@@ -126,6 +127,7 @@ export async function listenGrpc(server: Server, port: number): Promise<void> {
 
 export function createHttpServer(store: LocationStore): HttpServer {
   return createServer(async (request, response) => {
+    if (await serveSwagger(request, response)) return;
     if (request.method !== 'PUT' || request.url !== '/api/v1/location') {
       response.writeHead(404).end();
       return;

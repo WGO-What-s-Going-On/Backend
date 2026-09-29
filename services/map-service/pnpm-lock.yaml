@@ -22,6 +22,9 @@ importers:
       redis:
         specifier: ^5.12.1
         version: 5.12.1
+      swagger-ui-dist:
+        specifier: 5.33.0
+        version: 5.33.0
     devDependencies:
       '@types/node':
         specifier: 26.6.2
@@ -569,6 +572,12 @@ packages:
         integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==,
       }
 
+  '@scarf/scarf@1.4.0':
+    resolution:
+      {
+        integrity: sha512-xxeapPiUXdZAE3che6f3xogoJPeZgig6omHEy1rIY5WVsB3H2BHNnZH+gHG6x91SCWyQCzWGsuL2Hh3ClO5/qQ==,
+      }
+
   '@types/chai@5.2.3':
     resolution:
       {
@@ -1013,6 +1022,12 @@ packages:
       }
     engines: { node: '>=8' }
 
+  swagger-ui-dist@5.33.0:
+    resolution:
+      {
+        integrity: sha512-wpdK+m6BU5yj6pmUdMskZVTSWYG4DLglAx3sIhylloY37i8O37IrH+YEpqdXNfpaTGxILRBFzUqLF2jKqbfI7A==,
+      }
+
   tinybench@6.1.4:
     resolution:
       {
@@ -1379,6 +1394,8 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.1': {}
 
+  '@scarf/scarf@1.4.0': {}
+
   '@types/chai@5.2.3':
     dependencies:
       '@types/deep-eql': 4.0.2
@@ -1633,6 +1650,10 @@ snapshots:
   strip-ansi@6.0.1:
     dependencies:
       ansi-regex: 5.0.1
+
+  swagger-ui-dist@5.33.0:
+    dependencies:
+      '@scarf/scarf': 1.4.0
 
   tinybench@6.1.4: {}
 

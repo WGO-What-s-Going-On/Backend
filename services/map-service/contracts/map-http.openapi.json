@@ -1,0 +1,96 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "WGO Map Service HTTP API",
+    "version": "1.0.0",
+    "description": "Map Service의 HTTP 계약. 위치 갱신은 현재 로컬·테스트 환경에서만 동작하며 운영에서는 Gateway 사용자 인증 연동 전까지 503을 반환합니다. gRPC와 Redis Streams 계약은 이 OpenAPI 문서의 범위 밖입니다."
+  },
+  "servers": [{ "url": "/" }],
+  "paths": {
+    "/api/v1/location": {
+      "put": {
+        "tags": ["Location"],
+        "summary": "사용자 최신 위치 갱신",
+        "description": "서버 시각을 updatedAt으로 기록합니다. X-User-Id는 로컬·테스트 전용 식별자이며 운영에서는 이 요청을 503으로 차단합니다.",
+        "parameters": [
+          {
+            "name": "X-User-Id",
+            "in": "header",
+            "required": true,
+            "description": "양의 안전 정수. 로컬·테스트 환경에서만 사용합니다.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "example": 123
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LocationUpdate" },
+              "example": { "latitude": 37.4979, "longitude": 127.0276 }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cassandra에 최신 위치 저장 완료",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Location" }
+              }
+            }
+          },
+          "400": {
+            "description": "본문 크기 초과, 잘못된 JSON, 좌표 범위 오류 또는 알 수 없는 필드"
+          },
+          "403": {
+            "description": "로컬·테스트 환경에서 X-User-Id가 없거나 유효하지 않음"
+          },
+          "503": {
+            "description": "운영 환경에서 인증 연동 전 차단되었거나 위치 저장소를 사용할 수 없음"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "LocationUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["latitude", "longitude"],
+        "properties": {
+          "latitude": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90,
+            "example": 37.4979
+          },
+          "longitude": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180,
+            "example": 127.0276
+          }
+        }
+      },
+      "Location": {
+        "type": "object",
+        "required": ["latitude", "longitude", "updatedAt"],
+        "properties": {
+          "latitude": { "type": "number", "example": 37.4979 },
+          "longitude": { "type": "number", "example": 127.0276 },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-29T03:00:00.000Z"
+          }
+        }
+      }
+    }
+  }
+}

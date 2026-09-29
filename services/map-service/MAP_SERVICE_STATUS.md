@@ -33,13 +33,19 @@
 - Post 통합 테스트 17개 통과: MongoDB·Redis와 gRPC 테스트 서버를 연결해 위치 거부, 잘못된 서비스 JWT, Map 장애·deadline 초과에서 Post/Outbox 미기록을 확인했다.
 - 두 서비스의 타입 검사와 빌드가 통과했다. 로컬 Cassandra·Redis를 사용한 실제 HTTP → gRPC 왕복에서 위치 갱신 후 게시물 생성·참여 성공과 위치가 없는 사용자에 대한 `403`을 확인했고, Cassandra 저장 행과 Redis TTL도 확인했다.
 
+### API와 내부 계약 문서
+
+- HTTP Gateway에 등록된 Map 경로는 `PUT /api/v1/location` 한 개다. 로컬·테스트에서만 실행되며 운영에서는 인증 연동 전까지 `503`이다. [OpenAPI 문서](./contracts/map-http.openapi.json)를 Map 직접 접속 `/docs/openapi.json`으로 제공하고 `/docs`에서 Swagger UI로 확인할 수 있다. 문서 경로는 Gateway에 등록되지 않았다.
+- 두 위치 판정 RPC는 Post Service 전용 내부 API다. [Proto](./contracts/map-authorization.proto)와 [인증·오류 의미](./contracts/map-authorization.md)에 계약이 있다. `PostCreated` 소비, Dead Letter, H3/Cassandra/Redis GEO, 재구축 명령은 HTTP API가 아니다. 이벤트 계약은 [JSON Schema](./contracts/post-created.schema.json)와 [Stream 필드 문서](./contracts/post-events.md)에 기록했다.
+- 주변 검색 API는 아직 없다. Swagger는 HTTP 경로만 명세하며 gRPC와 Stream을 HTTP 경로로 표시하지 않는다.
+
 ### 게시물 공간 인덱스
 
 - Post Service의 `post:events`에 독립된 `post-map` Consumer Group을 Stream 시작점 `0`에서 생성한다. `PostCreated` 버전 1의 `data` JSON과 Stream 식별자를 검사한다. 다른 이벤트는 ACK하고, 잘못된 이벤트는 원본 Stream ID·이벤트 ID·오류와 함께 `map:post:dead`에 기록한 뒤 ACK한다.
 - Cassandra `post_locations`는 게시물 ID 기준 복구 원본으로 `event_id`, 위치, 반경, 카테고리, 만료 시각, H3 cell·shard를 저장한다. `posts_by_cell`은 `(cell, shard)` 파티션과 게시물 ID 키를 사용한다. H3 resolution은 **8**, shard 수는 **16**으로 고정한다. 해상도 변경에는 재구축이 필요하다.
 - 처리 순서는 원본 행 → cell 행 → Redis GEO → XACK이다. 같은 이벤트의 재전달은 동일한 값을 다시 기록한다. `XAUTOCLAIM`으로 Pending을 회수하며 5회 실패 후 Dead Letter 기록 성공을 확인하고 ACK한다. 30초마다 Pending 수·최장 대기 시간·처리 실패·Dead Letter 수를 로그에 기록한다.
 - `pnpm rebuild:posts`는 원본을 페이지 단위로 읽어 cell 행을 복구하고 별도 GEO 키를 만든 뒤 포인터를 전환한다. 재구축 중 새 게시물은 소비자가 현재·새 GEO 키 양쪽에 기록한다. 기동 시 전체 스캔은 없다. 상세 실행 및 중단 후 복구는 README에 있다.
-- 로컬 Cassandra·Redis 통합 테스트에서 최초·중복 소비, 원본·cell·GEO 저장 실패 후 Pending 회수, 잘못된 이벤트, 5회 실패 Dead Letter, 다중 소비자 분담, GEO 유실 후 재구축, 재구축 중 새 이벤트를 검증했다. 기존 위치 HTTP/gRPC 테스트와 함께 Node 24.21.0에서 총 12개 테스트가 통과했다. `pnpm typecheck`, `pnpm build`와 관리 재구축 명령도 통과했다.
+- 로컬 Cassandra·Redis 통합 테스트에서 최초·중복 소비, 원본·cell·GEO 저장 실패 후 Pending 회수, 잘못된 이벤트, 5회 실패 Dead Letter, 다중 소비자 분담, GEO 유실 후 재구축, 재구축 중 새 이벤트를 검증했다. 기존 위치 HTTP/gRPC 및 Swagger 문서 경로 테스트와 함께 Node 24에서 총 13개 테스트가 통과했다. `pnpm typecheck`, `pnpm build`와 관리 재구축 명령도 통과했다.
 
 ## 추후 작업
 
