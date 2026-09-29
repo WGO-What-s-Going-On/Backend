@@ -5,6 +5,10 @@ import request from 'supertest';
 import { DataSource, SelectQueryBuilder, type Repository } from 'typeorm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OutboxEventEntity } from '../src/database/entities/outbox-event.entity.js';
+import { TermEntity } from '../src/database/entities/term.entity.js';
+import { UserTermConsentEntity } from '../src/database/entities/user-term-consent.entity.js';
+import { BadgeEntity } from '../src/database/entities/badge.entity.js';
+import { UserBadgeEntity } from '../src/database/entities/user-badge.entity.js';
 
 import { configuration } from '../src/config/configuration.js';
 import { USER_SERVICE_ENTITIES } from '../src/database/entities/index.js';
@@ -16,7 +20,7 @@ import { UsersService } from '../src/users/users.service.js';
 
 const testDatabaseName = `wgo_users_test_${process.pid}_${Date.now()}`;
 
-describe('GET /api/v1/users/nickname/availability', () => {
+describe('Users API integration', () => {
   let adminDataSource: DataSource;
   let testDataSource: DataSource;
   let usersRepository: Repository<UserEntity>;
@@ -288,6 +292,175 @@ describe('GET /api/v1/users/nickname/availability', () => {
   function patch(id: string, body: object): request.Test {
     return request(app.getHttpServer()).patch('/api/v1/users/me').set('x-user-id', id).send(body);
   }
+
+  describe('term consents and badges', () => {
+    beforeEach(async () => {
+      await testDataSource.query('TRUNCATE TABLE "terms", "badges" RESTART IDENTITY CASCADE');
+    });
+
+    it('saves all required and optional consents without changing the user or creating events', async () => {
+      const id = await insertUser('Consenting');
+      const before = await usersRepository.findOneByOrFail({ id });
+      await seedTerms();
+      const startedAt = Date.now();
+      await consent(id, [1, 2, 3]).expect(200).expect({ termIds: ['1', '2', '3'] });
+      const rows = await consentRows(id);
+      expect(rows).toHaveLength(3);
+      expect(rows.map((row) => row.termId)).toEqual(['1', '2', '3']);
+      for (const row of rows) {
+        expect(row.userId).toBe(id);
+        expect(row.revokedAt).toBeNull();
+        expect(row.agreedAt.getTime()).toBeGreaterThanOrEqual(startedAt);
+        expect(row.agreedAt.getTime()).toBeLessThanOrEqual(Date.now());
+      }
+      expect(await usersRepository.findOneByOrFail({ id })).toEqual(before);
+      expect(await outbox()).toHaveLength(0);
+    });
+
+    it('preserves active agreement times on repeated and duplicate input', async () => {
+      const id = await insertUser('Consenting');
+      await seedTerms();
+      await consent(id, [1, '1', '01', 2, 2]).expect(200).expect({ termIds: ['1', '2'] });
+      const earlier = new Date('2025-01-01T00:00:00Z');
+      await testDataSource.getRepository(UserTermConsentEntity).update({ userId: id }, { agreedAt: earlier });
+      const before = await consentRows(id);
+      await consent(id, [1, 2]).expect(200);
+      expect(await consentRows(id)).toEqual(before);
+    });
+
+    it('serializes concurrent identical consent submissions', async () => {
+      const id = await insertUser('Consenting');
+      await seedTerms();
+      await Promise.all([consent(id, [1, 2]).expect(200), consent(id, [1, 2]).expect(200)]);
+      expect(await consentRows(id)).toHaveLength(2);
+    });
+
+    it('reactivates a revoked consent without creating another row', async () => {
+      const id = await insertUser('Consenting');
+      await seedTerms();
+      await consent(id, [1, 2]).expect(200);
+      const repository = testDataSource.getRepository(UserTermConsentEntity);
+      await repository.update({ userId: id, termId: '1' }, {
+        agreedAt: new Date('2025-01-01T00:00:00Z'), revokedAt: new Date('2025-01-02T00:00:00Z'),
+      });
+      const before = await consentRows(id);
+      await consent(id, [1, 2]).expect(200);
+      const after = await consentRows(id);
+      expect(after).toHaveLength(2);
+      expect(after[0]!.id).toBe(before[0]!.id);
+      expect(after[0]!.revokedAt).toBeNull();
+      expect(after[0]!.agreedAt.getTime()).toBeGreaterThan(before[0]!.agreedAt.getTime());
+      expect(after[1]).toEqual(before[1]);
+    });
+
+    it.each([[1, 2, 999], [1], [2, 3], [1, 2, 4], [2, 4], [1, 2, 5]])(
+      'rejects nonexistent, missing-required, old or future terms: %j', async (...ids) => {
+        const id = await insertUser('Consenting');
+        await seedTerms();
+        await consent(id, ids).expect(400);
+        expect(await consentRows(id)).toHaveLength(0);
+      },
+    );
+
+    it('uses effective date rather than version text, and highest ID to break date ties', async () => {
+      const id = await insertUser('Consenting');
+      await seedTerms();
+      const terms = testDataSource.getRepository(TermEntity);
+      const current = await terms.findOneByOrFail({ id: '1' });
+      await terms.insert({ ...current, id: '6', version: '0.1' });
+      await consent(id, [1, 2]).expect(400);
+      await consent(id, [6, 2]).expect(200);
+      expect((await consentRows(id)).map((row) => row.termId)).toEqual(['2', '6']);
+    });
+
+    it('derives required flags from current versions only and preserves large term IDs', async () => {
+      const id = await insertUser('Consenting');
+      await seedTerms();
+      const terms = testDataSource.getRepository(TermEntity);
+      await terms.update('1', { required: false });
+      await terms.insert({ id: '9007199254740993', code: 'EXTRA', version: '1', required: false,
+        documentUrl: 'https://example.test/extra', effectiveAt: new Date(Date.now() - 1000), createdAt: new Date() });
+      await consent(id, [2, '9007199254740993']).expect(200)
+        .expect({ termIds: ['2', '9007199254740993'] });
+      expect((await consentRows(id)).map((row) => row.termId)).toEqual(['2', '9007199254740993']);
+    });
+
+    it.each([{}, { termIds: [] }, { termIds: null }, { termIds: '1' },
+      { termIds: [0] }, { termIds: [-1] }, { termIds: [1.5] }, { termIds: [true] },
+      { termIds: [null] }, { termIds: ['1x'] }, { termIds: [9007199254740992] },
+      { termIds: ['9223372036854775808'] }])('rejects invalid consent body %j', async (body) => {
+      const id = await insertUser('Consenting');
+      await request(app.getHttpServer()).post('/api/v1/users/me/term-consents')
+        .set('x-user-id', id).send(body).expect(400);
+    });
+
+    it('requires auth context and an existing user for both endpoints', async () => {
+      for (const [method, path] of [['post', 'term-consents'], ['get', 'badges']] as const) {
+        await request(app.getHttpServer())[method](`/api/v1/users/me/${path}`).send({ termIds: [1] }).expect(401);
+        await request(app.getHttpServer())[method](`/api/v1/users/me/${path}`)
+          .set('x-user-id', 'invalid').send({ termIds: [1] }).expect(401);
+        await request(app.getHttpServer())[method](`/api/v1/users/me/${path}`)
+          .set('x-user-id', crypto.randomUUID()).send({ termIds: [1] }).expect(404);
+      }
+    });
+
+    it('lists only active, unrevoked badges belonging to the current user, newest first', async () => {
+      const id = await insertUser('BadgeOwner');
+      const other = await insertUser('OtherOwner');
+      const old = new Date('2026-01-01T00:00:00Z');
+      const recent = new Date('2026-02-01T00:00:00Z');
+      const badges = testDataSource.getRepository(BadgeEntity);
+      await badges.insert(['1', '2', '3', '4', '5', '9007199254740993'].map((badgeId) => ({
+        id: badgeId, code: `BADGE_${badgeId}`, name: `Badge ${badgeId}`,
+        description: badgeId === '1' ? null : 'Description', imageKey: badgeId === '1' ? null : 'badges/image',
+        active: badgeId !== '4', createdAt: old,
+      })));
+      await testDataSource.getRepository(UserBadgeEntity).insert([
+        { userId: id, badgeId: '1', grantedAt: old, revokedAt: null },
+        { userId: id, badgeId: '2', grantedAt: recent, revokedAt: null },
+        { userId: id, badgeId: '9007199254740993', grantedAt: recent, revokedAt: null },
+        { userId: id, badgeId: '3', grantedAt: recent, revokedAt: recent },
+        { userId: id, badgeId: '4', grantedAt: recent, revokedAt: null },
+        { userId: other, badgeId: '5', grantedAt: recent, revokedAt: null },
+      ]);
+      const response = await request(app.getHttpServer()).get('/api/v1/users/me/badges')
+        .set('x-user-id', id).expect(200);
+      expect(response.body).toEqual({ badges: [
+        { badgeId: '9007199254740993', code: 'BADGE_9007199254740993', name: 'Badge 9007199254740993',
+          description: 'Description', imageKey: 'badges/image', grantedAt: recent.toISOString() },
+        { badgeId: '2', code: 'BADGE_2', name: 'Badge 2', description: 'Description',
+          imageKey: 'badges/image', grantedAt: recent.toISOString() },
+        { badgeId: '1', code: 'BADGE_1', name: 'Badge 1', description: null, imageKey: null, grantedAt: old.toISOString() },
+      ] });
+      expect(await outbox()).toHaveLength(0);
+    });
+
+    it('returns an empty badge array when the user has no badges', async () => {
+      const id = await insertUser('NoBadges');
+      await request(app.getHttpServer()).get('/api/v1/users/me/badges')
+        .set('x-user-id', id).expect(200).expect({ badges: [] });
+    });
+
+    function consent(id: string, termIds: (string | number)[]): request.Test {
+      return request(app.getHttpServer()).post('/api/v1/users/me/term-consents')
+        .set('x-user-id', id).send({ termIds });
+    }
+
+    function consentRows(userId: string): Promise<UserTermConsentEntity[]> {
+      return testDataSource.getRepository(UserTermConsentEntity).find({ where: { userId }, order: { termId: 'ASC' } });
+    }
+
+    async function seedTerms(): Promise<void> {
+      const now = new Date();
+      await testDataSource.getRepository(TermEntity).insert([
+        { id: '1', code: 'SERVICE', version: '1.0', required: true, effectiveAt: new Date(Date.now() - 60_000) },
+        { id: '2', code: 'PRIVACY', version: '1.0', required: true, effectiveAt: new Date(Date.now() - 60_000) },
+        { id: '3', code: 'LOCATION', version: '1.0', required: false, effectiveAt: new Date(Date.now() - 60_000) },
+        { id: '4', code: 'SERVICE', version: '99.0', required: true, effectiveAt: new Date(Date.now() - 120_000) },
+        { id: '5', code: 'SERVICE', version: '2.0', required: true, effectiveAt: new Date(Date.now() + 86_400_000) },
+      ].map((term) => ({ ...term, documentUrl: 'https://example.test/terms', createdAt: now })));
+    }
+  });
 
   function outbox(): Promise<OutboxEventEntity[]> {
     return testDataSource.getRepository(OutboxEventEntity).find();

@@ -129,6 +129,30 @@ publishAttempts는 0, publishedAt은 null이다. domain payload는 userId/nickna
 기존 eventId, target, occurredAt, 숫자 version 1 및 domain payload는 유지한다.
 이미 저장된 Outbox row는 소급 변경하지 않는다.
 
+## Term consents and badges
+
+두 API는 기존 users/me와 동일하게 Gateway가 검증해 전달한 `x-user-id`를 사용한다.
+인증 context가 없거나 잘못되면 401, 사용자가 없으면 404다.
+
+`POST /api/v1/users/me/term-consents`는 `{ "termIds": [1, 2, 3] }`를 받고
+HTTP 200과 `{ "termIds": ["1", "2", "3"] }`를 반환한다. ID는 양의 정수 또는
+10진수 문자열을 받으며, JavaScript 안전 정수 범위를 넘는 BIGINT는 문자열로 보내야 한다.
+응답은 중복을 제거한 문자열 ID를 입력 순서대로 반환한다.
+
+GET /api/v1/terms와 동일하게 code별 현재 시행 중인 최신 약관을 선택한다
+(`effective_at DESC`, 동률이면 `id DESC`). 현재 필수 약관은 매 요청에 모두 포함해야 한다.
+빈 목록, 잘못된 ID, 존재하지 않는 약관, 과거 버전, 미래 시행 약관, 필수 약관 누락은 400이다.
+사용자 행 잠금과 단일 트랜잭션으로 동시 제출을 직렬화한다. 활성 동의는 agreed_at을
+유지하며, 철회된 row에 재동의하면 agreed_at을 갱신하고 revoked_at을 null로 바꾼다.
+
+`GET /api/v1/users/me/badges`는 `{ "badges": [...] }`를 반환한다. 각 항목은 문자열
+badgeId, code, name, nullable description/imageKey, ISO-8601 grantedAt을 포함한다.
+본인에게 부여된 미회수·활성 배지만 `granted_at DESC, badge_id DESC`로 조회하며,
+없으면 빈 배열이다. 배지 부여/조건 판정은 포함하지 않는다.
+
+두 API는 온보딩·프로필·인증 상태를 변경하지 않고 Outbox나 도메인 이벤트를 생성하지 않는다.
+Redis도 사용하지 않는다.
+
 ## Verification
 
 ```bash

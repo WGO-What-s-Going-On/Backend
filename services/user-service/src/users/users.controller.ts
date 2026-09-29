@@ -1,10 +1,12 @@
-import { BadRequestException, Body, Controller, Get, Headers, Patch, Query, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, HttpCode, Patch, Post, Query, UnauthorizedException } from '@nestjs/common';
 
 import type { NicknameAvailabilityResponse } from './dto/nickname-availability-response.dto.js';
 import { UsersService } from './users.service.js';
 
 import { normalizeNickname } from './nickname.js';
 import type { UpdateUserProfile, UserProfileResponse } from './dto/user-profile.dto.js';
+import { parseTermIds, type TermConsentsResponse } from './dto/term-consents.dto.js';
+import type { UserBadgesResponse } from './dto/user-badges-response.dto.js';
 
 @Controller('api/v1/users')
 export class UsersController {
@@ -49,6 +51,20 @@ export class UsersController {
     return this.usersService.updateProfile(
       id, update, typeof requestId === 'string' && requestId.trim() ? requestId : undefined,
     );
+  }
+
+  @Post('me/term-consents')
+  @HttpCode(200)
+  consentToTerms(
+    @Headers('x-user-id') userId: unknown, @Body() body: unknown,
+  ): Promise<TermConsentsResponse> {
+    const id = requireUserId(userId);
+    return this.usersService.consentToTerms(id, parseTermIds(body));
+  }
+
+  @Get('me/badges')
+  getBadges(@Headers('x-user-id') userId: unknown): Promise<UserBadgesResponse> {
+    return this.usersService.getBadges(requireUserId(userId));
   }
 }
 
