@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package wgo.user.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Internal service-to-service API. User IDs are positive int64 values limited to 9007199254740991.
+service UserService {
+  rpc GetUserProfile (GetUserProfileRequest) returns (GetUserProfileResponse);
+  rpc BatchGetUserProfiles (BatchGetUserProfilesRequest) returns (BatchGetUserProfilesResponse);
+  rpc GetUserStatus (GetUserStatusRequest) returns (GetUserStatusResponse);
+}
+
+enum UserStatus {
+  USER_STATUS_UNSPECIFIED = 0;
+  ACTIVE = 1;
+  SUSPENDED = 2;
+  WITHDRAWAL_PENDING = 3;
+  WITHDRAWN = 4;
+}
+
+message GetUserProfileRequest { int64 user_id = 1; }
+message GetUserProfileResponse {
+  int64 user_id = 1;
+  string nickname = 2;
+  optional string profile_image_key = 3;
+  UserStatus status = 4;
+}
+message BatchGetUserProfilesRequest { repeated int64 user_ids = 1; } // 1-100, before deduplication.
+message BatchGetUserProfilesResponse {
+  // Each list retains first-occurrence request order. Unavailable profiles never expose nicknames.
+  repeated UserProfile profiles = 1;
+  repeated int64 unavailable_user_ids = 2;
+}
+message UserProfile {
+  int64 user_id = 1;
+  string nickname = 2;
+  optional string profile_image_key = 3; // Absent when DB value is null.
+  UserStatus status = 4;
+}
+message GetUserStatusRequest { int64 user_id = 1; }
+message GetUserStatusResponse {
+  int64 user_id = 1;
+  UserStatus status = 2;
+  optional google.protobuf.Timestamp suspended_until = 3;
+}

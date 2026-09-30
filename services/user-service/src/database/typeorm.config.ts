@@ -1,6 +1,8 @@
 import { ConfigService } from '@nestjs/config';
 import type { TypeOrmModuleOptions } from '@nestjs/typeorm';
 
+import { USER_SERVICE_ENTITIES } from './entities/index.js';
+
 export function createTypeOrmOptions(
   config: ConfigService,
 ): TypeOrmModuleOptions {
@@ -11,7 +13,7 @@ export function createTypeOrmOptions(
     username: config.getOrThrow<string>('database.username'),
     password: config.getOrThrow<string>('database.password'),
     database: config.getOrThrow<string>('database.name'),
-    entities: [],
+    entities: [...USER_SERVICE_ENTITIES],
     synchronize: false,
   };
 }

@@ -3,8 +3,14 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { configuration } from './config/configuration.js';
+import { AuthModule } from './auth/auth.module.js';
 import { createTypeOrmOptions } from './database/typeorm.config.js';
 import { HealthModule } from './health/health.module.js';
+import { TermsModule } from './terms/terms.module.js';
+import { UsersModule } from './users/users.module.js';
+import { OutboxModule } from './outbox/outbox.module.js';
+import { UserGrpcModule } from './grpc/user-grpc.module.js';
+import { WithdrawalScheduler } from './withdrawal/withdrawal.scheduler.js';
 
 @Module({
   imports: [
@@ -16,7 +22,13 @@ import { HealthModule } from './health/health.module.js';
       inject: [ConfigService],
       useFactory: createTypeOrmOptions,
     }),
+    AuthModule,
     HealthModule,
+    TermsModule,
+    UsersModule,
+    OutboxModule,
+    UserGrpcModule,
   ],
+  providers: [WithdrawalScheduler],
 })
 export class AppModule {}
