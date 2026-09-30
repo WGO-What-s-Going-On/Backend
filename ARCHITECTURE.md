@@ -63,14 +63,17 @@ flowchart LR
     Client -->|HTTPS| HTTP
     Client <-->|WSS| RT
 
-    HTTP -->|gRPC / HTTP| User
-    HTTP -->|gRPC / HTTP| Post
-    HTTP -->|gRPC / HTTP| Map
-    HTTP -->|gRPC / HTTP| Notification
-    HTTP -->|gRPC / HTTP| Moderation
-    RT -->|gRPC / HTTP| User
-    RT -->|gRPC / HTTP| Map
-    RT -->|gRPC / HTTP| Post
+    HTTP -->|HTTP| User
+    HTTP -->|HTTP| Post
+    HTTP -->|HTTP| Map
+    HTTP -->|HTTP| Notification
+    HTTP -->|HTTP| Moderation
+    RT -->|HTTP| User
+    RT -->|HTTP| Map
+    RT -->|HTTP| Post
+
+    Post -->|gRPC| Map
+    Post -.->|gRPC 계획| User
 
     User <--> UserDB
     Post <--> PostDB
@@ -112,10 +115,9 @@ Gateway는 가능한 한 얇게 유지한다. 도메인 규칙은 해당 데이�
 
 ### 5.1 동기 통신
 
-타입 안정성이 필요하고 지연 시간에 민감한 내부 호출에는 **gRPC**를 사용한다.
-상호 운용성, 운영 단순성 또는 기존 인터페이스 때문에 더 적합한 경우 내부
-**HTTP**를 사용할 수 있다. 외부 클라이언트는 HTTPS 또는 WSS로 Gateway에만
-접속한다.
+Gateway에서 도메인 서비스로 보내는 동기 요청은 **HTTP**를 사용한다.
+도메인 서비스 사이의 동기 요청은 **gRPC**를 사용한다. 외부 클라이언트는
+HTTPS 또는 WSS로 Gateway에만 접속한다.
 
 현재 요청을 완료하기 위해 즉시 결과가 필요한 경우 동기 호출을 사용한다.
 
@@ -127,6 +129,9 @@ Gateway는 가능한 한 얇게 유지한다. 도메인 규칙은 해당 데이�
 모든 내부 호출에는 Timeout 또는 Deadline을 설정한다. 재시도는 멱등성이
 보장되는 작업에만 제한적으로 적용한다. 호출 체인은 짧게 유지하며 Gateway가
 분산 트랜잭션을 만들지 않게 한다.
+
+서비스 간 호출자 인증의 목표 규약, RPC별 권한표 및 기존 공유 secret 전환 순서는
+[내부 서비스 인증 계약](./docs/contracts/service-authentication.md)에 정의한다.
 
 ### 5.2 비동기 통신
 
@@ -412,7 +417,7 @@ Secret, 비공개 본문 또는 불필요한 원본 좌표를 기록하지 않�
 | --- | --- | --- |
 | 7개 애플리케이션 독립 배포 | 외부 Protocol과 도메인 부하 분리 | 배포 및 운영 조율 비용 증가 |
 | 얇은 HTTP/Realtime Gateway | 진입점에 도메인 로직과 데이터가 모이는 것을 방지 | Gateway는 소유 서비스에 작업 위임 |
-| 동기 통신에 gRPC/HTTP 사용 | 즉시 결과가 필요한 타입 기반 요청·응답 지원 | Deadline과 짧은 호출 체인 필수 |
+| Gateway→서비스 HTTP, 서비스→서비스 gRPC | 즉시 결과가 필요한 요청·응답 지원 | Timeout·Deadline과 짧은 호출 체인 필수 |
 | 도메인 이벤트에 Redis Streams 사용 | 후속 작업 분리와 서비스별 독립 Consumer Group 지원 | 보존·지속성 정책, 멱등성, Outbox와 Pending 재처리 체계 필요 |
 | 서비스별 데이터 소유권 | 자율성과 장애 경계 보존 | 서비스 간 DB 접근과 Join 금지 |
 | Post에 MongoDB 사용 | 문서 중심이며 변화 가능한 콘텐츠 구조에 적합 | 여러 Document에 걸친 불변 조건은 별도 설계 필요 |
