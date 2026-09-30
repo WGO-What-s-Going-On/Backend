@@ -714,12 +714,10 @@ describe('Auth API integration', () => {
     it('restores through Kakao, preserves profile/onboarding and issues a new session after commit', async () => {
       const original = await login();
       const id = original.body.userId as string;
-      await testDataSource
-        .getRepository(UserEntity)
-        .update(id, {
-          onboardingCompletedAt: new Date(),
-          profileImageKey: 'profiles/image',
-        });
+      await testDataSource.getRepository(UserEntity).update(id, {
+        onboardingCompletedAt: new Date(),
+        profileImageKey: 'profiles/image',
+      });
       await withdraw(id).expect(200);
       const pending = await findUser(id);
       const save = sessionStore.save.bind(sessionStore);
