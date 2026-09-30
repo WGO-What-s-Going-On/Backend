@@ -6,7 +6,6 @@ import {
   ServerCredentials,
   loadPackageDefinition,
   status,
-  type Metadata,
   type ServerUnaryCall,
   type sendUnaryData,
 } from '@grpc/grpc-js';
@@ -14,6 +13,7 @@ import { loadSync } from '@grpc/proto-loader';
 import { decide, validCoordinates, type LocationStore } from './location.js';
 import { InvalidCursorError, type PostIndex } from './post-index.js';
 import { serveSwagger } from './swagger.js';
+import { serviceCaller, trustedKeys } from './service-auth.js';
 
 type Check = {
   userId: string;
@@ -23,49 +23,6 @@ type Check = {
   radiusM: number;
 };
 type Decision = { allowed: boolean; reason: string };
-
-export function validServiceToken(
-  metadata: Metadata,
-  secret = process.env.MAP_SERVICE_JWT_SECRET,
-): boolean {
-  if (!secret || secret.length < 32) return false;
-  const token = /^Bearer (\S+)$/i.exec(
-    String(metadata.get('authorization')[0] ?? ''),
-  )?.[1];
-  const parts = token?.split('.');
-  if (!parts || parts.length !== 3) return false;
-  try {
-    const [header, payload, signature] = parts as [string, string, string];
-    const expected = createHmac('sha256', secret)
-      .update(`${header}.${payload}`)
-      .digest();
-    const actual = Buffer.from(signature, 'base64url');
-    if (actual.length !== expected.length || !timingSafeEqual(actual, expected))
-      return false;
-    const h = JSON.parse(Buffer.from(header, 'base64url').toString()) as Record<
-      string,
-      unknown
-    >;
-    const p = JSON.parse(
-      Buffer.from(payload, 'base64url').toString(),
-    ) as Record<string, unknown>;
-    const now = Math.floor(Date.now() / 1000);
-    return (
-      h.alg === 'HS256' &&
-      h.typ === 'JWT' &&
-      p.iss === 'wgo-post-service' &&
-      p.aud === 'wgo-map-service' &&
-      p.sub === 'post-service' &&
-      typeof p.iat === 'number' &&
-      p.iat <= now + 5 &&
-      typeof p.exp === 'number' &&
-      p.exp > now &&
-      p.exp - p.iat <= 60
-    );
-  } catch {
-    return false;
-  }
-}
 
 export function validGatewayToken(
   authorization: string | undefined,
@@ -104,6 +61,7 @@ export function validGatewayToken(
 }
 
 export function createGrpcServer(store: LocationStore): Server {
+  const keys = trustedKeys();
   const definition = loadSync(
     resolve(process.cwd(), 'contracts/map-authorization.proto'),
     { longs: String },
@@ -116,10 +74,16 @@ export function createGrpcServer(store: LocationStore): Server {
       call: ServerUnaryCall<Check, Decision>,
       callback: sendUnaryData<Decision>,
     ) => {
-      if (!validServiceToken(call.metadata))
+      const caller = serviceCaller(call.metadata, keys);
+      if (!caller)
         return callback({
           code: status.UNAUTHENTICATED,
           message: 'Invalid service token',
+        });
+      if (caller !== 'post-service')
+        return callback({
+          code: status.PERMISSION_DENIED,
+          message: 'Service not allowed',
         });
       const input = call.request;
       const userId = Number(input.userId);

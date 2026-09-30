@@ -3,7 +3,12 @@ import { Test } from '@nestjs/testing';
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import type { Connection, Model } from 'mongoose';
 import { createClient } from 'redis';
-import { createHmac } from 'node:crypto';
+import {
+  createHmac,
+  generateKeyPairSync,
+  verify,
+  createPublicKey,
+} from 'node:crypto';
 import {
   Server,
   ServerCredentials,
@@ -49,6 +54,7 @@ suite('post creation integration', () => {
   let map: Server;
   let mapUnavailable = false;
   let mapTimeout = false;
+  const mapKeys = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const redis = createClient({ url: 'redis://localhost:6380' });
   let id: string;
   const header = { 'X-User-Id': '123' };
@@ -58,8 +64,11 @@ suite('post creation integration', () => {
     process.env.MONGODB_URI =
       'mongodb://localhost:27017/wgo_post_integration?replicaSet=rs0';
     process.env.WS_SERVICE_JWT_SECRET = serviceSecret;
-    const mapSecret = 'integration-map-service-secret-at-least-32';
-    process.env.MAP_SERVICE_JWT_SECRET = mapSecret;
+    process.env.POST_SERVICE_SIGNING_JWK = JSON.stringify({
+      ...mapKeys.privateKey.export({ format: 'jwk' }),
+      alg: 'ES256',
+      kid: 'post-integration',
+    });
     map = new Server();
     const proto = loadPackageDefinition(
       loadSync('contracts/map-authorization.proto', { longs: String }),
@@ -72,16 +81,30 @@ suite('post creation integration', () => {
       const [jwtHeader, jwtPayload, jwtSignature] = token.split('.');
       if (!jwtHeader || !jwtPayload || !jwtSignature)
         return callback({ code: 16, message: 'Invalid service token' });
-      const signature = createHmac('sha256', mapSecret)
-        .update(`${jwtHeader}.${jwtPayload}`)
-        .digest('base64url');
+      const signature = verify(
+        'sha256',
+        Buffer.from(`${jwtHeader}.${jwtPayload}`),
+        { key: createPublicKey(mapKeys.privateKey), dsaEncoding: 'ieee-p1363' },
+        Buffer.from(jwtSignature, 'base64url'),
+      );
+      const tokenHeader = JSON.parse(
+        Buffer.from(jwtHeader, 'base64url').toString(),
+      );
       const claims = JSON.parse(
         Buffer.from(jwtPayload, 'base64url').toString(),
       );
       if (
-        jwtSignature !== signature ||
+        !signature ||
+        tokenHeader.alg !== 'ES256' ||
+        tokenHeader.typ !== 'wgo-service+jwt' ||
+        tokenHeader.kid !== 'post-integration' ||
+        claims.iss !== 'wgo-post-service' ||
         claims.aud !== 'wgo-map-service' ||
-        claims.sub !== 'post-service'
+        claims.sub !== 'post-service' ||
+        !Number.isInteger(claims.iat) ||
+        !Number.isInteger(claims.exp) ||
+        claims.exp - claims.iat !== 30 ||
+        claims.exp <= Math.floor(Date.now() / 1000)
       )
         return callback({ code: 16, message: 'Invalid service token' });
       if (mapUnavailable)
@@ -213,8 +236,11 @@ suite('post creation integration', () => {
     } finally {
       mapUnavailable = false;
     }
-    process.env.MAP_SERVICE_JWT_SECRET =
-      'incorrect-map-service-secret-at-least-32';
+    process.env.POST_SERVICE_SIGNING_JWK = JSON.stringify({
+      ...mapKeys.privateKey.export({ format: 'jwk' }),
+      alg: 'ES256',
+      kid: 'wrong-kid',
+    });
     try {
       await request(app.getHttpServer())
         .post('/api/v1/posts')
@@ -222,9 +248,33 @@ suite('post creation integration', () => {
         .send(body)
         .expect(503);
     } finally {
-      process.env.MAP_SERVICE_JWT_SECRET =
-        'integration-map-service-secret-at-least-32';
+      process.env.POST_SERVICE_SIGNING_JWK = JSON.stringify({
+        ...mapKeys.privateKey.export({ format: 'jwk' }),
+        alg: 'ES256',
+        kid: 'post-integration',
+      });
     }
+    process.env.POST_SERVICE_SIGNING_JWK = '{';
+    try {
+      await request(app.getHttpServer())
+        .post('/api/v1/posts')
+        .set(header)
+        .send(body)
+        .expect(503);
+    } finally {
+      process.env.POST_SERVICE_SIGNING_JWK = JSON.stringify({
+        ...mapKeys.privateKey.export({ format: 'jwk' }),
+        alg: 'ES256',
+        kid: 'post-integration',
+      });
+    }
+    const beforeParticipants = await participants.countDocuments();
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${id}/participants`)
+      .set('X-User-Id', '456')
+      .send({})
+      .expect(403);
+    expect(await participants.countDocuments()).toBe(beforeParticipants);
     mapTimeout = true;
     process.env.MAP_GRPC_TIMEOUT_MS = '50';
     try {

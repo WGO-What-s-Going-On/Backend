@@ -43,10 +43,16 @@ pnpm install
 pnpm dev
 ```
 
-Map Service도 실행하고 `.env.example`의 `MAP_GRPC_ADDRESS`와
-`MAP_SERVICE_JWT_SECRET`을 양쪽 서비스에 같은 값으로 설정한다. Post Service는
-짧은 deadline(기본 500ms)과 30초 서비스 JWT로 Map Service의 읽기 전용 허가
-RPC를 호출한다. Map Service가 응답하지 않으면 503으로 종료한다.
+Map Service도 실행하고 `.env.example`의 `MAP_GRPC_ADDRESS`를 설정한다.
+Map에 `MAP_SERVICE_TRUSTED_JWKS` 공개키와 HS256 동시 검증 버전을 먼저 배포하고
+기존 Post 호출을 확인한 다음, Post에 `POST_SERVICE_SIGNING_JWK` 개인키와 ES256
+버전을 배포한다. 두 키의 `kid`가 일치해야 한다. Post Service는 기본 500ms
+deadline과 호출마다 새로 서명한 30초 토큰으로 두 읽기 전용 RPC를 호출한다.
+키 설정 오류, 인증 실패, Map 장애·deadline 초과는 503으로 종료한다. 위치 거부는
+403이다. 되돌릴 때는 기존 Post 버전으로 복귀할 수 있도록 Map의 동시 검증과
+양쪽 `MAP_SERVICE_JWT_SECRET`을 유지한다. HS256 제거는 내부 인증 계약 4단계에서
+수행한다. 운영 키는 비밀값으로 주입하고, 내부 gRPC 구간 TLS를 배포 전에 확인한다.
+운영 후속작업과 검증 기준은 [Post→Map 인증 전환 체크리스트](../map-service/POST_MAP_AUTH_ROLLOUT.md)에 기록했다.
 
 두 번째 Compose 명령이 MongoDB 8 단일 노드 Replica Set(`rs0`)을 초기화하고
 Primary 선출을 기다린다. 재실행해도 기존 설정을 유지한다. 개발용

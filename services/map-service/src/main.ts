@@ -4,6 +4,8 @@ import { PostIndex } from './post-index.js';
 import { PostConsumer } from './post-consumer.js';
 
 const store = new CassandraLocationStore();
+// Validate trusted keys before starting external connections or consumers.
+const grpc = createGrpcServer(store);
 await store.connect();
 const index = new PostIndex();
 await index.connect();
@@ -12,7 +14,6 @@ void consumer.run().catch((error) => {
   console.error('post-map stopped', error);
   process.exitCode = 1;
 });
-const grpc = createGrpcServer(store);
 await listenGrpc(grpc, Number(process.env.GRPC_PORT ?? 50051));
 const http = createHttpServer(store, index);
 http.listen(Number(process.env.HTTP_PORT ?? 3003));
