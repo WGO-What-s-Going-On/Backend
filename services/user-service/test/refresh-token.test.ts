@@ -22,9 +22,13 @@ describe('structured refresh tokens', () => {
   });
 
   it('generates different secrets even for the same session', () => {
-    const tokens = Array.from({ length: 20 }, () => createRefreshToken(sessionId));
+    const tokens = Array.from({ length: 20 }, () =>
+      createRefreshToken(sessionId),
+    );
 
-    expect(new Set(tokens.map((token) => token.slice(token.indexOf('.') + 1))).size).toBe(20);
+    expect(
+      new Set(tokens.map((token) => token.slice(token.indexOf('.') + 1))).size,
+    ).toBe(20);
   });
 
   it.each([
@@ -44,7 +48,10 @@ describe('structured refresh tokens', () => {
   it('hashes the entire token, including its session ID', () => {
     const token = createRefreshToken(sessionId);
     const hash = hashRefreshToken(token);
-    const changedSession = token.replace(sessionId, '550e8400-e29b-41d4-a716-446655440001');
+    const changedSession = token.replace(
+      sessionId,
+      '550e8400-e29b-41d4-a716-446655440001',
+    );
 
     expect(refreshTokenMatchesHash(token, hash)).toBe(true);
     expect(refreshTokenMatchesHash(changedSession, hash)).toBe(false);

@@ -1,11 +1,28 @@
-import { BadRequestException, Body, Controller, Get, Headers, HttpCode, Patch, Post, Query, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Headers,
+  HttpCode,
+  Patch,
+  Post,
+  Query,
+  UnauthorizedException,
+} from '@nestjs/common';
 
 import type { NicknameAvailabilityResponse } from './dto/nickname-availability-response.dto.js';
 import { UsersService } from './users.service.js';
 
 import { normalizeNickname } from './nickname.js';
-import type { UpdateUserProfile, UserProfileResponse } from './dto/user-profile.dto.js';
-import { parseTermIds, type TermConsentsResponse } from './dto/term-consents.dto.js';
+import type {
+  UpdateUserProfile,
+  UserProfileResponse,
+} from './dto/user-profile.dto.js';
+import {
+  parseTermIds,
+  type TermConsentsResponse,
+} from './dto/term-consents.dto.js';
 import type { UserBadgesResponse } from './dto/user-badges-response.dto.js';
 import type { WithdrawalResponse } from './dto/withdrawal-response.dto.js';
 import { parseUserId } from '../user-id.js';
@@ -18,7 +35,9 @@ export class UsersController {
   getNicknameAvailability(
     @Query('nickname') nickname: unknown,
   ): Promise<NicknameAvailabilityResponse> {
-    return this.usersService.checkNicknameAvailability(normalizeNickname(nickname));
+    return this.usersService.checkNicknameAvailability(
+      normalizeNickname(nickname),
+    );
   }
 
   @Get('me')
@@ -37,35 +56,51 @@ export class UsersController {
       throw new BadRequestException('Invalid profile update');
     }
     const input = body as Record<string, unknown>;
-    if (Object.keys(input).some((key) => key !== 'nickname' && key !== 'profileImageKey') ||
-        (!Object.hasOwn(input, 'nickname') && !Object.hasOwn(input, 'profileImageKey'))) {
+    if (
+      Object.keys(input).some(
+        (key) => key !== 'nickname' && key !== 'profileImageKey',
+      ) ||
+      (!Object.hasOwn(input, 'nickname') &&
+        !Object.hasOwn(input, 'profileImageKey'))
+    ) {
       throw new BadRequestException('Provide nickname or profileImageKey only');
     }
     const update: UpdateUserProfile = {};
-    if (Object.hasOwn(input, 'nickname')) update.nickname = normalizeNickname(input.nickname);
+    if (Object.hasOwn(input, 'nickname'))
+      update.nickname = normalizeNickname(input.nickname);
     if (Object.hasOwn(input, 'profileImageKey')) {
-      if (input.profileImageKey !== null &&
-          (typeof input.profileImageKey !== 'string' || [...input.profileImageKey].length > 500)) {
-        throw new BadRequestException('profileImageKey must be null or a string of at most 500 characters');
+      if (
+        input.profileImageKey !== null &&
+        (typeof input.profileImageKey !== 'string' ||
+          [...input.profileImageKey].length > 500)
+      ) {
+        throw new BadRequestException(
+          'profileImageKey must be null or a string of at most 500 characters',
+        );
       }
       update.profileImageKey = input.profileImageKey as string | null;
     }
     return this.usersService.updateProfile(
-      id, update, typeof requestId === 'string' && requestId.trim() ? requestId : undefined,
+      id,
+      update,
+      typeof requestId === 'string' && requestId.trim() ? requestId : undefined,
     );
   }
 
   @Post('me/term-consents')
   @HttpCode(200)
   consentToTerms(
-    @Headers('x-user-id') userId: unknown, @Body() body: unknown,
+    @Headers('x-user-id') userId: unknown,
+    @Body() body: unknown,
   ): Promise<TermConsentsResponse> {
     const id = requireUserId(userId);
     return this.usersService.consentToTerms(id, parseTermIds(body));
   }
 
   @Get('me/badges')
-  getBadges(@Headers('x-user-id') userId: unknown): Promise<UserBadgesResponse> {
+  getBadges(
+    @Headers('x-user-id') userId: unknown,
+  ): Promise<UserBadgesResponse> {
     return this.usersService.getBadges(requireUserId(userId));
   }
 
@@ -76,7 +111,8 @@ export class UsersController {
     @Headers('x-request-id') requestId: unknown,
   ): Promise<WithdrawalResponse> {
     return this.usersService.requestWithdrawal(
-      requireUserId(userId), typeof requestId === 'string' && requestId.trim() ? requestId : undefined,
+      requireUserId(userId),
+      typeof requestId === 'string' && requestId.trim() ? requestId : undefined,
     );
   }
 }

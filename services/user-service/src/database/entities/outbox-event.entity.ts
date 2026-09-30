@@ -2,7 +2,11 @@ import { Column, Entity, PrimaryColumn } from 'typeorm';
 
 @Entity({ name: 'outbox_events' })
 export class OutboxEventEntity {
-  @PrimaryColumn({ name: 'event_id', type: 'uuid', primaryKeyConstraintName: 'pk_outbox_events' })
+  @PrimaryColumn({
+    name: 'event_id',
+    type: 'uuid',
+    primaryKeyConstraintName: 'pk_outbox_events',
+  })
   eventId!: string;
 
   @Column({ name: 'aggregate_id', type: 'bigint' })

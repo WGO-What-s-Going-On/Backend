@@ -14,21 +14,33 @@ export class RedisStreamsPublisher {
     // Same endpoint as auth for now, but an independent connection bounds publisher I/O
     // without changing session behavior. Only polling retries XADD, not the Redis client.
     this.redis = new Redis(url, {
-      lazyConnect: true, connectTimeout: timeout, commandTimeout: timeout,
-      enableOfflineQueue: false, maxRetriesPerRequest: 0,
-      autoResendUnfulfilledCommands: false, retryStrategy: () => null,
+      lazyConnect: true,
+      connectTimeout: timeout,
+      commandTimeout: timeout,
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: 0,
+      autoResendUnfulfilledCommands: false,
+      retryStrategy: () => null,
     });
     this.redis.on('error', () => undefined);
   }
 
   async connect(): Promise<void> {
-    if (this.redis.status === 'wait' || this.redis.status === 'end') await this.redis.connect();
+    if (this.redis.status === 'wait' || this.redis.status === 'end')
+      await this.redis.connect();
   }
 
   async publish(envelope: Record<string, unknown>): Promise<void> {
-    const streamId = await this.redis.xadd(USER_EVENTS_STREAM, '*',
-      'eventId', envelope.eventId as string, 'eventType', envelope.type as string,
-      'data', JSON.stringify(envelope));
+    const streamId = await this.redis.xadd(
+      USER_EVENTS_STREAM,
+      '*',
+      'eventId',
+      envelope.eventId as string,
+      'eventType',
+      envelope.type as string,
+      'data',
+      JSON.stringify(envelope),
+    );
     if (!streamId) throw new Error('Redis did not return a Stream ID');
   }
 

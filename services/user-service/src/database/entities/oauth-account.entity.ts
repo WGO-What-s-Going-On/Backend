@@ -1,12 +1,25 @@
-import { Column, Entity, JoinColumn, ManyToOne, PrimaryColumn, Unique } from 'typeorm';
+import {
+  Column,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryColumn,
+  Unique,
+} from 'typeorm';
 
 import { UserEntity } from './user.entity.js';
 
 @Entity({ name: 'oauth_accounts' })
-@Unique('uq_oauth_accounts_provider_provider_user_id', ['provider', 'providerUserId'])
+@Unique('uq_oauth_accounts_provider_provider_user_id', [
+  'provider',
+  'providerUserId',
+])
 @Unique('uq_oauth_accounts_user_id_provider', ['userId', 'provider'])
 export class OAuthAccountEntity {
-  @PrimaryColumn({ type: 'uuid', primaryKeyConstraintName: 'pk_oauth_accounts' })
+  @PrimaryColumn({
+    type: 'uuid',
+    primaryKeyConstraintName: 'pk_oauth_accounts',
+  })
   id!: string;
 
   @Column({ name: 'user_id', type: 'bigint' })

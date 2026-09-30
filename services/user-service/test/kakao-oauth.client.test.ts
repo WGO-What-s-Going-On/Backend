@@ -9,20 +9,26 @@ describe('KakaoOAuthClient', () => {
   });
 
   it('exchanges the authorization code using the Kakao form contract', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ access_token: 'kakao-access-token' }), { status: 200 }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ access_token: 'kakao-access-token' }), {
+          status: 200,
+        }),
+      );
     vi.stubGlobal('fetch', fetchMock);
 
     const client = createClient();
-    await expect(client.exchangeAuthorizationCode('authorization-code')).resolves.toBe(
-      'kakao-access-token',
-    );
+    await expect(
+      client.exchangeAuthorizationCode('authorization-code'),
+    ).resolves.toBe('kakao-access-token');
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://kauth.kakao.com/oauth/token');
     expect(init.method).toBe('POST');
-    expect(init.headers).toEqual({ 'content-type': 'application/x-www-form-urlencoded' });
+    expect(init.headers).toEqual({
+      'content-type': 'application/x-www-form-urlencoded',
+    });
     expect((init.body as URLSearchParams).toString()).toBe(
       'grant_type=authorization_code&client_id=kakao-rest-api-key&redirect_uri=https%3A%2F%2Fexample.test%2Fcallback&code=authorization-code&client_secret=kakao-client-secret',
     );
@@ -37,11 +43,16 @@ describe('KakaoOAuthClient', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const client = createClient();
-    await expect(client.getUserId('kakao-access-token')).resolves.toBe('900719925474099312345');
+    await expect(client.getUserId('kakao-access-token')).resolves.toBe(
+      '900719925474099312345',
+    );
 
-    expect(fetchMock).toHaveBeenCalledWith('https://kapi.kakao.com/v2/user/me', {
-      headers: { authorization: 'Bearer kakao-access-token' },
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://kapi.kakao.com/v2/user/me',
+      {
+        headers: { authorization: 'Bearer kakao-access-token' },
+      },
+    );
   });
 
   it('maps Kakao and network failures to unauthorized', async () => {
@@ -52,17 +63,27 @@ describe('KakaoOAuthClient', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const client = createClient();
-    await expect(client.exchangeAuthorizationCode('invalid')).rejects.toMatchObject({ status: 401 });
-    await expect(client.getUserId('token')).rejects.toMatchObject({ status: 401 });
+    await expect(
+      client.exchangeAuthorizationCode('invalid'),
+    ).rejects.toMatchObject({ status: 401 });
+    await expect(client.getUserId('token')).rejects.toMatchObject({
+      status: 401,
+    });
   });
 
   it('rejects a response without a top-level Kakao id', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(new Response('{"kakao_account":{"id":123}}', { status: 200 })),
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response('{"kakao_account":{"id":123}}', { status: 200 }),
+        ),
     );
 
-    await expect(createClient().getUserId('token')).rejects.toMatchObject({ status: 401 });
+    await expect(createClient().getUserId('token')).rejects.toMatchObject({
+      status: 401,
+    });
   });
 });
 

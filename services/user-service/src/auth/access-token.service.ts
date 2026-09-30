@@ -11,7 +11,9 @@ export class AccessTokenService {
   private readonly audience: string;
 
   constructor(config: ConfigService) {
-    this.secret = new TextEncoder().encode(requiredConfig(config, 'auth.jwt.accessSecret'));
+    this.secret = new TextEncoder().encode(
+      requiredConfig(config, 'auth.jwt.accessSecret'),
+    );
     this.issuer = requiredConfig(config, 'auth.jwt.issuer');
     this.audience = requiredConfig(config, 'auth.jwt.audience');
     this.expiresIn = positiveIntegerConfig(config, 'auth.jwt.accessTtlSeconds');

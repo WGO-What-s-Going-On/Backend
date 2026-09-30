@@ -25,7 +25,12 @@ export class UserEntity {
   @Column({ type: 'varchar', length: 30 })
   nickname!: string;
 
-  @Column({ name: 'profile_image_key', type: 'varchar', length: 500, nullable: true })
+  @Column({
+    name: 'profile_image_key',
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+  })
   profileImageKey!: string | null;
 
   @Column({ type: 'varchar', length: 30 })
@@ -34,16 +39,28 @@ export class UserEntity {
   @Column({ name: 'suspended_until', type: 'timestamptz', nullable: true })
   suspendedUntil!: Date | null;
 
-  @Column({ name: 'withdrawal_requested_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'withdrawal_requested_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   withdrawalRequestedAt!: Date | null;
 
-  @Column({ name: 'withdrawal_deadline_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'withdrawal_deadline_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   withdrawalDeadlineAt!: Date | null;
 
   @Column({ name: 'withdrawn_at', type: 'timestamptz', nullable: true })
   withdrawnAt!: Date | null;
 
-  @Column({ name: 'onboarding_completed_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'onboarding_completed_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   onboardingCompletedAt!: Date | null;
 
   @Column({ name: 'created_at', type: 'timestamptz' })

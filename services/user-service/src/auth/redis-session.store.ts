@@ -16,7 +16,10 @@ export class RedisSessionStore implements OnModuleDestroy {
 
   constructor(config: ConfigService) {
     const redisUrl = requiredConfig(config, 'redis.url');
-    this.refreshTtlSeconds = positiveIntegerConfig(config, 'auth.refreshTtlSeconds');
+    this.refreshTtlSeconds = positiveIntegerConfig(
+      config,
+      'auth.refreshTtlSeconds',
+    );
     this.redis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
     this.redis.on('error', () => undefined);
   }
@@ -47,8 +50,12 @@ export class RedisSessionStore implements OnModuleDestroy {
     const raw = await this.redis.get(RedisSessionStore.sessionKey(sessionId));
     if (raw === null) return null;
     const session: AuthSession = JSON.parse(raw);
-    if (session.sessionId !== sessionId || typeof session.userId !== 'string' ||
-        typeof session.refreshTokenHash !== 'string' || typeof session.createdAt !== 'string') {
+    if (
+      session.sessionId !== sessionId ||
+      typeof session.userId !== 'string' ||
+      typeof session.refreshTokenHash !== 'string' ||
+      typeof session.createdAt !== 'string'
+    ) {
       throw new Error('Invalid stored authentication session');
     }
     return session;
@@ -57,7 +64,8 @@ export class RedisSessionStore implements OnModuleDestroy {
   async rotate(session: AuthSession, newHash: string): Promise<boolean> {
     // CAS prevents concurrent refreshes and logout races from reviving an old token/session.
     // KEEPTTL preserves the exact expiration deadline rather than resetting the lifetime.
-    const result = await this.redis.eval(`
+    const result = await this.redis.eval(
+      `
       local raw = redis.call('GET', KEYS[1])
       if not raw or redis.call('TTL', KEYS[1]) <= 0 then return 0 end
       local session = cjson.decode(raw)
@@ -65,20 +73,31 @@ export class RedisSessionStore implements OnModuleDestroy {
       session.refreshTokenHash = ARGV[3]
       redis.call('SET', KEYS[1], cjson.encode(session), 'KEEPTTL')
       return 1
-    `, 1, RedisSessionStore.sessionKey(session.sessionId),
-    session.refreshTokenHash, session.userId, newHash);
+    `,
+      1,
+      RedisSessionStore.sessionKey(session.sessionId),
+      session.refreshTokenHash,
+      session.userId,
+      newHash,
+    );
     return result === 1;
   }
 
   async deleteSession(userId: string, sessionId: string): Promise<boolean> {
-    const result = await this.redis.eval(`
+    const result = await this.redis.eval(
+      `
       local raw = redis.call('GET', KEYS[1])
       if raw and cjson.decode(raw).userId ~= ARGV[1] then return 0 end
       redis.call('SREM', KEYS[2], ARGV[2])
       redis.call('DEL', KEYS[1])
       return 1
-    `, 2, RedisSessionStore.sessionKey(sessionId),
-    RedisSessionStore.userSessionsKey(userId), userId, sessionId);
+    `,
+      2,
+      RedisSessionStore.sessionKey(sessionId),
+      RedisSessionStore.userSessionsKey(userId),
+      userId,
+      sessionId,
+    );
     // Redis automatically deletes an empty Set after SREM.
     return result === 1;
   }
@@ -89,14 +108,19 @@ export class RedisSessionStore implements OnModuleDestroy {
 
   async deleteAllSessionsForUser(userId: string): Promise<void> {
     // Read and delete atomically so session rotation cannot recreate a deleted session.
-    await this.redis.eval(`
+    await this.redis.eval(
+      `
       local sessions = redis.call('SMEMBERS', KEYS[1])
       for _, sessionId in ipairs(sessions) do
         redis.call('DEL', ARGV[1] .. sessionId)
       end
       redis.call('DEL', KEYS[1])
       return 1
-    `, 1, RedisSessionStore.userSessionsKey(userId), 'auth:session:');
+    `,
+      1,
+      RedisSessionStore.userSessionsKey(userId),
+      'auth:session:',
+    );
   }
 
   static userSessionsKey(userId: string): string {

@@ -76,24 +76,33 @@ describe('GET /api/v1/terms', () => {
       await testDataSource.destroy();
     }
     if (adminDataSource?.isInitialized) {
-      await adminDataSource.query(`DROP DATABASE "${testDatabaseName}" WITH (FORCE)`);
+      await adminDataSource.query(
+        `DROP DATABASE "${testDatabaseName}" WITH (FORCE)`,
+      );
       await adminDataSource.destroy();
     }
   }, 30_000);
 
   beforeEach(async () => {
-    await testDataSource.query('TRUNCATE TABLE "terms" RESTART IDENTITY CASCADE');
+    await testDataSource.query(
+      'TRUNCATE TABLE "terms" RESTART IDENTITY CASCADE',
+    );
   });
 
   it('returns an empty list when no terms exist', async () => {
-    await request(app.getHttpServer()).get('/api/v1/terms').expect(200).expect({ terms: [] });
+    await request(app.getHttpServer())
+      .get('/api/v1/terms')
+      .expect(200)
+      .expect({ terms: [] });
   });
 
   it('returns a currently effective term', async () => {
     const effectiveAt = new Date(Date.now() - 60_000);
     await insertTerm({ code: 'SERVICE', version: '1.0', effectiveAt });
 
-    const response = await request(app.getHttpServer()).get('/api/v1/terms').expect(200);
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/terms')
+      .expect(200);
 
     expect(response.body).toEqual({
       terms: [
@@ -121,10 +130,15 @@ describe('GET /api/v1/terms', () => {
       effectiveAt: new Date(Date.now() - 60_000),
     });
 
-    const response = await request(app.getHttpServer()).get('/api/v1/terms').expect(200);
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/terms')
+      .expect(200);
 
     expect(response.body.terms).toHaveLength(1);
-    expect(response.body.terms[0]).toMatchObject({ code: 'SERVICE', version: '1.0' });
+    expect(response.body.terms[0]).toMatchObject({
+      code: 'SERVICE',
+      version: '1.0',
+    });
   });
 
   it('excludes a future term', async () => {
@@ -134,22 +148,29 @@ describe('GET /api/v1/terms', () => {
       effectiveAt: new Date(Date.now() + 86_400_000),
     });
 
-    await request(app.getHttpServer()).get('/api/v1/terms').expect(200).expect({ terms: [] });
+    await request(app.getHttpServer())
+      .get('/api/v1/terms')
+      .expect(200)
+      .expect({ terms: [] });
   });
 
   it('returns one term per code ordered by code', async () => {
     const effectiveAt = new Date(Date.now() - 60_000);
     await insertTerm({ code: 'SERVICE', version: '1.0', effectiveAt });
     await insertTerm({ code: 'LOCATION', version: '1.0', effectiveAt });
-    await insertTerm({ code: 'PRIVACY_COLLECTION_USE', version: '1.0', effectiveAt });
+    await insertTerm({
+      code: 'PRIVACY_COLLECTION_USE',
+      version: '1.0',
+      effectiveAt,
+    });
 
-    const response = await request(app.getHttpServer()).get('/api/v1/terms').expect(200);
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/terms')
+      .expect(200);
 
-    expect(response.body.terms.map((term: { code: string }) => term.code)).toEqual([
-      'LOCATION',
-      'PRIVACY_COLLECTION_USE',
-      'SERVICE',
-    ]);
+    expect(
+      response.body.terms.map((term: { code: string }) => term.code),
+    ).toEqual(['LOCATION', 'PRIVACY_COLLECTION_USE', 'SERVICE']);
   });
 
   it('returns a BIGINT termId as a precision-safe string', async () => {
@@ -163,7 +184,9 @@ describe('GET /api/v1/terms', () => {
       createdAt: new Date(),
     });
 
-    const response = await request(app.getHttpServer()).get('/api/v1/terms').expect(200);
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/terms')
+      .expect(200);
 
     expect(response.body.terms[0].termId).toBe('9007199254740993');
   });

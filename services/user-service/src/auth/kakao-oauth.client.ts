@@ -37,7 +37,11 @@ export class KakaoOAuthClient {
       }
 
       const payload: unknown = await response.json();
-      if (!isRecord(payload) || typeof payload.access_token !== 'string' || !payload.access_token) {
+      if (
+        !isRecord(payload) ||
+        typeof payload.access_token !== 'string' ||
+        !payload.access_token
+      ) {
         throw new UnauthorizedException('Kakao authentication failed');
       }
 
@@ -94,7 +98,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function extractPrecisionSafeId(responseText: string, parsedId: unknown): string | undefined {
+function extractPrecisionSafeId(
+  responseText: string,
+  parsedId: unknown,
+): string | undefined {
   if (typeof parsedId === 'string') {
     return /^[0-9]+$/.test(parsedId) ? parsedId : undefined;
   }

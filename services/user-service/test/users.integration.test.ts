@@ -3,7 +3,15 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import request from 'supertest';
 import { DataSource, SelectQueryBuilder, type Repository } from 'typeorm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { OutboxEventEntity } from '../src/database/entities/outbox-event.entity.js';
 import { TermEntity } from '../src/database/entities/term.entity.js';
 import { UserTermConsentEntity } from '../src/database/entities/user-term-consent.entity.js';
@@ -12,7 +20,10 @@ import { UserBadgeEntity } from '../src/database/entities/user-badge.entity.js';
 
 import { configuration } from '../src/config/configuration.js';
 import { USER_SERVICE_ENTITIES } from '../src/database/entities/index.js';
-import { UserEntity, UserStatus } from '../src/database/entities/user.entity.js';
+import {
+  UserEntity,
+  UserStatus,
+} from '../src/database/entities/user.entity.js';
 import { InitialUserServiceSchema1789990707351 } from '../src/database/migrations/1789990707351-InitialUserServiceSchema.js';
 import { AddTermsCodeEffectiveAtIndex1789993249262 } from '../src/database/migrations/1789993249262-AddTermsCodeEffectiveAtIndex.js';
 import { UsersController } from '../src/users/users.controller.js';
@@ -84,14 +95,18 @@ describe('Users API integration', () => {
       await testDataSource.destroy();
     }
     if (adminDataSource?.isInitialized) {
-      await adminDataSource.query(`DROP DATABASE "${testDatabaseName}" WITH (FORCE)`);
+      await adminDataSource.query(
+        `DROP DATABASE "${testDatabaseName}" WITH (FORCE)`,
+      );
       await adminDataSource.destroy();
     }
   }, 30_000);
 
   beforeEach(async () => {
     vi.restoreAllMocks();
-    await testDataSource.query('TRUNCATE TABLE "users" RESTART IDENTITY CASCADE');
+    await testDataSource.query(
+      'TRUNCATE TABLE "users" RESTART IDENTITY CASCADE',
+    );
     await testDataSource.query('TRUNCATE TABLE "outbox_events"');
   });
 
@@ -106,14 +121,14 @@ describe('Users API integration', () => {
   it('generates consecutive decimal string user IDs within the safe integer range', async () => {
     expect(await insertUser('FirstUser')).toBe('1');
     expect(await insertUser('SecondUser')).toBe('2');
-    const sequences = await testDataSource.query(
+    const sequences = (await testDataSource.query(
       `SELECT max_value::text FROM pg_sequences WHERE schemaname = 'public' AND sequencename = 'users_id_seq'`,
-    ) as Array<{ max_value: string }>;
+    )) as Array<{ max_value: string }>;
     expect(sequences[0]?.max_value).toBe('9007199254740991');
   });
 
   it('uses BIGINT for the user primary key, every user foreign key, and the outbox aggregate ID', async () => {
-    const columns = await testDataSource.query(
+    const columns = (await testDataSource.query(
       `SELECT table_name, column_name, data_type, is_identity, identity_generation
        FROM information_schema.columns
        WHERE table_schema = 'public'
@@ -127,22 +142,42 @@ describe('Users API integration', () => {
            ('outbox_events', 'aggregate_id')
          )
        ORDER BY table_name, column_name`,
-    ) as Array<{ table_name: string; column_name: string; data_type: string;
-      is_identity: string; identity_generation: string | null }>;
+    )) as Array<{
+      table_name: string;
+      column_name: string;
+      data_type: string;
+      is_identity: string;
+      identity_generation: string | null;
+    }>;
 
     expect(columns).toHaveLength(7);
-    expect(columns.every(({ data_type: dataType }) => dataType === 'bigint')).toBe(true);
-    expect(columns.find(({ table_name: tableName, column_name: columnName }) =>
-      tableName === 'users' && columnName === 'id')).toMatchObject({
-      is_identity: 'YES', identity_generation: 'BY DEFAULT',
+    expect(
+      columns.every(({ data_type: dataType }) => dataType === 'bigint'),
+    ).toBe(true);
+    expect(
+      columns.find(
+        ({ table_name: tableName, column_name: columnName }) =>
+          tableName === 'users' && columnName === 'id',
+      ),
+    ).toMatchObject({
+      is_identity: 'YES',
+      identity_generation: 'BY DEFAULT',
     });
   });
 
   it.each(['0', '-1', '9007199254740992'])(
-    'rejects manually inserted out-of-range user ID %s', async (id) => {
+    'rejects manually inserted out-of-range user ID %s',
+    async (id) => {
       const now = new Date();
-      await expect(usersRepository.insert({ id, nickname: `invalid_${id}`, status: UserStatus.ACTIVE,
-        createdAt: now, updatedAt: now })).rejects.toMatchObject({ driverError: { code: '23514' } });
+      await expect(
+        usersRepository.insert({
+          id,
+          nickname: `invalid_${id}`,
+          status: UserStatus.ACTIVE,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      ).rejects.toMatchObject({ driverError: { code: '23514' } });
     },
   );
 
@@ -199,51 +234,103 @@ describe('Users API integration', () => {
   it('returns only the public profile and derives onboarding status', async () => {
     const id = await insertUser('Temporary');
     const user = await usersRepository.findOneByOrFail({ id });
-    await request(app.getHttpServer()).get('/api/v1/users/me').set('x-user-id', id)
-      .expect(200).expect({ userId: id, nickname: 'Temporary', profileImageKey: null,
-        status: 'ACTIVE', onboardingRequired: true, createdAt: user.createdAt.toISOString() });
+    await request(app.getHttpServer())
+      .get('/api/v1/users/me')
+      .set('x-user-id', id)
+      .expect(200)
+      .expect({
+        userId: id,
+        nickname: 'Temporary',
+        profileImageKey: null,
+        status: 'ACTIVE',
+        onboardingRequired: true,
+        createdAt: user.createdAt.toISOString(),
+      });
     await usersRepository.update(id, { onboardingCompletedAt: new Date() });
-    const response = await request(app.getHttpServer()).get('/api/v1/users/me').set('x-user-id', id).expect(200);
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/users/me')
+      .set('x-user-id', id)
+      .expect(200);
     expect(response.body.onboardingRequired).toBe(false);
   });
 
   it('requires context and returns 404 for unknown users', async () => {
     for (const method of ['get', 'patch'] as const) {
-      await request(app.getHttpServer())[method]('/api/v1/users/me').send({ nickname: 'Valid' }).expect(401);
-      await request(app.getHttpServer())[method]('/api/v1/users/me').set('x-user-id', 'invalid')
-        .send({ nickname: 'Valid' }).expect(401);
-      await request(app.getHttpServer())[method]('/api/v1/users/me').set('x-user-id', '9007199254740991')
-        .send({ nickname: 'Valid' }).expect(404);
+      await request(app.getHttpServer())
+        [method]('/api/v1/users/me')
+        .send({ nickname: 'Valid' })
+        .expect(401);
+      await request(app.getHttpServer())
+        [method]('/api/v1/users/me')
+        .set('x-user-id', 'invalid')
+        .send({ nickname: 'Valid' })
+        .expect(401);
+      await request(app.getHttpServer())
+        [method]('/api/v1/users/me')
+        .set('x-user-id', '9007199254740991')
+        .send({ nickname: 'Valid' })
+        .expect(404);
     }
   });
 
   it('completes onboarding and writes exactly one complete USER_CREATED envelope', async () => {
     const id = await insertUser('Temporary');
-    const response = await patch(id, { nickname: '  FinalName  ', profileImageKey: 'profiles/image' })
-      .set('x-request-id', 'onboarding-request').expect(200);
-    expect(response.body).toMatchObject({ nickname: 'FinalName', profileImageKey: 'profiles/image', onboardingRequired: false });
+    const response = await patch(id, {
+      nickname: '  FinalName  ',
+      profileImageKey: 'profiles/image',
+    })
+      .set('x-request-id', 'onboarding-request')
+      .expect(200);
+    expect(response.body).toMatchObject({
+      nickname: 'FinalName',
+      profileImageKey: 'profiles/image',
+      onboardingRequired: false,
+    });
     const user = await usersRepository.findOneByOrFail({ id });
     expect(user.onboardingCompletedAt).toBeInstanceOf(Date);
     const events = await outbox();
     expect(events).toHaveLength(1);
     const event = events[0]!;
-    expect(event).toMatchObject({ aggregateId: id, eventType: 'USER_CREATED', status: 'PENDING', publishAttempts: 0, publishedAt: null });
-    expect(event.payload).toEqual({ eventId: event.eventId, type: 'USER_CREATED', target: { type: 'USER', id },
-      occurredAt: event.createdAt.toISOString(), version: 1,
-      producer: 'user-service', correlationId: 'onboarding-request',
-      payload: { userId: id, nickname: 'FinalName', profileImageKey: 'profiles/image' } });
+    expect(event).toMatchObject({
+      aggregateId: id,
+      eventType: 'USER_CREATED',
+      status: 'PENDING',
+      publishAttempts: 0,
+      publishedAt: null,
+    });
+    expect(event.payload).toEqual({
+      eventId: event.eventId,
+      type: 'USER_CREATED',
+      target: { type: 'USER', id },
+      occurredAt: event.createdAt.toISOString(),
+      version: 1,
+      producer: 'user-service',
+      correlationId: 'onboarding-request',
+      payload: {
+        userId: id,
+        nickname: 'FinalName',
+        profileImageKey: 'profiles/image',
+      },
+    });
   });
 
   it('keeps image-only updates in onboarding without events', async () => {
     const id = await insertUser('Temporary');
-    const response = await patch(id, { profileImageKey: 'profiles/image' }).expect(200);
+    const response = await patch(id, {
+      profileImageKey: 'profiles/image',
+    }).expect(200);
     expect(response.body.onboardingRequired).toBe(true);
-    expect((await usersRepository.findOneByOrFail({ id })).onboardingCompletedAt).toBeNull();
+    expect(
+      (await usersRepository.findOneByOrFail({ id })).onboardingCompletedAt,
+    ).toBeNull();
     expect(await outbox()).toHaveLength(0);
   });
 
-  it.each([{ nickname: 'Changed' }, { profileImageKey: 'profiles/image' },
-    { nickname: 'Changed', profileImageKey: 'profiles/image' }])('creates one profile update for %j', async (input) => {
+  it.each([
+    { nickname: 'Changed' },
+    { profileImageKey: 'profiles/image' },
+    { nickname: 'Changed', profileImageKey: 'profiles/image' },
+  ])('creates one profile update for %j', async (input) => {
     const id = await insertUser('Original');
     await usersRepository.update(id, { onboardingCompletedAt: new Date() });
     await patch(id, input).expect(200);
@@ -264,7 +351,9 @@ describe('Users API integration', () => {
       occurredAt: event.createdAt.toISOString(),
       version: 1,
       producer: 'user-service',
-      correlationId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+      correlationId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
       payload: {
         userId: id,
         nickname: input.nickname ?? 'Original',
@@ -272,8 +361,12 @@ describe('Users API integration', () => {
       },
     });
     expect(event.payload.occurredAt).toEqual(expect.any(String));
-    expect(event.payload.occurredAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-    expect(new Date(event.payload.occurredAt as string).toISOString()).toBe(event.payload.occurredAt);
+    expect(event.payload.occurredAt).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
+    expect(new Date(event.payload.occurredAt as string).toISOString()).toBe(
+      event.payload.occurredAt,
+    );
     await patch(id, input).expect(200);
     expect(await outbox()).toHaveLength(1);
   });
@@ -281,11 +374,17 @@ describe('Users API integration', () => {
   it('accepts self nickname, case changes and explicit image removal', async () => {
     const id = await insertUser('DaeJun');
     await patch(id, { nickname: 'DaeJun' }).expect(200);
-    await patch(id, { nickname: '  DaeJun  ', profileImageKey: null }).expect(200);
+    await patch(id, { nickname: '  DaeJun  ', profileImageKey: null }).expect(
+      200,
+    );
     expect(await outbox()).toHaveLength(1);
-    await patch(id, { nickname: 'DAEJUN', profileImageKey: 'image' }).expect(200);
+    await patch(id, { nickname: 'DAEJUN', profileImageKey: 'image' }).expect(
+      200,
+    );
     await patch(id, { profileImageKey: null }).expect(200);
-    expect((await usersRepository.findOneByOrFail({ id })).profileImageKey).toBeNull();
+    expect(
+      (await usersRepository.findOneByOrFail({ id })).profileImageKey,
+    ).toBeNull();
     expect(await outbox()).toHaveLength(3);
   });
 
@@ -299,15 +398,27 @@ describe('Users API integration', () => {
   it('maps the actual DB unique constraint to 409 after a stale precheck', async () => {
     await insertUser('DaeJun');
     const id = await insertUser('Other');
-    vi.spyOn(SelectQueryBuilder.prototype, 'getExists').mockResolvedValue(false);
+    vi.spyOn(SelectQueryBuilder.prototype, 'getExists').mockResolvedValue(
+      false,
+    );
     await patch(id, { nickname: 'DAEJUN' }).expect(409);
-    expect((await usersRepository.findOneByOrFail({ id })).nickname).toBe('Other');
+    expect((await usersRepository.findOneByOrFail({ id })).nickname).toBe(
+      'Other',
+    );
     expect(await outbox()).toHaveLength(0);
   });
 
-  it.each([{}, { nickname: '' }, { nickname: '  ' }, { nickname: 'a'.repeat(31) },
-    { nickname: null }, { nickname: 1 }, { profileImageKey: 1 },
-    { profileImageKey: 'a'.repeat(501) }, { status: 'ACTIVE' }])('rejects invalid PATCH %j', async (input) => {
+  it.each([
+    {},
+    { nickname: '' },
+    { nickname: '  ' },
+    { nickname: 'a'.repeat(31) },
+    { nickname: null },
+    { nickname: 1 },
+    { profileImageKey: 1 },
+    { profileImageKey: 'a'.repeat(501) },
+    { status: 'ACTIVE' },
+  ])('rejects invalid PATCH %j', async (input) => {
     const id = await insertUser('Original');
     await patch(id, input).expect(400);
     expect(await outbox()).toHaveLength(0);
@@ -315,33 +426,49 @@ describe('Users API integration', () => {
 
   it('serializes concurrent onboarding patches into one USER_CREATED', async () => {
     const id = await insertUser('Temporary');
-    await Promise.all([patch(id, { nickname: 'First' }).expect(200), patch(id, { nickname: 'Second' }).expect(200)]);
+    await Promise.all([
+      patch(id, { nickname: 'First' }).expect(200),
+      patch(id, { nickname: 'Second' }).expect(200),
+    ]);
     const events = await outbox();
-    expect(events.filter((event) => event.eventType === 'USER_CREATED')).toHaveLength(1);
-    expect(events.filter((event) => event.eventType === 'USER_PROFILE_UPDATED')).toHaveLength(1);
+    expect(
+      events.filter((event) => event.eventType === 'USER_CREATED'),
+    ).toHaveLength(1);
+    expect(
+      events.filter((event) => event.eventType === 'USER_PROFILE_UPDATED'),
+    ).toHaveLength(1);
   });
 
   it('rolls back the profile update when Outbox INSERT fails', async () => {
     const id = await insertUser('Temporary');
     const before = await usersRepository.findOneByOrFail({ id });
     // Failure injection is restricted to this test run's temporary database.
-    await testDataSource.query('ALTER TABLE outbox_events ADD CONSTRAINT test_reject_event CHECK (false)');
+    await testDataSource.query(
+      'ALTER TABLE outbox_events ADD CONSTRAINT test_reject_event CHECK (false)',
+    );
     try {
       await patch(id, { nickname: 'FinalName' }).expect(500);
       expect(await usersRepository.findOneByOrFail({ id })).toEqual(before);
       expect(await outbox()).toHaveLength(0);
     } finally {
-      await testDataSource.query('ALTER TABLE outbox_events DROP CONSTRAINT test_reject_event');
+      await testDataSource.query(
+        'ALTER TABLE outbox_events DROP CONSTRAINT test_reject_event',
+      );
     }
   });
 
   function patch(id: string, body: object): request.Test {
-    return request(app.getHttpServer()).patch('/api/v1/users/me').set('x-user-id', id).send(body);
+    return request(app.getHttpServer())
+      .patch('/api/v1/users/me')
+      .set('x-user-id', id)
+      .send(body);
   }
 
   describe('term consents and badges', () => {
     beforeEach(async () => {
-      await testDataSource.query('TRUNCATE TABLE "terms", "badges" RESTART IDENTITY CASCADE');
+      await testDataSource.query(
+        'TRUNCATE TABLE "terms", "badges" RESTART IDENTITY CASCADE',
+      );
     });
 
     it('saves all required and optional consents without changing the user or creating events', async () => {
@@ -349,7 +476,9 @@ describe('Users API integration', () => {
       const before = await usersRepository.findOneByOrFail({ id });
       await seedTerms();
       const startedAt = Date.now();
-      await consent(id, [1, 2, 3]).expect(200).expect({ termIds: ['1', '2', '3'] });
+      await consent(id, [1, 2, 3])
+        .expect(200)
+        .expect({ termIds: ['1', '2', '3'] });
       const rows = await consentRows(id);
       expect(rows).toHaveLength(3);
       expect(rows.map((row) => row.termId)).toEqual(['1', '2', '3']);
@@ -366,9 +495,13 @@ describe('Users API integration', () => {
     it('preserves active agreement times on repeated and duplicate input', async () => {
       const id = await insertUser('Consenting');
       await seedTerms();
-      await consent(id, [1, '1', '01', 2, 2]).expect(200).expect({ termIds: ['1', '2'] });
+      await consent(id, [1, '1', '01', 2, 2])
+        .expect(200)
+        .expect({ termIds: ['1', '2'] });
       const earlier = new Date('2025-01-01T00:00:00Z');
-      await testDataSource.getRepository(UserTermConsentEntity).update({ userId: id }, { agreedAt: earlier });
+      await testDataSource
+        .getRepository(UserTermConsentEntity)
+        .update({ userId: id }, { agreedAt: earlier });
       const before = await consentRows(id);
       await consent(id, [1, 2]).expect(200);
       expect(await consentRows(id)).toEqual(before);
@@ -377,7 +510,10 @@ describe('Users API integration', () => {
     it('serializes concurrent identical consent submissions', async () => {
       const id = await insertUser('Consenting');
       await seedTerms();
-      await Promise.all([consent(id, [1, 2]).expect(200), consent(id, [1, 2]).expect(200)]);
+      await Promise.all([
+        consent(id, [1, 2]).expect(200),
+        consent(id, [1, 2]).expect(200),
+      ]);
       expect(await consentRows(id)).toHaveLength(2);
     });
 
@@ -386,21 +522,28 @@ describe('Users API integration', () => {
       await seedTerms();
       await consent(id, [1, 2]).expect(200);
       const repository = testDataSource.getRepository(UserTermConsentEntity);
-      await repository.update({ userId: id, termId: '1' }, {
-        agreedAt: new Date('2025-01-01T00:00:00Z'), revokedAt: new Date('2025-01-02T00:00:00Z'),
-      });
+      await repository.update(
+        { userId: id, termId: '1' },
+        {
+          agreedAt: new Date('2025-01-01T00:00:00Z'),
+          revokedAt: new Date('2025-01-02T00:00:00Z'),
+        },
+      );
       const before = await consentRows(id);
       await consent(id, [1, 2]).expect(200);
       const after = await consentRows(id);
       expect(after).toHaveLength(2);
       expect(after[0]!.id).toBe(before[0]!.id);
       expect(after[0]!.revokedAt).toBeNull();
-      expect(after[0]!.agreedAt.getTime()).toBeGreaterThan(before[0]!.agreedAt.getTime());
+      expect(after[0]!.agreedAt.getTime()).toBeGreaterThan(
+        before[0]!.agreedAt.getTime(),
+      );
       expect(after[1]).toEqual(before[1]);
     });
 
     it.each([[1, 2, 999], [1], [2, 3], [1, 2, 4], [2, 4], [1, 2, 5]])(
-      'rejects nonexistent, missing-required, old or future terms: %j', async (...ids) => {
+      'rejects nonexistent, missing-required, old or future terms: %j',
+      async (...ids) => {
         const id = await insertUser('Consenting');
         await seedTerms();
         await consent(id, ids).expect(400);
@@ -416,7 +559,10 @@ describe('Users API integration', () => {
       await terms.insert({ ...current, id: '6', version: '0.1' });
       await consent(id, [1, 2]).expect(400);
       await consent(id, [6, 2]).expect(200);
-      expect((await consentRows(id)).map((row) => row.termId)).toEqual(['2', '6']);
+      expect((await consentRows(id)).map((row) => row.termId)).toEqual([
+        '2',
+        '6',
+      ]);
     });
 
     it('derives required flags from current versions only and preserves large term IDs', async () => {
@@ -424,36 +570,75 @@ describe('Users API integration', () => {
       await seedTerms();
       const terms = testDataSource.getRepository(TermEntity);
       await terms.update('1', { required: false });
-      await terms.insert({ id: '9007199254740993', code: 'EXTRA', version: '1', required: false,
-        documentUrl: 'https://example.test/extra', effectiveAt: new Date(Date.now() - 1000), createdAt: new Date() });
-      await consent(id, [2, '9007199254740993']).expect(200)
+      await terms.insert({
+        id: '9007199254740993',
+        code: 'EXTRA',
+        version: '1',
+        required: false,
+        documentUrl: 'https://example.test/extra',
+        effectiveAt: new Date(Date.now() - 1000),
+        createdAt: new Date(),
+      });
+      await consent(id, [2, '9007199254740993'])
+        .expect(200)
         .expect({ termIds: ['2', '9007199254740993'] });
-      expect((await consentRows(id)).map((row) => row.termId)).toEqual(['2', '9007199254740993']);
+      expect((await consentRows(id)).map((row) => row.termId)).toEqual([
+        '2',
+        '9007199254740993',
+      ]);
     });
 
-    it.each([{}, { termIds: [] }, { termIds: null }, { termIds: '1' },
-      { termIds: [0] }, { termIds: [-1] }, { termIds: [1.5] }, { termIds: [true] },
-      { termIds: [null] }, { termIds: ['1x'] }, { termIds: [9007199254740992] },
-      { termIds: ['9223372036854775808'] }])('rejects invalid consent body %j', async (body) => {
+    it.each([
+      {},
+      { termIds: [] },
+      { termIds: null },
+      { termIds: '1' },
+      { termIds: [0] },
+      { termIds: [-1] },
+      { termIds: [1.5] },
+      { termIds: [true] },
+      { termIds: [null] },
+      { termIds: ['1x'] },
+      { termIds: [9007199254740992] },
+      { termIds: ['9223372036854775808'] },
+    ])('rejects invalid consent body %j', async (body) => {
       const id = await insertUser('Consenting');
-      await request(app.getHttpServer()).post('/api/v1/users/me/term-consents')
-        .set('x-user-id', id).send(body).expect(400);
+      await request(app.getHttpServer())
+        .post('/api/v1/users/me/term-consents')
+        .set('x-user-id', id)
+        .send(body)
+        .expect(400);
     });
 
     it('requires auth context and an existing user for both endpoints', async () => {
-      for (const [method, path] of [['post', 'term-consents'], ['get', 'badges']] as const) {
-        await request(app.getHttpServer())[method](`/api/v1/users/me/${path}`).send({ termIds: [1] }).expect(401);
-        await request(app.getHttpServer())[method](`/api/v1/users/me/${path}`)
-          .set('x-user-id', 'invalid').send({ termIds: [1] }).expect(401);
-        await request(app.getHttpServer())[method](`/api/v1/users/me/${path}`)
-          .set('x-user-id', '9007199254740991').send({ termIds: [1] }).expect(404);
+      for (const [method, path] of [
+        ['post', 'term-consents'],
+        ['get', 'badges'],
+      ] as const) {
+        await request(app.getHttpServer())
+          [method](`/api/v1/users/me/${path}`)
+          .send({ termIds: [1] })
+          .expect(401);
+        await request(app.getHttpServer())
+          [method](`/api/v1/users/me/${path}`)
+          .set('x-user-id', 'invalid')
+          .send({ termIds: [1] })
+          .expect(401);
+        await request(app.getHttpServer())
+          [method](`/api/v1/users/me/${path}`)
+          .set('x-user-id', '9007199254740991')
+          .send({ termIds: [1] })
+          .expect(404);
       }
     });
 
     it.each(['0', '-1', '01', '1.5', 'abc', '9007199254740992'])(
-      'rejects invalid x-user-id %s', async (userId) => {
-        await request(app.getHttpServer()).get('/api/v1/users/me/badges')
-          .set('x-user-id', userId).expect(401);
+      'rejects invalid x-user-id %s',
+      async (userId) => {
+        await request(app.getHttpServer())
+          .get('/api/v1/users/me/badges')
+          .set('x-user-id', userId)
+          .expect(401);
       },
     );
 
@@ -463,55 +648,132 @@ describe('Users API integration', () => {
       const old = new Date('2026-01-01T00:00:00Z');
       const recent = new Date('2026-02-01T00:00:00Z');
       const badges = testDataSource.getRepository(BadgeEntity);
-      await badges.insert(['1', '2', '3', '4', '5', '9007199254740993'].map((badgeId) => ({
-        id: badgeId, code: `BADGE_${badgeId}`, name: `Badge ${badgeId}`,
-        description: badgeId === '1' ? null : 'Description', imageKey: badgeId === '1' ? null : 'badges/image',
-        active: badgeId !== '4', createdAt: old,
-      })));
+      await badges.insert(
+        ['1', '2', '3', '4', '5', '9007199254740993'].map((badgeId) => ({
+          id: badgeId,
+          code: `BADGE_${badgeId}`,
+          name: `Badge ${badgeId}`,
+          description: badgeId === '1' ? null : 'Description',
+          imageKey: badgeId === '1' ? null : 'badges/image',
+          active: badgeId !== '4',
+          createdAt: old,
+        })),
+      );
       await testDataSource.getRepository(UserBadgeEntity).insert([
         { userId: id, badgeId: '1', grantedAt: old, revokedAt: null },
         { userId: id, badgeId: '2', grantedAt: recent, revokedAt: null },
-        { userId: id, badgeId: '9007199254740993', grantedAt: recent, revokedAt: null },
+        {
+          userId: id,
+          badgeId: '9007199254740993',
+          grantedAt: recent,
+          revokedAt: null,
+        },
         { userId: id, badgeId: '3', grantedAt: recent, revokedAt: recent },
         { userId: id, badgeId: '4', grantedAt: recent, revokedAt: null },
         { userId: other, badgeId: '5', grantedAt: recent, revokedAt: null },
       ]);
-      const response = await request(app.getHttpServer()).get('/api/v1/users/me/badges')
-        .set('x-user-id', id).expect(200);
-      expect(response.body).toEqual({ badges: [
-        { badgeId: '9007199254740993', code: 'BADGE_9007199254740993', name: 'Badge 9007199254740993',
-          description: 'Description', imageKey: 'badges/image', grantedAt: recent.toISOString() },
-        { badgeId: '2', code: 'BADGE_2', name: 'Badge 2', description: 'Description',
-          imageKey: 'badges/image', grantedAt: recent.toISOString() },
-        { badgeId: '1', code: 'BADGE_1', name: 'Badge 1', description: null, imageKey: null, grantedAt: old.toISOString() },
-      ] });
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/users/me/badges')
+        .set('x-user-id', id)
+        .expect(200);
+      expect(response.body).toEqual({
+        badges: [
+          {
+            badgeId: '9007199254740993',
+            code: 'BADGE_9007199254740993',
+            name: 'Badge 9007199254740993',
+            description: 'Description',
+            imageKey: 'badges/image',
+            grantedAt: recent.toISOString(),
+          },
+          {
+            badgeId: '2',
+            code: 'BADGE_2',
+            name: 'Badge 2',
+            description: 'Description',
+            imageKey: 'badges/image',
+            grantedAt: recent.toISOString(),
+          },
+          {
+            badgeId: '1',
+            code: 'BADGE_1',
+            name: 'Badge 1',
+            description: null,
+            imageKey: null,
+            grantedAt: old.toISOString(),
+          },
+        ],
+      });
       expect(await outbox()).toHaveLength(0);
     });
 
     it('returns an empty badge array when the user has no badges', async () => {
       const id = await insertUser('NoBadges');
-      await request(app.getHttpServer()).get('/api/v1/users/me/badges')
-        .set('x-user-id', id).expect(200).expect({ badges: [] });
+      await request(app.getHttpServer())
+        .get('/api/v1/users/me/badges')
+        .set('x-user-id', id)
+        .expect(200)
+        .expect({ badges: [] });
     });
 
     function consent(id: string, termIds: (string | number)[]): request.Test {
-      return request(app.getHttpServer()).post('/api/v1/users/me/term-consents')
-        .set('x-user-id', id).send({ termIds });
+      return request(app.getHttpServer())
+        .post('/api/v1/users/me/term-consents')
+        .set('x-user-id', id)
+        .send({ termIds });
     }
 
     function consentRows(userId: string): Promise<UserTermConsentEntity[]> {
-      return testDataSource.getRepository(UserTermConsentEntity).find({ where: { userId }, order: { termId: 'ASC' } });
+      return testDataSource
+        .getRepository(UserTermConsentEntity)
+        .find({ where: { userId }, order: { termId: 'ASC' } });
     }
 
     async function seedTerms(): Promise<void> {
       const now = new Date();
-      await testDataSource.getRepository(TermEntity).insert([
-        { id: '1', code: 'SERVICE', version: '1.0', required: true, effectiveAt: new Date(Date.now() - 60_000) },
-        { id: '2', code: 'PRIVACY', version: '1.0', required: true, effectiveAt: new Date(Date.now() - 60_000) },
-        { id: '3', code: 'LOCATION', version: '1.0', required: false, effectiveAt: new Date(Date.now() - 60_000) },
-        { id: '4', code: 'SERVICE', version: '99.0', required: true, effectiveAt: new Date(Date.now() - 120_000) },
-        { id: '5', code: 'SERVICE', version: '2.0', required: true, effectiveAt: new Date(Date.now() + 86_400_000) },
-      ].map((term) => ({ ...term, documentUrl: 'https://example.test/terms', createdAt: now })));
+      await testDataSource.getRepository(TermEntity).insert(
+        [
+          {
+            id: '1',
+            code: 'SERVICE',
+            version: '1.0',
+            required: true,
+            effectiveAt: new Date(Date.now() - 60_000),
+          },
+          {
+            id: '2',
+            code: 'PRIVACY',
+            version: '1.0',
+            required: true,
+            effectiveAt: new Date(Date.now() - 60_000),
+          },
+          {
+            id: '3',
+            code: 'LOCATION',
+            version: '1.0',
+            required: false,
+            effectiveAt: new Date(Date.now() - 60_000),
+          },
+          {
+            id: '4',
+            code: 'SERVICE',
+            version: '99.0',
+            required: true,
+            effectiveAt: new Date(Date.now() - 120_000),
+          },
+          {
+            id: '5',
+            code: 'SERVICE',
+            version: '2.0',
+            required: true,
+            effectiveAt: new Date(Date.now() + 86_400_000),
+          },
+        ].map((term) => ({
+          ...term,
+          documentUrl: 'https://example.test/terms',
+          createdAt: now,
+        })),
+      );
     }
   });
 
@@ -521,12 +783,14 @@ describe('Users API integration', () => {
 
   async function insertUser(nickname: string): Promise<string> {
     const now = new Date();
-    const user = await usersRepository.save(usersRepository.create({
-      nickname,
-      status: UserStatus.ACTIVE,
-      createdAt: now,
-      updatedAt: now,
-    }));
+    const user = await usersRepository.save(
+      usersRepository.create({
+        nickname,
+        status: UserStatus.ACTIVE,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
     return user.id;
   }
 });

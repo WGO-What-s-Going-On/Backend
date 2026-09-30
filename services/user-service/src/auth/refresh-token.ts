@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
-const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export function createRefreshToken(sessionId: string): string {
@@ -27,9 +28,15 @@ export function hashRefreshToken(refreshToken: string): string {
   return createHash('sha256').update(refreshToken).digest('hex');
 }
 
-export function refreshTokenMatchesHash(refreshToken: string, storedHash: string): boolean {
+export function refreshTokenMatchesHash(
+  refreshToken: string,
+  storedHash: string,
+): boolean {
   const actualHash = Buffer.from(hashRefreshToken(refreshToken), 'hex');
   const expectedHash = Buffer.from(storedHash, 'hex');
 
-  return actualHash.length === expectedHash.length && timingSafeEqual(actualHash, expectedHash);
+  return (
+    actualHash.length === expectedHash.length &&
+    timingSafeEqual(actualHash, expectedHash)
+  );
 }
