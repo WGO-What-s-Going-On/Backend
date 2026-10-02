@@ -72,16 +72,21 @@ export interface PostReadQueries {
 
 export interface PostCommands {
   insertPost(post: PostRecord): Promise<void>;
-  insertComment(comment: CommentRecord, mutationId?: string): Promise<void>;
-  insertReaction(reaction: ReactionRecord): Promise<void>;
+  insertComment(
+    comment: CommentRecord & { bucketId: number },
+    mutationId?: string,
+  ): Promise<void>;
+  insertReaction(
+    reaction: ReactionRecord & { bucketId: number },
+  ): Promise<void>;
   insertParticipant(participant: ParticipantRecord): Promise<void>;
   rejoinParticipant(
     participant: ParticipantRecord,
   ): Promise<ParticipantRecord | null>;
   increment(
     postId: string,
+    bucketId: number,
     counter: 'commentCount' | 'reactionCount' | 'participantCount',
-    now: Date,
   ): Promise<void>;
   appendEvent(event: OutboxEvent): Promise<void>;
 }

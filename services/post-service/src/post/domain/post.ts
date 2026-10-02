@@ -3,6 +3,7 @@ export type PostStatus = 'ACTIVE' | 'EXPIRED' | 'DELETED';
 export interface PostState {
   postId: string;
   status: PostStatus;
+  bucketCount: number;
   locationSnapshot?: { latitude: number; longitude: number };
   radiusM?: number;
 }
@@ -16,7 +17,9 @@ export interface PostInput {
   radiusM: number;
 }
 
-export interface PostRecord extends PostState {
+export interface PostRecord {
+  postId: string;
+  status: PostStatus;
   authorId: number;
   category: string;
   title: string;
@@ -78,9 +81,9 @@ function requireRange(
     throw new InvalidPostError(`${name} must be between ${min} and ${max}`);
 }
 
-export function requireActive(
-  post: PostState | null,
-): asserts post is PostState {
+export function requireActive<T extends { status: PostStatus }>(
+  post: T | null,
+): asserts post is T {
   if (!post) throw new PostNotFoundError('Post not found');
   if (post.status !== 'ACTIVE')
     throw new PostInactiveError('Post is not active');
