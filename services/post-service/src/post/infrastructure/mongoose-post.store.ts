@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { ConfigService } from '@nestjs/config';
 import type { ClientSession, Connection, Model } from 'mongoose';
 import type {
   PostCommands,
@@ -16,7 +17,6 @@ import type {
   PostState,
   ReactionRecord,
 } from '../domain/post.js';
-import { PostInactiveError } from '../domain/post.js';
 import { OutboxWorker } from './outbox.worker.js';
 
 class MongoQueries implements PostStateQueries {
@@ -37,6 +37,7 @@ class MongoQueries implements PostStateQueries {
       ? {
           postId: post.postId,
           status: post.status,
+          bucketCount: post.bucketCount ?? 1,
           locationSnapshot: post.locationSnapshot,
           radiusM: post.radiusM,
         }
@@ -110,15 +111,25 @@ class MongoCommands implements PostCommands {
     private readonly reactions: Model<any>,
     private readonly participants: Model<any>,
     private readonly outbox: Model<any>,
+    private readonly counters: Model<any>,
+    private readonly bucketCount: number,
     private readonly session: ClientSession,
   ) {}
 
   async insertPost(post: PostRecord): Promise<void> {
-    await this.posts.create([post], { session: this.session });
+    await this.posts.create([{ ...post, bucketCount: this.bucketCount }], {
+      session: this.session,
+    });
+    const rows = Array.from({ length: this.bucketCount }, (_, bucketId) =>
+      (['commentCount', 'reactionCount', 'participantCount'] as const).map(
+        (metric) => ({ postId: post.postId, bucketId, metric, count: 0 }),
+      ),
+    ).flat();
+    await this.counters.create(rows, { session: this.session, ordered: true });
   }
 
   async insertComment(
-    comment: CommentRecord,
+    comment: CommentRecord & { bucketId: number },
     mutationId?: string,
   ): Promise<void> {
     await this.comments.create(
@@ -127,7 +138,9 @@ class MongoCommands implements PostCommands {
     );
   }
 
-  async insertReaction(reaction: ReactionRecord): Promise<void> {
+  async insertReaction(
+    reaction: ReactionRecord & { bucketId: number },
+  ): Promise<void> {
     await this.reactions.create([reaction], { session: this.session });
   }
 
@@ -168,17 +181,15 @@ class MongoCommands implements PostCommands {
 
   async increment(
     postId: string,
+    bucketId: number,
     counter: 'commentCount' | 'reactionCount' | 'participantCount',
-    now: Date,
   ): Promise<void> {
-    // 상태를 다시 조건에 넣어 조회 이후 게시물이 비활성화된 경우에도 카운터 갱신을 막는다.
-    const result = await this.posts.updateOne(
-      { postId, status: 'ACTIVE' },
-      { $inc: { [`counters.${counter}`]: 1 }, $set: { updatedAt: now } },
-      { session: this.session },
+    // 같은 트랜잭션에서 콘텐츠와 카운터를 기록하되 Post 문서에는 쓰지 않는다.
+    await this.counters.updateOne(
+      { postId, bucketId, metric: counter },
+      { $inc: { count: 1 } },
+      { session: this.session, upsert: true },
     );
-    if (result.matchedCount !== 1)
-      throw new PostInactiveError('Post is not active');
   }
 
   async appendEvent(event: OutboxEvent): Promise<void> {
@@ -210,6 +221,8 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
     @InjectModel('Reaction') private readonly reactions: Model<any>,
     @InjectModel('Participant') private readonly participants: Model<any>,
     @InjectModel('Outbox') private readonly outbox: Model<any>,
+    @InjectModel('Counter') private readonly counters: Model<any>,
+    private readonly config: ConfigService,
     private readonly outboxWorker: OutboxWorker,
   ) {}
 
@@ -260,6 +273,8 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
             this.reactions,
             this.participants,
             this.outbox,
+            this.counters,
+            this.config.getOrThrow<number>('post.bucketCount'),
             session,
           ),
         }),

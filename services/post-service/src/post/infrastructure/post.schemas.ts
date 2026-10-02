@@ -21,17 +21,17 @@ export const PostSchema = new Schema(
     createdAt: { type: Date, required: true },
     updatedAt: { type: Date, required: true },
     expiresAt: { type: Date, default: null },
+    bucketCount: { type: Number, required: true, default: 1 },
   },
   options,
 );
-PostSchema.index({ authorId: 1, createdAt: -1 });
 PostSchema.index({ status: 1, expiresAt: 1 });
-PostSchema.index({ category: 1, createdAt: -1 });
 
 export const CommentSchema = new Schema(
   {
     commentId: { type: String, required: true, unique: true },
     postId: { type: String, required: true },
+    bucketId: { type: Number, required: true, default: 0 },
     authorId: { type: Number, required: true },
     mutationId: { type: String },
     content: { type: String, required: true },
@@ -41,7 +41,7 @@ export const CommentSchema = new Schema(
   },
   options,
 );
-CommentSchema.index({ postId: 1, createdAt: -1, _id: -1 });
+CommentSchema.index({ postId: 1, bucketId: 1, createdAt: -1, _id: -1 });
 // 기존 HTTP 댓글에는 mutationId가 없으므로 값이 있는 WS 요청에만 유일성을 적용한다.
 CommentSchema.index(
   { postId: 1, authorId: 1, mutationId: 1 },
@@ -54,6 +54,7 @@ CommentSchema.index(
 export const ReactionSchema = new Schema(
   {
     postId: { type: String, required: true },
+    bucketId: { type: Number, required: true, default: 0 },
     userId: { type: Number, required: true },
     type: { type: String, required: true },
     createdAt: { type: Date, required: true },
@@ -61,6 +62,17 @@ export const ReactionSchema = new Schema(
   options,
 );
 ReactionSchema.index({ postId: 1, userId: 1, type: 1 }, { unique: true });
+
+export const CounterSchema = new Schema(
+  {
+    postId: { type: String, required: true },
+    bucketId: { type: Number, required: true },
+    metric: { type: String, required: true },
+    count: { type: Number, required: true },
+  },
+  options,
+);
+CounterSchema.index({ postId: 1, bucketId: 1, metric: 1 }, { unique: true });
 
 export const ParticipantSchema = new Schema(
   {

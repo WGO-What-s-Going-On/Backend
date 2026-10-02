@@ -18,6 +18,7 @@ import {
   UniqueConflictError,
 } from './errors.js';
 import { event } from './event.js';
+import type { PartitionStrategy } from './partition.js';
 import type {
   LocationAuthorization,
   PostStateQueries,
@@ -25,11 +26,10 @@ import type {
   PostUnitOfWork,
 } from './ports.js';
 
-async function active(
-  transaction: PostTransaction,
-  postId: string,
-): Promise<void> {
-  requireActive(await transaction.queries.findPost(postId));
+async function active(transaction: PostTransaction, postId: string) {
+  const post = await transaction.queries.findPost(postId);
+  requireActive(post);
+  return post;
 }
 
 export class CreatePost {
@@ -77,6 +77,7 @@ export class CreateComment {
   constructor(
     private readonly unitOfWork: PostUnitOfWork,
     private readonly queries: PostStateQueries,
+    private readonly partitionStrategy: PartitionStrategy,
   ) {}
 
   async execute(
@@ -95,7 +96,7 @@ export class CreateComment {
     );
     try {
       return await this.unitOfWork.execute(async (transaction) => {
-        await active(transaction, postId);
+        const post = await active(transaction, postId);
         // 재연결 후 같은 작성 요청이 다시 와도 댓글과 카운터를 한 번만 기록한다.
         if (mutationId) {
           const existing = await transaction.queries.findCommentByMutation(
@@ -105,8 +106,15 @@ export class CreateComment {
           );
           if (existing) return existing;
         }
-        await transaction.commands.insertComment(comment, mutationId);
-        await transaction.commands.increment(postId, 'commentCount', now);
+        const bucketId = this.partitionStrategy.resolveBucket(
+          comment.commentId,
+          post.bucketCount,
+        );
+        await transaction.commands.insertComment(
+          { ...comment, bucketId },
+          mutationId,
+        );
+        await transaction.commands.increment(postId, bucketId, 'commentCount');
         await transaction.commands.appendEvent(
           event(postId, 'PostCommentCreated', { comment }, now),
         );
@@ -131,6 +139,7 @@ export class CreateReaction {
   constructor(
     private readonly unitOfWork: PostUnitOfWork,
     private readonly queries: PostStateQueries,
+    private readonly partitionStrategy: PartitionStrategy,
   ) {}
 
   async execute(postId: string, userId: number): Promise<ReactionRecord> {
@@ -138,11 +147,15 @@ export class CreateReaction {
     const reaction = createReaction(postId, userId, now);
     try {
       return await this.unitOfWork.execute(async (transaction) => {
-        await active(transaction, postId);
+        const post = await active(transaction, postId);
         const existing = await transaction.queries.findReaction(postId, userId);
         if (existing) return existing;
-        await transaction.commands.insertReaction(reaction);
-        await transaction.commands.increment(postId, 'reactionCount', now);
+        const bucketId = this.partitionStrategy.resolveBucket(
+          `${userId}:${reaction.type}`,
+          post.bucketCount,
+        );
+        await transaction.commands.insertReaction({ ...reaction, bucketId });
+        await transaction.commands.increment(postId, bucketId, 'reactionCount');
         await transaction.commands.appendEvent(
           event(postId, 'PostReactionCreated', { reaction }, now),
         );
@@ -164,6 +177,7 @@ export class JoinPost {
     private readonly unitOfWork: PostUnitOfWork,
     private readonly queries: PostStateQueries,
     private readonly authorization: LocationAuthorization,
+    private readonly partitionStrategy: PartitionStrategy,
   ) {}
 
   async execute(postId: string, userId: number): Promise<ParticipantRecord> {
@@ -181,7 +195,7 @@ export class JoinPost {
     const now = new Date();
     try {
       return await this.unitOfWork.execute(async (transaction) => {
-        await active(transaction, postId);
+        const activePost = await active(transaction, postId);
         const existing = await transaction.queries.findParticipant(
           postId,
           userId,
@@ -201,7 +215,15 @@ export class JoinPost {
         } else {
           await transaction.commands.insertParticipant(decision.participant);
         }
-        await transaction.commands.increment(postId, 'participantCount', now);
+        const bucketId = this.partitionStrategy.resolveBucket(
+          String(userId),
+          activePost.bucketCount,
+        );
+        await transaction.commands.increment(
+          postId,
+          bucketId,
+          'participantCount',
+        );
         await transaction.commands.appendEvent(
           event(
             postId,

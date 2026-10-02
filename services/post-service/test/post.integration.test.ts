@@ -21,6 +21,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
 import { JoinPost } from '../src/post/application/commands.js';
+import { HashPartitionStrategy } from '../src/post/application/partition.js';
 
 const suite = process.env.RUN_INTEGRATION === '1' ? describe : describe.skip;
 const serviceSecret = 'integration-ws-service-secret-at-least-32';
@@ -48,6 +49,7 @@ suite('post creation integration', () => {
   let posts: Model<any>;
   let comments: Model<any>;
   let reactions: Model<any>;
+  let counters: Model<any>;
   let participants: Model<any>;
   let outbox: Model<any>;
   let worker: OutboxWorker;
@@ -139,6 +141,7 @@ suite('post creation integration', () => {
     posts = app.get(getModelToken('Post'));
     comments = app.get(getModelToken('Comment'));
     reactions = app.get(getModelToken('Reaction'));
+    counters = app.get(getModelToken('Counter'));
     participants = app.get(getModelToken('Participant'));
     outbox = app.get(getModelToken('Outbox'));
     worker = app.get(OutboxWorker);
@@ -147,6 +150,7 @@ suite('post creation integration', () => {
       posts.syncIndexes(),
       comments.syncIndexes(),
       reactions.syncIndexes(),
+      counters.syncIndexes(),
       participants.syncIndexes(),
       outbox.syncIndexes(),
     ]);
@@ -321,12 +325,19 @@ suite('post creation integration', () => {
     expect(await reactions.countDocuments({ postId: id })).toBe(1);
     expect(await participants.countDocuments({ postId: id })).toBe(1);
     expect(await outbox.countDocuments({ aggregateId: id })).toBe(4);
-    const post = await posts.findOne({ postId: id }).lean();
-    expect(post.counters).toMatchObject({
+    const detail = await request(app.getHttpServer())
+      .get(`/api/v1/posts/${id}`)
+      .expect(200);
+    expect(detail.body.counters).toMatchObject({
       commentCount: 1,
       reactionCount: 1,
       participantCount: 1,
     });
+    expect(
+      (await posts.findOne({ postId: id }).lean()).counters.commentCount,
+    ).toBe(0);
+    expect((await comments.findOne({ postId: id }).lean()).bucketId).toBe(0);
+    expect((await reactions.findOne({ postId: id }).lean()).bucketId).toBe(0);
   });
 
   it('records rejoining as a new event', async () => {
@@ -386,6 +397,9 @@ suite('post creation integration', () => {
   it('rolls back domain data when outbox insert fails', async () => {
     const before = await comments.countDocuments({ postId: id });
     const postBefore = await posts.findOne({ postId: id }).lean();
+    const counterBefore = await counters
+      .findOne({ postId: id, bucketId: 0, metric: 'commentCount' })
+      .lean();
     const spy = vi
       .spyOn(outbox, 'create')
       .mockRejectedValueOnce(new Error('outbox unavailable'));
@@ -400,6 +414,13 @@ suite('post creation integration', () => {
     expect(postAfter.counters.commentCount).toBe(
       postBefore.counters.commentCount,
     );
+    expect(
+      (
+        await counters
+          .findOne({ postId: id, bucketId: 0, metric: 'commentCount' })
+          .lean()
+      ).count,
+    ).toBe(counterBefore.count);
   });
 
   it('publishes four event types and retains eventId when reclaimed', async () => {
@@ -551,6 +572,124 @@ suite('post creation integration', () => {
     expect(await outbox.countDocuments({})).toBe(outboxBefore);
   });
 
+  it('merges bucketed and legacy comments with a stable cursor', async () => {
+    const bucketedId = `post_${'e'.repeat(36)}`;
+    const original = await posts.findOne({ postId: id }).lean();
+    await posts.create({
+      ...original,
+      _id: undefined,
+      postId: bucketedId,
+      bucketCount: 4,
+      counters: {
+        viewCount: 0,
+        commentCount: 0,
+        reactionCount: 0,
+        participantCount: 0,
+      },
+    });
+    const strategy = new HashPartitionStrategy();
+    const expected = Array.from({ length: 12 }, (_, index) => ({
+      commentId: `bucket-read-${index}`,
+      postId: bucketedId,
+      bucketId: strategy.resolveBucket(`bucket-read-${index}`, 4),
+      authorId: 123,
+      content: `comment ${index}`,
+      status: 'ACTIVE',
+      createdAt: new Date(Date.UTC(2031, 0, 1, 0, 0, index)),
+    }));
+    await comments.insertMany(expected);
+    await comments.collection.insertOne({
+      commentId: 'legacy-read',
+      postId: bucketedId,
+      authorId: 123,
+      content: 'legacy',
+      status: 'ACTIVE',
+      createdAt: new Date('2031-01-01T00:00:12.000Z'),
+    });
+    expect(new Set(expected.map((comment) => comment.bucketId)).size).toBe(4);
+    const ids: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const pageUrl: string = `/api/v1/posts/${bucketedId}/comments?limit=4${cursor ? `&cursor=${cursor}` : ''}`;
+      const page: request.Response = await request(app.getHttpServer())
+        .get(pageUrl)
+        .expect(200);
+      ids.push(...page.body.comments.map((comment: any) => comment.commentId));
+      expect(page.body.comments[0]).not.toHaveProperty('bucketId');
+      cursor = page.body.nextCursor;
+    } while (cursor);
+    expect(ids).toEqual([
+      'legacy-read',
+      ...expected.map((row) => row.commentId).reverse(),
+    ]);
+    const first = await request(app.getHttpServer())
+      .post(`/api/v1/posts/${bucketedId}/comments`)
+      .set(header)
+      .send({ content: 'new comment' })
+      .expect(201);
+    expect(
+      (await comments.findOne({ commentId: first.body.commentId }).lean())
+        .bucketId,
+    ).toBe(strategy.resolveBucket(first.body.commentId, 4));
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${bucketedId}/reactions`)
+      .set(header)
+      .send({ type: 'LIKE' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${bucketedId}/reactions`)
+      .set(header)
+      .send({ type: 'LIKE' })
+      .expect(201);
+    expect(
+      await reactions.countDocuments({ postId: bucketedId, userId: 123 }),
+    ).toBe(1);
+    const detail = await request(app.getHttpServer())
+      .get(`/api/v1/posts/${bucketedId}`)
+      .expect(200);
+    expect(detail.body.counters.commentCount).toBe(1);
+    expect(detail.body.counters.reactionCount).toBe(1);
+  });
+
+  it('keeps legacy post counters as the baseline when bucketCount is absent', async () => {
+    const legacyId = `post_${'f'.repeat(36)}`;
+    const original = await posts.findOne({ postId: id }).lean();
+    await posts.create({
+      ...original,
+      _id: undefined,
+      postId: legacyId,
+      counters: {
+        viewCount: 3,
+        commentCount: 5,
+        reactionCount: 0,
+        participantCount: 0,
+      },
+    });
+    await posts.collection.updateOne(
+      { postId: legacyId },
+      { $unset: { bucketCount: '' } },
+    );
+    const response = await request(app.getHttpServer())
+      .post(`/api/v1/posts/${legacyId}/comments`)
+      .set(header)
+      .send({ content: 'legacy post comment' })
+      .expect(201);
+    expect(
+      (await comments.findOne({ commentId: response.body.commentId }).lean())
+        .bucketId,
+    ).toBe(0);
+    const detail = await request(app.getHttpServer())
+      .get(`/api/v1/posts/${legacyId}`)
+      .expect(200);
+    expect(detail.body.counters).toMatchObject({
+      viewCount: 3,
+      commentCount: 6,
+    });
+    expect(
+      (await posts.findOne({ postId: legacyId }).lean()).counters.commentCount,
+    ).toBe(5);
+  });
+
   it('filters and orders batch reads, exposes inactive metadata, and blocks internal routes in production', async () => {
     const inactiveId = `post_${'b'.repeat(36)}`;
     const secondId = `post_${'d'.repeat(36)}`;
@@ -660,7 +799,14 @@ suite('post creation integration', () => {
     ).toBe(1);
     expect(
       (await posts.findOne({ postId: id }).lean()).counters.commentCount,
-    ).toBe(before.counters.commentCount + 1);
+    ).toBe(before.counters.commentCount);
+    expect(
+      (
+        await counters
+          .findOne({ postId: id, bucketId: 0, metric: 'commentCount' })
+          .lean()
+      ).count,
+    ).toBeGreaterThan(0);
     await request(app.getHttpServer())
       .get(`/internal/v1/posts/${id}`)
       .set(auth)

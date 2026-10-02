@@ -22,5 +22,13 @@ export function configuration() {
         process.env.MONGODB_URI ??
         'mongodb://localhost:27017/wgo_post?replicaSet=rs0',
     },
+    post: {
+      // 생성 시 게시물별로 고정한다. 운영 중 기존 게시물의 bucket 수는 변경하지 않는다.
+      bucketCount: positiveInteger(
+        process.env.POST_BUCKET_COUNT,
+        1,
+        'POST_BUCKET_COUNT',
+      ),
+    },
   };
 }

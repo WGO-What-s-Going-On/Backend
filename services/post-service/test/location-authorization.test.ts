@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CreatePost, JoinPost } from '../src/post/application/commands.js';
+import { HashPartitionStrategy } from '../src/post/application/partition.js';
 import type {
   LocationAuthorization,
   PostUnitOfWork,
@@ -55,6 +56,7 @@ describe('Map authorization before Post writes', () => {
       { execute } as unknown as PostUnitOfWork,
       { findPost } as unknown as PostStateQueries,
       { assertCanJoin } as unknown as LocationAuthorization,
+      new HashPartitionStrategy(),
     );
     await expect(join.execute('post-1', 123)).rejects.toBeInstanceOf(
       LocationDeniedError,

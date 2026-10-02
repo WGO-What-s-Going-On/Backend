@@ -9,6 +9,11 @@ import {
 } from './application/commands.js';
 import { ReadPosts } from './application/queries.js';
 import {
+  HashPartitionStrategy,
+  PARTITION_STRATEGY,
+} from './application/partition.js';
+import type { PartitionStrategy } from './application/partition.js';
+import {
   LOCATION_AUTHORIZATION,
   POST_READ_QUERIES,
   POST_STATE_QUERIES,
@@ -25,6 +30,7 @@ import { MongoosePostRead } from './infrastructure/mongoose-post.read.js';
 import { MongoosePostStore } from './infrastructure/mongoose-post.store.js';
 import {
   CommentSchema,
+  CounterSchema,
   OutboxSchema,
   ParticipantSchema,
   PostSchema,
@@ -37,6 +43,7 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
     MongooseModule.forFeature([
       { name: 'Post', schema: PostSchema, collection: 'posts' },
       { name: 'Comment', schema: CommentSchema, collection: 'post_comments' },
+      { name: 'Counter', schema: CounterSchema, collection: 'post_counters' },
       {
         name: 'Reaction',
         schema: ReactionSchema,
@@ -54,6 +61,7 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
   providers: [
     MongoosePostStore,
     MongoosePostRead,
+    { provide: PARTITION_STRATEGY, useClass: HashPartitionStrategy },
     { provide: POST_READ_QUERIES, useExisting: MongoosePostRead },
     {
       provide: ReadPosts,
@@ -76,15 +84,21 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
     },
     {
       provide: CreateComment,
-      useFactory: (unitOfWork: PostUnitOfWork, queries: PostStateQueries) =>
-        new CreateComment(unitOfWork, queries),
-      inject: [POST_UNIT_OF_WORK, POST_STATE_QUERIES],
+      useFactory: (
+        unitOfWork: PostUnitOfWork,
+        queries: PostStateQueries,
+        partition: PartitionStrategy,
+      ) => new CreateComment(unitOfWork, queries, partition),
+      inject: [POST_UNIT_OF_WORK, POST_STATE_QUERIES, PARTITION_STRATEGY],
     },
     {
       provide: CreateReaction,
-      useFactory: (unitOfWork: PostUnitOfWork, queries: PostStateQueries) =>
-        new CreateReaction(unitOfWork, queries),
-      inject: [POST_UNIT_OF_WORK, POST_STATE_QUERIES],
+      useFactory: (
+        unitOfWork: PostUnitOfWork,
+        queries: PostStateQueries,
+        partition: PartitionStrategy,
+      ) => new CreateReaction(unitOfWork, queries, partition),
+      inject: [POST_UNIT_OF_WORK, POST_STATE_QUERIES, PARTITION_STRATEGY],
     },
     {
       provide: JoinPost,
@@ -92,8 +106,14 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
         unitOfWork: PostUnitOfWork,
         queries: PostStateQueries,
         authorization: LocationAuthorization,
-      ) => new JoinPost(unitOfWork, queries, authorization),
-      inject: [POST_UNIT_OF_WORK, POST_STATE_QUERIES, LOCATION_AUTHORIZATION],
+        partition: PartitionStrategy,
+      ) => new JoinPost(unitOfWork, queries, authorization, partition),
+      inject: [
+        POST_UNIT_OF_WORK,
+        POST_STATE_QUERIES,
+        LOCATION_AUTHORIZATION,
+        PARTITION_STRATEGY,
+      ],
     },
     OutboxWorker,
   ],

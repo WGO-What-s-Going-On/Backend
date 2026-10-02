@@ -820,6 +820,11 @@ Write가 많기 때문에 MongoDB를 사용한다.
 
 # MongoDB Data Model
 
+현재 구현의 bucket·카운터 분리와 마이그레이션 기준은
+[Post Service Scaling Strategy](../../docs/post-service/sharding-strategy.md)를 따른다.
+아래 예시는 초기 설계 스냅샷으로, `posts.counters`는 신규 활동 때 갱신되지 않고
+새 댓글·반응에는 `bucketId`가 추가된다.
+
 ```
 MongoDB
 │
@@ -830,6 +835,8 @@ MongoDB
 ├── post_reactions
 │
 ├── post_participants
+│
+├── post_counters
 │
 └── outbox_events
 ```
@@ -863,6 +870,8 @@ MongoDB
   },
 
   "radiusM": 250,
+
+  "bucketCount": 1,
 
   "counters": {
     "viewCount": 124,
@@ -898,18 +907,8 @@ db.posts.createIndex(
 )
 
 db.posts.createIndex({
-  authorId: 1,
-  createdAt: -1
-})
-
-db.posts.createIndex({
   status: 1,
   expiresAt: 1
-})
-
-db.posts.createIndex({
-  category: 1,
-  createdAt: -1
 })
 ```
 
@@ -926,6 +925,8 @@ db.posts.createIndex({
   "commentId": "comment_01J...",
 
   "postId": "post_01J...",
+
+  "bucketId": 0,
 
   "authorId": 827,
 
@@ -945,6 +946,7 @@ db.posts.createIndex({
 db.post_comments.createIndex(
   {
     postId: 1,
+    bucketId: 1,
     createdAt: -1,
     _id: -1
   }
@@ -986,6 +988,8 @@ GET /api/v1/posts/{postId}/comments
   "_id": "ObjectId",
 
   "postId": "post_01J...",
+
+  "bucketId": 0,
 
   "userId": 123,
 
@@ -1188,114 +1192,12 @@ PUBLISHED
 
 ---
 
-# MongoDB Sharding 전략
+# MongoDB Sharding 전략과 Hot Post
 
-Post Service의 가장 기본적인 조회 패턴은 다음과 같다.
-
-```
-postId
-   ↓
-Post 조회
-```
-
-Map Service 역시 주변 게시판을 조회한 이후 Post ID 목록을 반환한다.
-
-따라서 MongoDB의 기본 Shard Key 후보는 다음과 같다.
-
-```
-postId hashed
-```
-
-예시:
-
-```
-sh.shardCollection(
-  "post.posts",
-  {
-    postId: "hashed"
-  }
-)
-```
-
-논리적으로는 다음과 같이 분산될 수 있다.
-
-```
-MongoDB Cluster
-
-Shard 1
-├── post-A
-└── post-D
-
-Shard 2
-├── post-B
-└── post-F
-
-Shard 3
-├── post-C
-└── post-G
-```
-
-이를 통해 서로 다른 게시판에 대한 Read / Write를 여러 Shard에 분산할 수 있다.
-
----
-
-# Hot Post 문제
-
-하지만 하나의 게시판에 매우 많은 트래픽이 집중되는 경우에는 `postId` 기반 분산만으로 모든 문제를 해결할 수 없다.
-
-예를 들어:
-
-```
-post-A comment
-post-A comment
-post-A comment
-post-A comment
-post-A comment
-```
-
-모든 댓글이 하나의 `postId`를 기준으로 Write되면 특정 Shard에 부하가 집중될 수 있다.
-
-향후 대규모 트래픽이 발생한다면 다음과 같은 Time Bucket을 추가할 수 있다.
-
-```
-post-A:2026091901
-
-post-A:2026091902
-
-post-A:2026091903
-```
-
-논리적인 Partition Key는 다음과 같이 구성할 수 있다.
-
-```
-postId + timeBucket
-```
-
-하지만 MVP 단계에서는 지나친 Sharding 최적화를 먼저 적용하지 않는다.
-
-우선 다음 수준으로 구현한다.
-
-```
-MongoDB Replica Set
-
-+
-
-Post ID Index
-
-+
-
-Cursor Pagination
-
-+
-
-Event-driven Counter
-
-+
-
-부하 테스트
-```
-
-이후 실제 Hotspot이 확인되면 Sharding 전략을 적용한다.
+현재는 단일 MongoDB replica set에서 `postId + bucketId` 논리 분할만 사용한다.
+물리적 샤딩, 운영 중 bucket 수 변경, shard key 확정은 하지 않는다.
+현재 데이터 모델, 지표, 후보 shard key와 교환 비용은
+[Post Service Scaling Strategy](../../docs/post-service/sharding-strategy.md)에 기록한다.
 
 ---
 
