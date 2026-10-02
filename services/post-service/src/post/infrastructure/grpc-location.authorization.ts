@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createPrivateKey, createPublicKey, sign } from 'node:crypto';
 import { resolve } from 'node:path';
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import {
@@ -86,14 +86,41 @@ export class GrpcLocationAuthorization
     method: 'CheckPostCreation' | 'CheckPostParticipation',
     request: object,
   ): Promise<void> {
-    const secret = process.env.MAP_SERVICE_JWT_SECRET;
-    if (!secret || secret.length < 32)
+    let key: ReturnType<typeof createPrivateKey>;
+    let kid: string;
+    try {
+      const jwk = JSON.parse(
+        process.env.POST_SERVICE_SIGNING_JWK ?? '',
+      ) as Record<string, unknown>;
+      if (
+        !jwk ||
+        jwk.kty !== 'EC' ||
+        jwk.crv !== 'P-256' ||
+        jwk.alg !== 'ES256' ||
+        typeof jwk.kid !== 'string' ||
+        !jwk.kid ||
+        !['x', 'y', 'd'].every(
+          (field) =>
+            typeof jwk[field] === 'string' &&
+            /^[A-Za-z0-9_-]{43}$/.test(jwk[field] as string) &&
+            Buffer.from(jwk[field] as string, 'base64url').toString(
+              'base64url',
+            ) === jwk[field],
+        )
+      )
+        throw new Error();
+      key = createPrivateKey({ key: jwk as any, format: 'jwk' });
+      const publicJwk = createPublicKey(key).export({ format: 'jwk' });
+      if (publicJwk.x !== jwk.x || publicJwk.y !== jwk.y) throw new Error();
+      kid = jwk.kid;
+    } catch {
       throw new ParticipationUnavailableError(
         'Map service authentication is not configured',
       );
+    }
     const now = Math.floor(Date.now() / 1000);
     const header = Buffer.from(
-      JSON.stringify({ alg: 'HS256', typ: 'JWT' }),
+      JSON.stringify({ alg: 'ES256', typ: 'wgo-service+jwt', kid }),
     ).toString('base64url');
     const payload = Buffer.from(
       JSON.stringify({
@@ -104,9 +131,10 @@ export class GrpcLocationAuthorization
         exp: now + 30,
       }),
     ).toString('base64url');
-    const signature = createHmac('sha256', secret)
-      .update(`${header}.${payload}`)
-      .digest('base64url');
+    const signature = sign('sha256', Buffer.from(`${header}.${payload}`), {
+      key,
+      dsaEncoding: 'ieee-p1363',
+    }).toString('base64url');
     const metadata = new Metadata();
     metadata.set('authorization', `Bearer ${header}.${payload}.${signature}`);
     const timeout = Number(process.env.MAP_GRPC_TIMEOUT_MS ?? 500);

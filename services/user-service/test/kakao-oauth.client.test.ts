@@ -9,13 +9,11 @@ describe('KakaoOAuthClient', () => {
   });
 
   it('exchanges the authorization code using the Kakao form contract', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ access_token: 'kakao-access-token' }), {
-          status: 200,
-        }),
-      );
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ access_token: 'kakao-access-token' }), {
+        status: 200,
+      }),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     const client = createClient();

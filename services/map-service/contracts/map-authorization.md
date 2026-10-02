@@ -9,4 +9,6 @@
 
 두 메서드는 `LocationDecision { allowed, reason }`을 반환한다. 거부 사유는 `LOCATION_MISSING`, `LOCATION_STALE`, `OUTSIDE_RADIUS`이고 허용 시 `reason`은 빈 문자열이다. 반경은 1~10,000m이며 거리 경계는 포함한다. 참여 요청의 게시물 존재와 ACTIVE 상태는 Map이 확인하지 않는다. Post Service가 자신의 원본 상태를 확인한다.
 
-요청의 `authorization` 메타데이터에는 `Bearer <JWT>`가 필요하다. JWT는 HS256, issuer `wgo-post-service`, audience `wgo-map-service`, subject `post-service`, 최대 수명 60초여야 한다. 토큰 오류는 `UNAUTHENTICATED`, 입력 오류는 `INVALID_ARGUMENT`, 위치 저장소 장애는 `UNAVAILABLE` gRPC 상태로 응답한다. 호출자는 deadline을 설정해야 한다.
+초기 gRPC 메타데이터의 `authorization` 값은 정확히 하나의 `Bearer <JWT>`여야 한다. 새 토큰은 ES256, `typ=wgo-service+jwt`, 등록된 `kid`, `iss=wgo-post-service`, `sub=post-service`, `aud=wgo-map-service`를 사용한다. `iat`와 `exp`는 정수 Unix 초이며, 수명은 최대 60초, 미래 발급 허용치는 5초다. 허용 호출자는 두 RPC 모두 `post-service`다. 전환 기간에는 같은 issuer, subject, audience, 시간 조건을 만족하는 기존 HS256 `typ=JWT` 토큰도 허용한다. ES256 검증 실패 시 HS256으로 재시도하지 않는다.
+
+누락·중복·잘못된 토큰은 `UNAUTHENTICATED`, 인증된 호출자의 권한 부족은 `PERMISSION_DENIED`, 입력 오류는 `INVALID_ARGUMENT`, 위치 저장소 장애는 `UNAVAILABLE` gRPC 상태로 응답한다. 호출자는 deadline을 설정해야 한다. 요청·응답 proto 필드는 이 전환에서 바뀌지 않는다.

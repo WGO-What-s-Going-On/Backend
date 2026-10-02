@@ -263,59 +263,49 @@ describe('Finalization and internal gRPC integration', () => {
     const user = await seed({ status: UserStatus.WITHDRAWAL_PENDING });
     const other = await seed();
     const now = new Date();
-    const badge = await db
-      .getRepository(BadgeEntity)
-      .save({
-        code: `badge_${randomUUID()}`,
-        name: 'Badge',
-        description: null,
-        imageKey: null,
-        active: true,
-        createdAt: now,
-      });
-    const term = await db
-      .getRepository(TermEntity)
-      .save({
-        code: `term_${randomUUID()}`,
-        version: '1',
-        required: true,
-        documentUrl: 'https://example.com/term',
-        effectiveAt: now,
-        createdAt: now,
-      });
-    await db
-      .getRepository(UserBadgeEntity)
-      .save({
-        userId: user.id,
-        badgeId: badge.id,
-        grantedAt: now,
-        revokedAt: null,
-      });
+    const badge = await db.getRepository(BadgeEntity).save({
+      code: `badge_${randomUUID()}`,
+      name: 'Badge',
+      description: null,
+      imageKey: null,
+      active: true,
+      createdAt: now,
+    });
+    const term = await db.getRepository(TermEntity).save({
+      code: `term_${randomUUID()}`,
+      version: '1',
+      required: true,
+      documentUrl: 'https://example.com/term',
+      effectiveAt: now,
+      createdAt: now,
+    });
+    await db.getRepository(UserBadgeEntity).save({
+      userId: user.id,
+      badgeId: badge.id,
+      grantedAt: now,
+      revokedAt: null,
+    });
     await db.getRepository(UserBlockEntity).save([
       { blockerUserId: user.id, blockedUserId: other.id, createdAt: now },
       { blockerUserId: other.id, blockedUserId: user.id, createdAt: now },
     ]);
-    await db
-      .getRepository(UserTermConsentEntity)
-      .save({
-        userId: user.id,
-        termId: term.id,
-        agreedAt: now,
-        revokedAt: null,
-      });
+    await db.getRepository(UserTermConsentEntity).save({
+      userId: user.id,
+      termId: term.id,
+      agreedAt: now,
+      revokedAt: null,
+    });
     const historicalEventId = randomUUID();
-    await db
-      .getRepository(OutboxEventEntity)
-      .save({
-        eventId: historicalEventId,
-        aggregateId: user.id,
-        eventType: 'USER_PROFILE_UPDATED',
-        payload: { historical: true },
-        status: 'PUBLISHED',
-        publishAttempts: 1,
-        createdAt: now,
-        publishedAt: now,
-      });
+    await db.getRepository(OutboxEventEntity).save({
+      eventId: historicalEventId,
+      aggregateId: user.id,
+      eventType: 'USER_PROFILE_UPDATED',
+      payload: { historical: true },
+      status: 'PUBLISHED',
+      publishAttempts: 1,
+      createdAt: now,
+      publishedAt: now,
+    });
 
     await makeScheduler().finalizePending();
 
@@ -397,31 +387,25 @@ describe('Finalization and internal gRPC integration', () => {
     const user = await seed({ status: UserStatus.WITHDRAWAL_PENDING });
     const other = await seed();
     const now = new Date();
-    const badge = await db
-      .getRepository(BadgeEntity)
-      .save({
-        code: `rollback_${randomUUID()}`,
-        name: 'Badge',
-        description: null,
-        imageKey: null,
-        active: true,
-        createdAt: now,
-      });
-    await db
-      .getRepository(UserBadgeEntity)
-      .save({
-        userId: user.id,
-        badgeId: badge.id,
-        grantedAt: now,
-        revokedAt: null,
-      });
-    await db
-      .getRepository(UserBlockEntity)
-      .save({
-        blockerUserId: user.id,
-        blockedUserId: other.id,
-        createdAt: now,
-      });
+    const badge = await db.getRepository(BadgeEntity).save({
+      code: `rollback_${randomUUID()}`,
+      name: 'Badge',
+      description: null,
+      imageKey: null,
+      active: true,
+      createdAt: now,
+    });
+    await db.getRepository(UserBadgeEntity).save({
+      userId: user.id,
+      badgeId: badge.id,
+      grantedAt: now,
+      revokedAt: null,
+    });
+    await db.getRepository(UserBlockEntity).save({
+      blockerUserId: user.id,
+      blockedUserId: other.id,
+      createdAt: now,
+    });
     await db.query(
       'ALTER TABLE outbox_events ADD CONSTRAINT test_reject_finalization CHECK (false)',
     );
@@ -455,14 +439,12 @@ describe('Finalization and internal gRPC integration', () => {
     const user = await seed({ status: UserStatus.WITHDRAWAL_PENDING });
     const sid = randomUUID();
     const token = createRefreshToken(sid);
-    await app
-      .get(RedisSessionStore)
-      .save({
-        sessionId: sid,
-        userId: user.id,
-        refreshTokenHash: hashRefreshToken(token),
-        createdAt: new Date().toISOString(),
-      });
+    await app.get(RedisSessionStore).save({
+      sessionId: sid,
+      userId: user.id,
+      refreshTokenHash: hashRefreshToken(token),
+      createdAt: new Date().toISOString(),
+    });
     const cleanup = vi
       .spyOn(app.get(RedisSessionStore), 'deleteAllSessionsForUser')
       .mockRejectedValue(new Error('offline'));
@@ -807,17 +789,15 @@ describe('Finalization and internal gRPC integration', () => {
       ...overrides,
     });
     await db.getRepository(UserEntity).save(user);
-    await db
-      .getRepository(OAuthAccountEntity)
-      .save({
-        id: randomUUID(),
-        userId: user.id,
-        provider: 'KAKAO',
-        providerUserId: providerUserId ?? user.id,
-        providerEmail: null,
-        createdAt: now,
-        updatedAt: now,
-      });
+    await db.getRepository(OAuthAccountEntity).save({
+      id: randomUUID(),
+      userId: user.id,
+      provider: 'KAKAO',
+      providerUserId: providerUserId ?? user.id,
+      providerEmail: null,
+      createdAt: now,
+      updatedAt: now,
+    });
     return row(user.id);
   }
   function row(id: string) {
