@@ -65,6 +65,7 @@ export function configuration() {
       ),
       package: process.env.USER_GRPC_PACKAGE ?? 'wgo.user.v1',
       protoPath: process.env.USER_GRPC_PROTO_PATH ?? 'contracts/user.proto',
+      trustedJwks: process.env.USER_SERVICE_TRUSTED_JWKS,
       serviceJwtSecret: process.env.USER_SERVICE_JWT_SECRET,
     },
     auth: {

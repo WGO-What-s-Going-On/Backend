@@ -13,7 +13,7 @@ import {
 import { loadSync } from '@grpc/proto-loader';
 import { Redis } from 'ioredis';
 import { SignJWT } from 'jose';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { resolve } from 'node:path';
 import request from 'supertest';
 import { DataSource, Repository } from 'typeorm';
@@ -69,6 +69,13 @@ type Rpc = (
 type UserClient = Client & Record<Method, Rpc>;
 const name = `wgo_finalization_test_${process.pid}_${Date.now()}`;
 const secret = 'test-user-grpc-secret-at-least-32-characters';
+const postKeyPair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+const postPublicJwk = {
+  ...postKeyPair.publicKey.export({ format: 'jwk' }),
+  iss: 'wgo-post-service',
+  kid: 'post-1',
+  alg: 'ES256',
+};
 const kakao = {
   exchangeAuthorizationCode: vi.fn().mockResolvedValue('token'),
   getUserId: vi.fn(),
@@ -114,6 +121,7 @@ describe('Finalization and internal gRPC integration', () => {
         port: 0,
         package: 'wgo.user.v1',
         protoPath: resolve('contracts/user.proto'),
+        trustedJwks: JSON.stringify({ keys: [postPublicJwk] }),
         serviceJwtSecret: secret,
       },
       redis: { url: 'redis://127.0.0.1:6379/13' },
@@ -762,6 +770,20 @@ describe('Finalization and internal gRPC integration', () => {
     ).toMatchObject({ status: 1 });
   });
 
+  it('authorizes Post ES256 tokens for profile RPCs', async () => {
+    const user = await seed();
+    const headers = esAuth();
+    expect(
+      await rpc('GetUserProfile', { userId: user.id }, headers),
+    ).toMatchObject({ userId: user.id, status: 1 });
+    expect(
+      await rpc('BatchGetUserProfiles', { userIds: [user.id] }, esAuth()),
+    ).toMatchObject({
+      profiles: [{ userId: user.id, status: 1 }],
+      unavailableUserIds: [],
+    });
+  });
+
   function makeScheduler(batchSize = 20, pollIntervalMs = 60000) {
     const scheduler = new WithdrawalScheduler(
       db,
@@ -818,6 +840,32 @@ describe('Finalization and internal gRPC integration', () => {
       .sign(new TextEncoder().encode(secret));
     const metadata = new Metadata();
     metadata.set('authorization', `Bearer ${token}`);
+    return metadata;
+  }
+  function esAuth(): Metadata {
+    const now = Math.floor(Date.now() / 1000);
+    const header = Buffer.from(
+      JSON.stringify({
+        alg: 'ES256',
+        typ: 'wgo-service+jwt',
+        kid: 'post-1',
+      }),
+    ).toString('base64url');
+    const payload = Buffer.from(
+      JSON.stringify({
+        iss: 'wgo-post-service',
+        sub: 'post-service',
+        aud: 'wgo-user-service',
+        iat: now,
+        exp: now + 30,
+      }),
+    ).toString('base64url');
+    const signature = sign('sha256', Buffer.from(`${header}.${payload}`), {
+      key: postKeyPair.privateKey,
+      dsaEncoding: 'ieee-p1363',
+    }).toString('base64url');
+    const metadata = new Metadata();
+    metadata.set('authorization', `Bearer ${header}.${payload}.${signature}`);
     return metadata;
   }
   async function rpc(
