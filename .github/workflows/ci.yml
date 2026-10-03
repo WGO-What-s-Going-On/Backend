@@ -74,6 +74,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Start user-service dependencies
+        if: matrix.name == 'user-service'
+        run: docker compose up -d --wait
       - name: Install dependencies and run Vitest
         shell: bash
         run: |

@@ -274,7 +274,8 @@ USER_GRPC_HOST=127.0.0.1
 USER_GRPC_PORT=50052
 USER_GRPC_PACKAGE=wgo.user.v1
 USER_GRPC_PROTO_PATH=contracts/user.proto
-USER_SERVICE_JWT_SECRET=<32자 이상 별도 서비스 secret>
+USER_SERVICE_TRUSTED_JWKS=<Post Service 공개 JWK를 담은 JSON JWKS>
+USER_SERVICE_JWT_SECRET=<전환 기간에만 사용하는 32자 이상 legacy HS256 secret>
 ```
 
 Nest provider의 bootstrap/shutdown hook으로 REST와 같은 프로세스에서 grpc-js 서버를
@@ -283,9 +284,12 @@ Nest provider의 bootstrap/shutdown hook으로 REST와 같은 프로세스에서
 Docker 이미지에 contracts를 포함한다. 컨테이너 내부 통신 시 host를 0.0.0.0으로 설정하되
 사설 네트워크/보안 그룹에서 허용한 서비스만 접근시키고 **public internet에 노출하지 않는다.**
 
-Post→Map과 같은 짧은 수명의 HS256 서비스 JWT를 gRPC metadata `authorization: Bearer ...`로
-받는다. sub는 허용 서비스 이름, iss는 `wgo-<sub>`, aud는 `wgo-user-service`, typ는 JWT,
-iat/exp는 필수이며 수명은 최대 60초다. 잘못된 토큰·설정 누락은 UNAUTHENTICATED로 거부한다.
+Post Service의 짧은 수명 ES256 서비스 JWT를 gRPC metadata `authorization: Bearer ...`로
+받고, `USER_SERVICE_TRUSTED_JWKS`에 미리 등록한 공개 JWK의 `(iss, kid)`로 서명을 검증한다.
+헤더는 alg `ES256`, typ `wgo-service+jwt`, kid가 필수이며 aud는 `wgo-user-service`,
+iat/exp는 필수이고 수명은 최대 60초다. 잘못된 토큰·설정 누락은 UNAUTHENTICATED로 거부한다.
+전환 기간에는 `USER_SERVICE_JWT_SECRET`을 사용하는 기존 HS256 토큰도 허용하지만,
+header.alg에 따라 검증 경로를 분리하므로 ES256 검증 실패 시 HS256으로 fallback하지 않는다.
 인증 후 RPC별 권한을 별도로 확인한다. post-service는 GetUserProfile과 BatchGetUserProfiles,
 ws-gateway는 GetUserStatus만 호출할 수 있으며 인증된 비허용 호출은 PERMISSION_DENIED로 거부한다.
 이는 사용자 Access JWT 검증 RPC가 아니며 서비스 secret은 Access JWT secret과 분리한다.
@@ -299,7 +303,8 @@ term-consents, badges, withdrawal), 인증·세션 rotation/복구, Outbox Worke
 제재 부여/해제·Moderation 처리는 구현하지 않았다.
 
 남은 항목은 개인정보 정리 정책, 이벤트 보존/정리·운영 모니터링, 소비자 멱등성/순서 계약,
-서비스 JWT secret 배포, 내부 네트워크 제한, Gateway/각 서비스의 정수 ID 및 RPC 연동이다.
+Post Service의 User gRPC client 연동과 legacy HS256 secret 제거, 내부 네트워크 제한,
+Gateway/각 서비스의 정수 ID 및 RPC 연동이다.
 기존 REST GET/PATCH에는 계정 상태별 접근 제한이 별도로 없으므로 후속 인가 정책 검토가 필요하다.
 
 ## Transactional Outbox Worker

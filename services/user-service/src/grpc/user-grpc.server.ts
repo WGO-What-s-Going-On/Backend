@@ -13,11 +13,10 @@ import {
   type ServiceClientConstructor,
   type ServerUnaryCall,
   type sendUnaryData,
-  type Metadata,
 } from '@grpc/grpc-js';
 import { loadSync } from '@grpc/proto-loader';
-import { jwtVerify } from 'jose';
 import { resolve } from 'node:path';
+import { serviceCaller, trustedKeys, type TrustedKey } from './service-auth.js';
 import { UserQueriesService, UserRpcError } from './user-queries.service.js';
 
 @Injectable()
@@ -26,6 +25,7 @@ export class UserGrpcServer implements OnApplicationBootstrap, OnModuleDestroy {
     'grpc.max_receive_message_length': 64 * 1024,
   });
   private bound = false;
+  private keys: TrustedKey[] = [];
   port = 0;
 
   constructor(
@@ -34,6 +34,8 @@ export class UserGrpcServer implements OnApplicationBootstrap, OnModuleDestroy {
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
+    // Validate the receiver trust list before opening the gRPC port.
+    this.keys = trustedKeys(this.config.get<string>('grpc.trustedJwks'));
     // Follow Map's grpc-js/proto-loader convention rather than adding a second transport framework.
     const definition = loadSync(
       resolve(this.config.getOrThrow<string>('grpc.protoPath')),
@@ -96,7 +98,11 @@ export class UserGrpcServer implements OnApplicationBootstrap, OnModuleDestroy {
       callback: sendUnaryData<object>,
     ) => {
       try {
-        const caller = await this.authenticate(call.metadata);
+        const caller = serviceCaller(
+          call.metadata,
+          this.keys,
+          this.config.get<string>('grpc.serviceJwtSecret'),
+        );
         if (!caller) {
           callback({
             code: status.UNAUTHENTICATED,
@@ -122,39 +128,6 @@ export class UserGrpcServer implements OnApplicationBootstrap, OnModuleDestroy {
           });
       }
     };
-  }
-
-  private async authenticate(metadata: Metadata): Promise<string | undefined> {
-    const secret = this.config.get<string>('grpc.serviceJwtSecret');
-    const token = /^Bearer (\S+)$/i.exec(
-      String(metadata.get('authorization')[0] ?? ''),
-    )?.[1];
-    if (!secret || secret.length < 32 || !token) return undefined;
-    try {
-      // Same short-lived HS256 service JWT convention as Post -> Map, separate from Access JWT.
-      const { payload, protectedHeader } = await jwtVerify(
-        token,
-        new TextEncoder().encode(secret),
-        {
-          algorithms: ['HS256'],
-          audience: 'wgo-user-service',
-          requiredClaims: ['sub', 'iss', 'iat', 'exp'],
-        },
-      );
-      const now = Math.floor(Date.now() / 1000);
-      const valid =
-        protectedHeader.typ === 'JWT' &&
-        typeof payload.sub === 'string' &&
-        payload.iss === `wgo-${payload.sub}` &&
-        typeof payload.iat === 'number' &&
-        typeof payload.exp === 'number' &&
-        payload.iat <= now + 5 &&
-        payload.exp > payload.iat &&
-        payload.exp - payload.iat <= 60;
-      return valid ? payload.sub : undefined;
-    } catch {
-      return undefined;
-    }
   }
 
   private authorized(
