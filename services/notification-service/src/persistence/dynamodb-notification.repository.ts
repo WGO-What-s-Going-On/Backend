@@ -42,8 +42,8 @@ export class DynamoDbNotificationRepository implements NotificationRepository {
         TableName: this.table,
         Key: { userId, notificationId },
         UpdateExpression: 'SET isRead = :true',
-        ConditionExpression: 'attribute_exists(notificationId)',
-        ExpressionAttributeValues: { ':true': true },
+        ConditionExpression: 'attribute_exists(notificationId) AND isRead = :false',
+        ExpressionAttributeValues: { ':true': true, ':false': false },
         ReturnValues: 'ALL_NEW',
       }));
       return (result.Attributes as Notification | undefined) ?? null;

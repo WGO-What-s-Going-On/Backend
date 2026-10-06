@@ -1,8 +1,9 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 
 import type { CreateNotificationInput, Notification, NotificationPage } from './notification.js';
 import { NOTIFICATION_REPOSITORY, type NotificationRepository } from './notification.repository.js';
+import { NotificationState } from '../redis/notification-state.js';
 
 const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
 
@@ -11,6 +12,7 @@ export class NotificationService {
   constructor(
     @Inject(NOTIFICATION_REPOSITORY)
     private readonly repository: NotificationRepository,
+    @Optional() private readonly state?: NotificationState,
   ) {}
 
   async create(input: CreateNotificationInput, now = new Date()): Promise<Notification | null> {
@@ -32,6 +34,7 @@ export class NotificationService {
       expiresAt: Math.floor(now.getTime() / 1000) + THIRTY_DAYS_SECONDS,
     };
     await this.repository.create(notification);
+    await this.state?.incrementUnread(input.userId);
     return notification;
   }
 
@@ -40,7 +43,14 @@ export class NotificationService {
     return this.repository.list(userId, limit, cursor);
   }
 
-  markRead(userId: string, notificationId: string): Promise<Notification | null> {
-    return this.repository.markRead(userId, notificationId);
+  async markRead(userId: string, notificationId: string): Promise<Notification | null> {
+    const notification = await this.repository.markRead(userId, notificationId);
+    if (notification) await this.state?.decrementUnread(userId);
+    return notification;
+  }
+
+  unread(userId: string): Promise<number> {
+    if (!this.state) return this.repository.countUnread(userId);
+    return this.state.unread(userId, () => this.repository.countUnread(userId));
   }
 }
