@@ -1,8 +1,8 @@
 # WGO Notification Service
 
-알림 기록, 구독 및 전송을 담당할 독립 서비스의 기본 프로젝트입니다. 이번 초기 세팅에는 NestJS 앱, 환경설정, `GET /health/live`만 포함합니다. Redis, DynamoDB, Firebase 연결이나 알림 비즈니스 로직은 아직 없습니다.
+알림 원본 저장, 조회, FCM 구독·전송과 Post Redis Stream 소비를 담당합니다.
 
-## 로컬 실행
+## 실행
 
 Node.js 24와 pnpm 10을 사용합니다.
 
@@ -12,32 +12,61 @@ pnpm install
 pnpm dev
 ```
 
-기본 주소는 `http://localhost:3004`입니다. Redis나 DynamoDB가 없어도 앱과 liveness endpoint가 실행됩니다.
+기본 HTTP 주소는 `http://localhost:3004`이며 liveness endpoint는 `GET /health/live`입니다. `REDIS_URL`이 비어 있으면 Post 이벤트 consumer는 시작하지 않습니다.
 
-```bash
-curl http://localhost:3004/health/live
-```
+## 구현된 기능
 
-응답은 `{ "service": "notification-service", "status": "ok" }`입니다. 이 endpoint는 외부 인프라의 준비 상태를 확인하지 않습니다.
+- DynamoDB Notification 생성, 사용자별 최신순 조회와 cursor pagination
+- 사용자 소유권을 포함한 읽음 처리와 30일 TTL
+- FCM token 등록/upsert, 삭제, 사용자별 token 조회
+- Firebase Admin SDK를 통한 복수 token 전송, 부분 실패 보고, invalid token 정리
+- Redis event dedup(7일), unread count cache(1일), 동일 사용자·게시물·유형의 2분 묶음 처리
+- `post:events`의 `post-notification` Consumer Group, `XREADGROUP`, `XAUTOCLAIM`, graceful shutdown
+- Post Service의 schema version 1 envelope와 `PostCreated`, `PostCommentCreated`, `PostReactionCreated`, `PostParticipantJoined` 파싱
+- malformed 또는 5회 실패 이벤트를 `notification:post:dead`에 기록한 후 ACK
+- 자기 행동 알림 제외
 
-Redis를 별도로 시험할 때만 `docker compose --profile redis up -d`로 로컬 Redis를 실행합니다. 호스트 포트는 다른 서비스와 겹치지 않는 6382입니다. 현재 앱은 Redis에 연결하지 않습니다.
+알림 저장이 FCM 전송보다 먼저 완료됩니다. Push 실패 시 DynamoDB의 알림 원본은 유지되고 이벤트는 ACK되지 않아 재처리 대상이 됩니다.
+
+## HTTP API
+
+Gateway가 인증 후 설정한 `X-User-Id`를 사용자 문맥으로 사용합니다. body나 query의 userId는 받지 않습니다.
+
+| Method | Path | 기능 |
+| --- | --- | --- |
+| `GET` | `/api/v1/notifications` | 내 알림 목록 (`limit`, `cursor`) |
+| `GET` | `/api/v1/notifications/unread-count` | 읽지 않은 알림 수 |
+| `PATCH` | `/api/v1/notifications/{notificationId}/read` | 내 알림 읽음 처리 |
+| `PUT` | `/api/v1/notifications/push-subscriptions` | FCM token 등록/upsert |
+| `DELETE` | `/api/v1/notifications/push-subscriptions` | FCM token 삭제 |
+
+## DynamoDB 테이블
+
+`DYNAMODB_NOTIFICATIONS_TABLE`은 partition key `userId`, sort key `notificationId`를 사용합니다. `notificationId`는 ISO 시각으로 시작해 사용자 partition에서 역순 조회할 수 있습니다. `expiresAt`을 TTL attribute로 설정합니다.
+
+`DYNAMODB_PUSH_SUBSCRIPTIONS_TABLE`은 partition key `userId`, sort key `token`을 사용합니다.
+
+## 현재 외부 계약 blocker
+
+- 댓글·LIKE 알림 수신자는 게시물 작성자입니다. Post의 내부 `GET /internal/v1/posts/{postId}/meta`가 작성자를 반환하지만 현재 서비스 인증 권한표에 `notification-service` 호출 권한이 없습니다. 권한표, Post 수신 검증, Notification의 ES256 호출 설정이 확정되어야 실제 resolver를 연결할 수 있습니다.
+- `PostCreated`의 좌표는 확인할 수 있지만 Map Service에는 150m 주변 사용자 ID 조회 계약이 없습니다. 주변 게시물 조회 API로 대체하지 않습니다.
+- 답글, 댓글 반응, 확장 reaction 종류, 종료 예정·종료 및 Moderation 알림 EventType과 payload 계약이 없습니다.
+- `PostParticipantJoined`는 파싱하고 ACK하지만 현재 알림 기능 명세가 없어 알림을 만들지 않습니다.
+- HTTP Gateway의 Notification 경로 인증·권한 계약이 아직 확정되지 않았습니다. Controller는 기존 내부 사용자 헤더 convention을 따르지만 운영 공개 전 Gateway 인증 연결이 필요합니다.
 
 ## 환경변수
 
-| 이름                                | 용도                                                               |
-| ----------------------------------- | ------------------------------------------------------------------ |
-| `NODE_ENV`                          | 실행 환경 (`.env.example`은 `development`)                         |
-| `PORT`                              | HTTP 포트; 기본값 3004, 양의 정수가 아니면 시작 실패               |
-| `REDIS_URL`                         | 향후 Redis Streams 및 캐시에 사용할 주소                           |
-| `AWS_REGION`                        | 향후 DynamoDB에 사용할 AWS 리전                                    |
-| `DYNAMODB_ENDPOINT`                 | 향후 DynamoDB endpoint (로컬 개발 시 사용 가능)                    |
-| `DYNAMODB_NOTIFICATIONS_TABLE`      | 향후 `NOTIFICATIONS` 테이블 이름                                   |
-| `DYNAMODB_PUSH_SUBSCRIPTIONS_TABLE` | 향후 `PUSH_SUBSCRIPTIONS` 테이블 이름                              |
-| `FIREBASE_PROJECT_ID`               | 향후 Firebase 프로젝트 ID                                          |
-| `FIREBASE_CLIENT_EMAIL`             | 향후 Firebase 서비스 계정 이메일                                   |
-| `FIREBASE_PRIVATE_KEY`              | 향후 Firebase 서비스 계정 개인키; 실제 값은 저장소에 커밋하지 않음 |
-
-현재 외부 서비스용 변수는 선택 사항이며, 값을 설정해도 클라이언트가 생성되거나 연결되지는 않습니다.
+| 이름 | 용도 |
+| --- | --- |
+| `PORT` | HTTP 포트, 기본값 `3004` |
+| `REDIS_URL` | Post Stream, dedup, unread cache와 bundle 상태에 사용할 Redis |
+| `AWS_REGION` | DynamoDB region |
+| `DYNAMODB_ENDPOINT` | 로컬 DynamoDB용 선택 endpoint |
+| `DYNAMODB_NOTIFICATIONS_TABLE` | Notification 테이블 |
+| `DYNAMODB_PUSH_SUBSCRIPTIONS_TABLE` | Push subscription 테이블 |
+| `FIREBASE_PROJECT_ID` | Firebase project ID |
+| `FIREBASE_CLIENT_EMAIL` | Firebase service account email |
+| `FIREBASE_PRIVATE_KEY` | Firebase private key. 환경변수의 `\\n`은 실제 줄바꿈으로 변환됩니다. |
 
 ## 검증
 
@@ -47,16 +76,4 @@ pnpm typecheck
 pnpm build
 ```
 
-## 후속 작업
-
-- Post Redis Stream event consumer
-- Moderation/Lifecycle event consumer
-- DynamoDB Notification 저장
-- Push Subscription 관리
-- FCM Push
-- 2분 Window 묶음 알림
-- dedup
-- unread cache
-- Realtime Gateway 연동
-
-이벤트 형태와 수신자 판단은 후속 PR에서 확정합니다.
+단위 테스트는 AWS와 Firebase credential 없이 실행되며 DynamoDB repository, Firebase Messaging, Redis 명령을 대역으로 검증합니다.
