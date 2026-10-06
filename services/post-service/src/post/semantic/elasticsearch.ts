@@ -1,4 +1,5 @@
 import type { Embedding } from './policy.js';
+import { E5_VERSION } from './model-artifacts.js';
 import {
   CANDIDATE_LIMIT,
   DIMENSIONS,
@@ -31,7 +32,7 @@ export const mapping = {
 export class ElasticsearchIndex implements SemanticPostIndex {
   constructor(
     readonly target = process.env.SEMANTIC_INDEX_ALIAS ??
-      'post-semantic-v1-read',
+      `post-semantic-${E5_VERSION}-read`,
     private readonly url = process.env.ELASTICSEARCH_URL ??
       'http://localhost:9200',
     private readonly timeoutMs = Number(

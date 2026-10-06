@@ -3,7 +3,6 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { PostSchema } from '../infrastructure/post.schemas.js';
 import { GrpcLocationAuthorization } from '../infrastructure/grpc-location.authorization.js';
 import {
-  createEmbeddingProvider,
   EMBEDDING_PROVIDER,
   NEARBY_POST_CANDIDATES,
   SEMANTIC_SOURCE,
@@ -19,6 +18,7 @@ import { ElasticsearchIndex } from './elasticsearch.js';
 import { FindSimilarPosts } from './search.js';
 import { IndexSemanticPost } from './index-post.js';
 import { SemanticWorker } from './worker.js';
+import { createEmbeddingProvider } from './embedding-provider.js';
 
 @Module({
   imports: [

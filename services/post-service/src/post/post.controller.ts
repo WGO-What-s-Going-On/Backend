@@ -94,7 +94,7 @@ export class PostController {
   @ApiOperation({
     summary: '작성 초안의 유사 게시물 조회',
     description:
-      '150m·최근 24시간, 후보 최대 200개. 초안을 저장하지 않습니다. 모델 미연결 시 SIMILARITY_CHECK_UNAVAILABLE(503). 로컬·테스트 인증 정책은 작성 API와 같습니다.',
+      '150m·최근 24시간, 후보 최대 200개. 초안을 저장하지 않습니다. 로컬 E5 모델 로딩·워밍업 또는 평가된 임계값이 준비되지 않으면 SIMILARITY_CHECK_UNAVAILABLE(503). 로컬·테스트 인증 정책은 작성 API와 같습니다.',
   })
   @ApiHeader({
     name: 'X-User-Id',

@@ -11,10 +11,8 @@ import {
 } from '../src/post/application/commands.js';
 import { ReadPosts } from '../src/post/application/queries.js';
 import { FindSimilarPosts } from '../src/post/semantic/search.js';
-import {
-  createEmbeddingProvider,
-  type SemanticPostIndex,
-} from '../src/post/semantic/ports.js';
+import { E5EmbeddingProvider } from '../src/post/semantic/embedding-provider.js';
+import { type SemanticPostIndex } from '../src/post/semantic/ports.js';
 import { draft, fixtureEmbedding } from './fixtures/semantic.js';
 
 const auth = {
@@ -91,7 +89,7 @@ describe('similar HTTP contract', () => {
       auth,
       nearby,
       source,
-      createEmbeddingProvider(),
+      new E5EmbeddingProvider(false),
       index,
       undefined,
     );

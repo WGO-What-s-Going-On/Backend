@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { createConnection } from 'mongoose';
-import { createEmbeddingProvider } from './ports.js';
+import { createEmbeddingProvider } from './embedding-provider.js';
 import { ElasticsearchIndex } from './elasticsearch.js';
 import { PostSchema } from '../infrastructure/post.schemas.js';
 import { MongooseSemanticSource } from './mongoose-source.js';
@@ -9,9 +9,20 @@ import { group, semanticRedis } from './worker.js';
 
 async function main() {
   const command = process.argv[2];
-  const embedding = createEmbeddingProvider();
   if (!['init', 'backfill', 'rebuild'].includes(command ?? ''))
     throw new Error('Usage: semantic:command init|backfill|rebuild');
+  const embedding = createEmbeddingProvider();
+  try {
+    await run(command!, embedding);
+  } finally {
+    await embedding.close();
+  }
+}
+
+async function run(
+  command: string,
+  embedding: ReturnType<typeof createEmbeddingProvider>,
+) {
   const index = new ElasticsearchIndex();
   if (command === 'init') {
     const existing = await index.request(
@@ -28,6 +39,7 @@ async function main() {
     console.info({ index: staging.target, alias: index.target });
     return;
   }
+  await embedding.initialize();
   if (!embedding.ready)
     throw new Error('Embedding model is not connected; no data was changed');
   const db = createConnection(

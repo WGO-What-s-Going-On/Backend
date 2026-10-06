@@ -10,7 +10,11 @@
 
 ## 모델·검색 문서
 
-EmbeddingProvider는 ready, version, embed(text, AbortSignal)를 제공한다. 초기 버전 v1, 384개 유한 숫자이며 영벡터·버전 혼합은 허용하지 않는다. 모델은 signal을 준수하고 자체 동시성/큐 상한을 가져야 한다. API deadline 이후 결과는 버리고, Worker는 실제 작업이 종료될 때까지 다음 작업을 시작하지 않는다. 제목/본문은 NFKC·공백 압축 후 개행으로 결합하며 SHA-256 contentHash를 공유한다. 전처리 변경도 새 embeddingVersion이 필요하다.
+EmbeddingProvider는 ready, version, 선택적 initialize(), embed(text, AbortSignal, priority?)를 제공한다. 실제 구현은 E5-small CPU FP32, 버전 `e5-small-761b726-fp32-w480-o64-v1`이며 fixture의 v1과 구분한다. 384개 유한 숫자이며 영벡터·버전 혼합은 허용하지 않는다. 제목/본문은 NFKC·공백 압축 후 개행으로 결합하며 SHA-256 contentHash를 공유한다. 전처리 변경도 새 embeddingVersion이 필요하다.
+
+로컬 모델 파일을 checksum 검사한 뒤 한 번 로드·워밍업한다. 초기화는 앱 시작을 막지 않으며 실패 시 ready=false를 유지한다. 모델 미준비/비활성 상태에서는 Worker가 Redis 연결·소비를 시작하지 않는다. 준비 완료 후 소비를 시작하며 CLI backfill/rebuild도 같은 초기화를 데이터 변경 전에 기다린다. 파일 복구 후 프로세스를 재시작한다.
+
+대칭 비교 입력 모두 `query: `, 패딩 제외 토큰 평균과 L2 정규화를 적용한다. 전체 본문을 최대 480토큰 창(접두사·특수 토큰 포함), 64토큰 중첩으로 처리하고 창별 정규화 벡터를 평균·재정규화한다. 동시성 1, 대기 최대 16건, 대기 포함 10초 제한이다. 요청 우선순위 interactive, 인덱싱 background이며 요청 연속 3건 뒤 대기 중인 인덱싱에 차례를 준다. 취소된 대기는 제거하며, 실행 중인 ONNX 작업은 실제 종료까지 슬롯을 유지한다. API deadline 이후 결과는 버리고 Worker도 실제 종료까지 기다린다. 종료 시 대기를 취소하고 실행 중인 작업을 정리한 뒤 모델을 해제한다.
 
 MongoDB posts 스키마는 바뀌지 않는다. ES `_id=postId`, keyword: postId/status/category/contentHash/embeddingVersion, date: createdAt/expiresAt/sourceUpdatedAt/indexedAt, dense_vector: embedding(384,index:false). 버전별 `post-semantic-v1-read` 별칭은 단일 물리 인덱스의 읽기·쓰기 대상이다. Worker 쓰기는 require_alias=true로 초기화 누락 시 잘못된 동적 인덱스 자동 생성을 막는다. [ES script_score 계약](https://www.elastic.co/guide/en/elasticsearch/reference/8.19/query-dsl-script-score-query.html)에 따라 cosineSimilarity+1을 사용한다. 최대 200개만 계산하므로 ANN 인덱스는 만들지 않는다.
 
@@ -22,7 +26,9 @@ MongoDB posts 스키마는 바뀌지 않는다. ES `_id=postId`, keyword: postId
 
 재구축은 lease → Stream watermark 기록 → 새 물리 인덱스 원본 전체 스캔 → 종료 watermark까지 따라잡기 → 누적 발행 수와 재생 수 및 삭제 watermark로 Stream trim/delete 검사 → 원본/ES 양방향 대조 → refresh → 원자적 별칭 교체 순서다. 보존 기간 이전 원본도 스캔한다. 검증 중 원본 변경/누락 또는 이벤트 손상이 발견되면 전환하지 않고 재시도를 요구한다. 기존 Pending과 그룹 위치는 유지하여 새 별칭에 중복 재처리한다. 진행 상태는 `post-semantic-v1:rebuild` 해시(index/watermark/end/phase/scanned/verified/error)에 남긴다. 실패한 물리 인덱스와 이전 인덱스는 자동 삭제하지 않는다. 복구/rollback 확인 뒤 운영자가 정리한다. [ES alias API](https://www.elastic.co/guide/en/elasticsearch/reference/8.19/aliases.html)의 다중 action으로 전환한다.
 
-현재 상태 이벤트 생산은 후속 작업이다. 그 전에는 만료 필터·최종 원본 확인이 노출을 막으며 정기 rebuild로 남은 파생 문서를 정리한다. 실제 모델/한국어 품질/추론 성능은 이 구현의 검증 범위 밖이다.
+실제 모델의 별칭은 `post-semantic-e5-small-761b726-fp32-w480-o64-v1-read`, 그룹은 `post-semantic-e5-small-761b726-fp32-w480-o64-v1`이다. 위 v1 예시는 fixture/기존 버전이며 실제 모델과 별도 인덱스·그룹을 사용한다. 모델/별칭/평가된 임계값을 같은 배포 설정으로 관리한다. 임계값 기본값은 없고 미설정 시 추천은 503이다. 인덱싱은 임계값 없이 실행할 수 있다.
+
+현재 상태 이벤트 생산은 후속 작업이다. 그 전에는 만료 필터·최종 원본 확인이 노출을 막으며 정기 rebuild로 남은 파생 문서를 정리한다. 실제 모델 연결·기준 벡터 일치·전체 연동은 테스트한다. 한국어 중복 품질·운영 임계값·ECS 추론 부하는 별도 평가 대상이다.
 
 
 ## Map 주변 조회 커서 연결

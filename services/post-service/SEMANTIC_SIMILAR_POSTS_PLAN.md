@@ -546,7 +546,7 @@ MultipleNegativesRankingLoss처럼 배치 안의 다른 문장을 오답으로 �
 
 구현 후 저장소 루트에서 `npm run format`, `npm run format:check`를 실행하고 무관한 포맷 diff를 제거한다. Post와 Map에서 각각 `pnpm typecheck`, `pnpm test`, `pnpm build`, 저장소 연결 후 `RUN_INTEGRATION=1 pnpm test`를 실행한다. 영향이 있는 Gateway도 해당 package의 명령으로 검증한다. Post/Map에는 현재 별도 lint script가 없으므로 존재하지 않는 `pnpm lint`를 통과했다고 보고하지 않는다. 후속 Python 학습·변환 스크립트를 추가하면 재현 가능한 환경과 검증 명령도 함께 제공한다.
 
-기반 구현 단계에서는 실제 모델을 제외한 API·Map 후보 RPC·ES 검색·이벤트 Worker·backfill/rebuild를 구현한다. 구현 계약과 실행 제한은 `contracts/semantic-search.md` 및 README를 기준으로 한다. 일반 실행은 모델 미연결로 추천 503이며 테스트에서만 fixture 모델을 주입한다. 원래 계획의 실제 모델·한국어 품질·추론 성능 목표는 후속 단계다. 검증 결과는 `SEMANTIC_VERIFICATION.md`에 기록한다.
+초기 기반 구현에서는 실제 모델을 제외한 API·Map 후보 RPC·ES 검색·이벤트 Worker·backfill/rebuild를 완료했다. 이후 실제 E5 모델도 연결했으며 구체적인 추가 범위는 문서 마지막에 기록했다. 구현 계약과 실행 제한은 `contracts/semantic-search.md` 및 README를 기준으로 한다. 모델 준비 실패 또는 임계값 미설정 시 추천은 503이다. 한국어 품질·운영 임계값·추론 부하 목표는 후속 평가 대상이다. 검증 결과는 `SEMANTIC_VERIFICATION.md`에 기록한다.
 
 ## 13. 선택한 구성과 남은 검토 사항
 
@@ -559,4 +559,4 @@ MultipleNegativesRankingLoss처럼 배치 안의 다른 문장을 오답으로 �
 5. 9절 품질·지연 목표를 1차 실험 기준으로 삼을지. 미달 시 모델·후보 정책 중 어느 쪽을 수정할지는 분리 측정 결과로 결정한다.
 6. 예상 피크 RPS와 허용되는 기존 Post API 지연 증가량을 얼마로 둘지. 실제 부하 측정으로 추론 동시성·큐 상한·ECS 최소 용량을 확정한다.
 
-현재 사용자 승인 범위는 실제 모델을 제외한 연동 기반 구현이다. 다음 단계에서 실제 Node 모델의 의미 품질·실행 비용과 임계값을 평가하고, 오추천 데이터가 쌓이면 오프라인 학습을 수행한다.
+2026-10-06 추가 구현: 실제 E5-small CPU FP32 모델을 Post의 공통 EmbeddingProvider에 연결했다. 고정 revision·checksum 검증, 오프라인 로딩·워밍업, 전체 토큰 창 분할, 제한된 공통 큐, Worker 준비 대기, CLI 초기화·해제를 구현했다. 실제 모델 버전은 `e5-small-761b726-fp32-w480-o64-v1`이며 기존 fixture v1과 인덱스·그룹을 분리한다. 모델 준비 명령은 `pnpm semantic:model:prepare`, 실제 추론 검증은 `pnpm semantic:model:test`다. 이후 한국어 의미 품질·ECS 실행 비용·운영 임계값을 평가하고 필요하면 오프라인 학습을 수행한다. 임계값 기본값은 추가하지 않는다.

@@ -15,6 +15,7 @@ import { AppModule } from '../src/app.module.js';
 import {
   EMBEDDING_PROVIDER,
   NEARBY_POST_CANDIDATES,
+  SEMANTIC_POST_INDEX,
   type EmbeddingProvider,
 } from '../src/post/semantic/ports.js';
 import { ElasticsearchIndex } from '../src/post/semantic/elasticsearch.js';
@@ -29,6 +30,7 @@ import {
 import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
 import { rebuildSemanticIndex } from '../src/post/semantic/rebuild.js';
 import { draft, vector } from './fixtures/semantic.js';
+import { E5EmbeddingProvider } from '../src/post/semantic/embedding-provider.js';
 
 // 실제 Map 빌드와 MongoDB/Redis/Cassandra/ES가 필요하다. 대체하는 것은 모델 포트뿐이다.
 const suite =
@@ -449,4 +451,80 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
       if (state.index) indexes.push(state.index);
     }
   });
+  it.runIf(process.env.RUN_EMBEDDING_MODEL === '1')(
+    'rebuilds with real E5 vectors and serves the HTTP API through real Map gRPC',
+    async () => {
+      const real = new E5EmbeddingProvider();
+      const realIndex = new ElasticsearchIndex(`${prefix}-e5-read`);
+      let realApp: INestApplication | undefined;
+      try {
+        await real.initialize();
+        const rebuilt = await rebuildSemanticIndex(
+          source,
+          real,
+          realIndex,
+          mapIndex.redis,
+        );
+        indexes.push(rebuilt.index);
+        expect(rebuilt.verified).toBeGreaterThan(0);
+        const document = await realIndex.get(ids[0]!, signal());
+        expect(document!.embeddingVersion).toBe(real.version);
+        expect(document!.embedding).toHaveLength(384);
+
+        const module = await Test.createTestingModule({ imports: [AppModule] })
+          .overrideProvider(EMBEDDING_PROVIDER)
+          .useValue(real)
+          .overrideProvider(SEMANTIC_POST_INDEX)
+          .useValue(realIndex)
+          .compile();
+        realApp = module.createNestApplication();
+        await realApp.init();
+        const record = (await source.batch([ids[0]!]))[0]!;
+        const response = await request(realApp.getHttpServer())
+          .post('/api/v1/posts/similar')
+          .set('X-User-Id', '912341')
+          .send({
+            ...draft,
+            latitude,
+            longitude,
+            title: record.title,
+            content: record.content,
+            limit: 1,
+          })
+          .expect(200);
+        expect(response.body.items).toHaveLength(1);
+        expect(response.body.items[0].title).toBe(record.title);
+        expect(response.body.scope.radiusM).toBe(150);
+
+        // 실제 모델의 준비가 끝난 후 새 버전의 Worker가 누락 문서를 복구한다.
+        await realIndex.remove(ids[0]!, signal());
+        const eventId = `evt_${randomUUID()}`;
+        await mapIndex.redis.xAdd('post:events', '*', {
+          eventId,
+          eventType: 'PostCreated',
+          data: JSON.stringify({
+            eventId,
+            eventType: 'PostCreated',
+            schemaVersion: 1,
+            producer: 'post-service',
+            aggregateId: ids[0],
+            post: { postId: ids[0] },
+            occurredAt: new Date().toISOString(),
+          }),
+        });
+        vi.stubEnv('SEMANTIC_WORKER_ENABLED', 'true');
+        const worker = realApp.get(SemanticWorker);
+        worker.onModuleInit();
+        await expect
+          .poll(() => realIndex.get(ids[0]!, signal()), { timeout: 10000 })
+          .not.toBeNull();
+        await worker.onModuleDestroy();
+      } finally {
+        vi.stubEnv('SEMANTIC_WORKER_ENABLED', 'false');
+        await realApp?.close();
+        await real.close();
+      }
+    },
+    120000,
+  );
 });

@@ -170,12 +170,19 @@ export class SemanticWorker implements OnModuleInit, OnModuleDestroy {
   onModuleInit() {
     // 준비 전에는 Redis 연결·그룹 생성·배달 자체를 시작하지 않는다.
     if (
-      !this.embedding.ready ||
       process.env.SEMANTIC_ENABLED === 'false' ||
       process.env.SEMANTIC_WORKER_ENABLED === 'false'
     )
       return;
-    this.running = this.run();
+    if (!this.running && !this.stopped) this.running = this.startWhenReady();
+  }
+  private async startWhenReady() {
+    try {
+      await this.embedding.initialize?.();
+      if (!this.stopped && this.embedding.ready) await this.run();
+    } catch (error) {
+      this.logger.warn(`Semantic worker not started: ${String(error)}`);
+    }
   }
   private async run() {
     while (!this.stopped) {

@@ -7,7 +7,6 @@ import {
   type SourcePost,
 } from '../src/post/semantic/policy.js';
 import {
-  createEmbeddingProvider,
   type NearbyPostCandidates,
   type EmbeddingProvider,
   type SemanticPostIndex,
@@ -25,6 +24,7 @@ import {
 } from '../src/post/semantic/worker.js';
 import { ElasticsearchIndex } from '../src/post/semantic/elasticsearch.js';
 import { rebuildSemanticIndex } from '../src/post/semantic/rebuild.js';
+import { E5EmbeddingProvider } from '../src/post/semantic/embedding-provider.js';
 
 import { draft, vector, fixtureEmbedding } from './fixtures/semantic.js';
 const post = (i: number): SourcePost =>
@@ -177,7 +177,7 @@ describe('semantic search policy', () => {
     expect(result.partialReasons).toContain('INDEX_LAG');
   });
   it('fails closed before Map when model or evaluated threshold is absent', async () => {
-    embedding = createEmbeddingProvider();
+    embedding = new E5EmbeddingProvider(false);
     await expect(search().execute(draft, 123)).rejects.toThrow(
       'SIMILARITY_CHECK_UNAVAILABLE',
     );
@@ -267,7 +267,7 @@ describe('semantic indexing recovery', () => {
     },
   );
   it('does not start worker or mutate backfill when the model is unavailable', async () => {
-    const absent = createEmbeddingProvider();
+    const absent = new E5EmbeddingProvider(false);
     const worker = new SemanticWorker(
       absent,
       new IndexSemanticPost(source, absent, index),

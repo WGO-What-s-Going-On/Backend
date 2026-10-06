@@ -26,7 +26,7 @@ export class IndexSemanticPost {
       existing?.contentHash === normalized.hash &&
       existing.embeddingVersion === this.embedding.version
         ? { vector: existing.embedding, version: existing.embeddingVersion }
-        : await this.embedding.embed(normalized.text, signal);
+        : await this.embedding.embed(normalized.text, signal, 'background');
     validateEmbedding(embedding, this.embedding.version);
     // 모델 계산 중 삭제·만료되거나 본문이 바뀌면 이전 스냅샷을 저장하지 않는다.
     const latest = (await this.source.batch([id]))[0];

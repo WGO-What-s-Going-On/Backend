@@ -2,6 +2,8 @@
 
 검증일: 2026-10-06. Node.js 24.21.0 / pnpm 10.33.0.
 
+최신 검증은 마지막 **실제 E5 모델 연결 검증** 절을 기준으로 한다. 앞의 72개/75개 테스트 결과는 모델 연결 이전 단계의 기록이다.
+
 ## 완료 범위
 
 - Post `POST /api/v1/posts/similar`: 생성 입력 검증·기존 인증, 기본 5/limit 1–10, 150m·최근 24시간·최대 200개 후보, 유사도/거리/ID 정렬, MongoDB 최종 상태·본문 해시 재확인, partial/503 계약.
@@ -45,9 +47,9 @@ MongoDB replica set(:27017), Redis(:6380/:6381), Cassandra(:9042), 실제 Map gR
 
 ## 실행 제한과 후속 단계
 
-실제 모델은 연결하지 않았다. 일반 실행은 추천 503 `SIMILARITY_CHECK_UNAVAILABLE`, 검색 Worker 미실행이다. 기존 생성·조회·health는 정상 동작하며 MongoDB posts 스키마/공개 batch-get 최대 100개는 그대로다.
+기반 구현 당시 실제 모델은 연결하지 않았다. 이후 E5 모델 연결을 완료했으며 아래 최신 검증 절에 기록했다. 모델 파일 누락/비활성/로딩 실패 시에는 추천 503·Worker 미실행을 유지한다. 기존 생성·조회·health와 MongoDB posts 스키마/공개 batch-get 최대 100개는 그대로다.
 
-fixture를 환경 변수로 운영 모델로 선택하는 경로는 없다. `pnpm semantic:fixture`는 테스트 suite에서만 fixture를 주입하고 테스트용 데이터를 적재한다. 실제 모델 연결 시 `createEmbeddingProvider()`를 교체하고 평가한 `SEMANTIC_THRESHOLD`를 설정해야 한다. 한국어 의미 품질·모델 다운로드/ONNX·학습·양자화·추론 부하/성능·운영 사용자 인증 개방은 검증하지 않은 후속 범위다.
+fixture를 환경 변수로 운영 모델로 선택하는 경로는 없다. `pnpm semantic:fixture`는 테스트 suite에서만 fixture를 주입하고 테스트용 데이터를 적재한다. 한국어 의미 품질·운영 임계값·학습·양자화·ECS 추론 부하/성능·운영 사용자 인증 개방은 후속 범위다.
 
 실행/복구 절차는 [README](README.md), 상세 HTTP·이벤트·인덱스 계약은 [검색 계약](contracts/semantic-search.md)에 있다. 테스트에 사용한 선택적 로컬 ES 컨테이너는 실행 상태로 남겼다.
 
@@ -56,3 +58,23 @@ fixture를 환경 변수로 운영 모델로 선택하는 경로는 없다. `pnp
 구현 범위는 Map gRPC·Post 클라이언트 연결이다. 일반 목록 HTTP API는 추가하지 않았다. 기존 SearchNearbyPosts에 cursor(요청 필드 5)·next_cursor(응답 필드 3)를 추가하고, Map의 기존 공간 조회와 커서를 그대로 사용한다. 기존 응답 필드와 ES256 인증은 유지한다. Post page()는 다음 페이지를 요청할 수 있으며 search()는 150m 첫 페이지 최대 200개만 비교한다.
 
 Post 전체 통합 테스트 11개 파일·75개, Map 전체 통합 테스트 5개 파일·40개가 통과했다. 실제 Redis/Cassandra 공간 조회에서 gRPC로 200개 이후의 1개를 이어 받고, 중복 없는 201개와 마지막 nextCursor=null을 확인했다. 다른 좌표·반경에 커서를 재사용하면 INVALID_ARGUMENT이며, 잘못된 커서·빈 결과·구 서버 응답 호환성도 검증했다. 양 서비스 typecheck/build, 루트 format/format:check 및 git diff --check도 통과했다. 별도 lint script는 없다.
+
+## 실제 E5 모델 연결 검증 (2026-10-06)
+
+- 모델: Xenova/multilingual-e5-small revision `761b726dd34fb83930e26aab4e9ac3899aa1fa78`, CPU FP32, Transformers.js 3.8.1 / ONNX Runtime 1.21.0, intra/inter-op 스레드 각 1. Mac arm64에서 검증했다.
+- 모델 파일/토크나이저 checksum 검증, 네트워크 없는 로딩·워밍업, 단일 모델·큐, 480토큰 창/64토큰 중첩, 평균·L2 정규화를 연결했다.
+- 짧은 한국어 입력은 같은 ONNX 모델의 공식 Transformers.js feature-extraction 파이프라인과 좌표별 오차 1e-5 미만이다. 초기 접두사 토큰화의 단독 공백 차이를 이 검사로 발견해 수정했다. Python 원본 모델과의 별도 비교는 수행하지 않았다.
+- 5,000자 범위 장문에서 마지막 문장 변경이 벡터에 반영되고 벡터가 유한한 384차원 단위 벡터임을 확인했다. 이 검사는 한국어 중복 판별 정확도를 입증하지 않는다.
+- 큐 상한·대기 timeout·대기 취소·실행 중 취소 후 슬롯 유지·인덱싱 공정성·비활성/로딩 실패·일회 초기화/해제·비동기 준비 후 Worker 시작·준비 중 종료를 테스트했다.
+- 실제 MongoDB/Redis/Cassandra/Map gRPC/ES와 E5 Provider로 새 물리 인덱스 재구축·별칭 전환, 추천 HTTP 200/limit=1/150m, 새 버전 Worker의 누락 문서 복구를 확인했다. 테스트 임계값은 운영 평가 결과가 아니다.
+
+| 명령 | 결과 |
+| --- | --- |
+| `RUN_INTEGRATION=1 RUN_SEMANTIC_INTEGRATION=1 RUN_EMBEDDING_MODEL=1 pnpm test` | 13개 파일, 88개 테스트 통과, skip 없음 |
+| `pnpm semantic:model:test` | 실제 모델 3개 테스트 통과 |
+| `pnpm semantic:model:prepare` | 기존 다운로드 파일 재사용·고정 checksum 검증 통과 |
+| 모델 경로를 존재하지 않는 경로로 지정한 `pnpm semantic:command backfill` | 모델 준비 단계에서 exit 1, DB/Redis 연결·데이터 변경 전에 종료 |
+| `pnpm typecheck`, `pnpm build` | 통과 |
+| 루트 `npm run format`, `npm run format:check`, `git diff --check` | 통과, 무관한 변경 없음 |
+
+별도 lint 명령은 없다. 이번 변경은 Post 내부 모델 연결이며 Map 코드는 변경하지 않았다. 모델이 준비되어도 `SEMANTIC_THRESHOLD` 미설정 시 추천은 503이다. 실제 데이터의 재인덱싱과 운영 활성화는 [README](README.md)의 새 모델 별칭·backfill 절차를 따른다.

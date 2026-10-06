@@ -63,6 +63,7 @@ suite('post creation integration', () => {
   const header = { 'X-User-Id': '123' };
 
   beforeAll(async () => {
+    vi.stubEnv('SEMANTIC_MODEL_ENABLED', 'false');
     process.env.NODE_ENV = 'test';
     process.env.MONGODB_URI =
       'mongodb://localhost:27017/wgo_post_integration?replicaSet=rs0';
@@ -163,6 +164,7 @@ suite('post creation integration', () => {
     map.forceShutdown();
     await redis.quit();
     await app.close();
+    vi.unstubAllEnvs();
   });
 
   it('creates an active post and its outbox event', async () => {
