@@ -102,4 +102,25 @@ describe('LifecycleService', () => {
       correlationId: 'req_comment',
     });
   });
+
+  it('updates ACTIVE activity without emitting an event and ignores older activity', async () => {
+    const repository = new MemoryLifecycle();
+    const service = new LifecycleService(repository);
+    await service.initialize('post_1', '2026-01-01T00:00:00.000Z');
+    await service.recordActivity(
+      'post_1',
+      '2026-01-01T00:10:00.000Z',
+      'req_new',
+    );
+    await service.recordActivity(
+      'post_1',
+      '2026-01-01T00:05:00.000Z',
+      'req_old',
+    );
+    expect(await repository.find('post_1')).toMatchObject({
+      state: 'ACTIVE',
+      lastMeaningfulActivityAt: '2026-01-01T00:10:00.000Z',
+    });
+    expect(repository.events).toHaveLength(0);
+  });
 });
