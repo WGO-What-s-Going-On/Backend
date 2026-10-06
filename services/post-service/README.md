@@ -147,3 +147,31 @@ pnpm build
 
 테스트를 개발 중 계속 실행하려면 `pnpm test:watch`를 사용한다. 통합 테스트는
 MongoDB Replica Set과 Redis가 실행 중일 때 `RUN_INTEGRATION=1 pnpm test`로 실행한다.
+
+## 유사 게시물 조회·벡터 인덱싱 기반
+
+`POST /api/v1/posts/similar`와 Map 200개 후보 gRPC, ES 검색, 독립 Redis Streams Worker, 원본 기반 backfill/rebuild를 구현했다. 계약과 실패/복구 정책은 [semantic-search.md](contracts/semantic-search.md), HTTP 스키마는 `/docs`에서 확인한다. 공개 batch-get 최대 100개와 생성/조회 동작은 유지한다.
+
+**실제 임베딩 모델은 미연결이다.** 일반 실행은 추천 503 `SIMILARITY_CHECK_UNAVAILABLE`, 검색 Worker 미실행이다. ES가 없어도 기존 앱 시작과 생존 확인은 가능하다. `SEMANTIC_THRESHOLD` 기본값은 없으며 실제 모델 평가 후 설정해야 한다. 환경 변수로 가짜 벡터를 활성화하는 경로는 없다. 모델 연결 시 `createEmbeddingProvider()`의 구현을 교체하면 API·Worker·CLI가 같은 포트를 사용한다. 테스트는 Nest overrideProvider 또는 생성자 주입으로만 fixture를 사용한다.
+
+```bash
+# 선택적 로컬 ES (Mongo/Redis와 별도, 보안 비활성은 loopback 개발용)
+docker compose -f compose.semantic.yaml up -d --wait
+pnpm semantic:init
+# 모델 미연결 시 두 명령은 데이터 변경 전에 명시적으로 실패한다.
+pnpm semantic:backfill
+pnpm semantic:rebuild
+```
+
+backfill도 새 물리 인덱스를 검증한 뒤 별칭을 교체한다. 실행 중 Worker job이 lease를 보유하면 명령은 busy로 종료하므로 잠시 뒤 재시도한다. 긴 재구축은 `SEMANTIC_WORKER_ENABLED=false`로 소비 프로세스를 정상 종료한 뒤 수행할 수 있다. 원본 스캔 중에도 Outbox 발행은 계속되며 watermark 이후 이벤트를 따라잡는다. 실패한 인덱스는 공개하지 않는다. Stream 보존 구간 유실·원본 동시 변경으로 검증이 실패하면 원본에서 다시 실행한다.
+
+실제 MongoDB(replica set), Redis(:6380), Cassandra(:9042, Map schema), Map gRPC 및 Elasticsearch(:9200)를 연결하는 테스트/fixture 적재 명령:
+
+```bash
+# Node 24, 설치된 Post/Map 의존성 및 Map schema.cql 필요
+(cd ../map-service && pnpm build)
+RUN_INTEGRATION=1 pnpm test
+pnpm semantic:fixture
+```
+
+`semantic:fixture`는 테스트 전용 MongoDB와 Redis DB 14에 201개 생성 이벤트를 적재하여 실제 후보/검색/회수/재구축을 검증한다. ES 테스트 인덱스와 MongoDB는 종료 시 정리한다. 고정 벡터는 연동과 정렬을 검증하며 한국어 의미 품질을 입증하지 않는다. 모델 다운로드·ONNX·학습·양자화·성능 튜닝·운영 인증 개방은 후속 범위다.

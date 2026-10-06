@@ -438,3 +438,12 @@ Secret, 비공개 본문 또는 불필요한 원본 좌표를 기록하지 않�
 
 구현에 종속적인 값은 버전 관리되는 설정과 각 서비스 문서에 기록한다. 이 문서는
 시스템 전체의 경계, 책임과 아키텍처 결정에 대한 기준 문서로 유지한다.
+
+
+## Post 유사 게시물 검색 파생 인덱스
+
+Post 원본은 MongoDB다. Post 내부 EmbeddingProvider 계산 포트와 ES 검색 어댑터를 추가하며 독립 벡터 도메인/서비스는 만들지 않는다. ES의 버전별 384차원 벡터는 재구축 가능한 파생 데이터이고 MongoDB 게시물 스키마에 벡터/추출 상태를 저장하지 않는다.
+
+작성 초안은 Post → 기존 Map 위치 인가 → MapPostQuery.SearchNearbyPosts(350m,최대200) → Post Mongo 원본 검증 → 초안 임베딩 → ES 후보 벡터 비교 → Mongo 최종 검증으로 처리한다. 생성은 기존 MongoDB+Outbox 흐름을 유지한다. 독립 그룹 post-semantic-v1 Worker가 생성 이벤트를 소비해 최신 원본을 인덱싱한다. 재구축은 버전별 소비 lease·Stream watermark·원본 스캔·따라잡기·검증·ES 별칭 전환을 사용한다.
+
+실제 모델은 아직 연결하지 않는다. 일반 실행의 추천은 503이며 Worker는 이벤트를 소비하지 않는다. 기존 앱 시작/생존/생성/조회는 ES·모델 준비에 의존하지 않는다. 상세 계약은 [Post 검색 계약](services/post-service/contracts/semantic-search.md)에 있다.

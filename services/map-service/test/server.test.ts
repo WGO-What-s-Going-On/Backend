@@ -329,3 +329,84 @@ describe('Map HTTP and gRPC contract', () => {
     ).toBe(503);
   });
 });
+
+describe('MapPostQuery ES256-only contract', () => {
+  const nearby = async (query: any) => {
+    if (query.latitude === 1) throw new Error('unavailable');
+    const items = Array.from({ length: 201 }, (_, i) => ({
+      postId: `post_00000000-0000-0000-0000-${String(i).padStart(12, '0')}`,
+      distanceM: i,
+    }));
+    return {
+      items: items.slice(0, query.limit),
+      nextCursor: items.length > query.limit ? 'more' : null,
+    };
+  };
+  const server = createGrpcServer(store, { nearby });
+  let client: any;
+  beforeAll(async () => {
+    const port = await new Promise<number>((resolve, reject) =>
+      server.bindAsync(
+        '127.0.0.1:0',
+        ServerCredentials.createInsecure(),
+        (error, port) => (error ? reject(error) : resolve(port)),
+      ),
+    );
+    const pkg = loadPackageDefinition(
+      loadSync('contracts/map-authorization.proto', { defaults: true }),
+    ) as any;
+    client = new pkg.wgo.map.v1.MapPostQuery(
+      `127.0.0.1:${port}`,
+      credentials.createInsecure(),
+    );
+  });
+  afterAll(() => {
+    client?.close();
+    server.forceShutdown();
+  });
+  const call = (request: object, jwt = esToken()) =>
+    new Promise<any>((resolve, reject) => {
+      const metadata = new Metadata();
+      metadata.set('authorization', `Bearer ${jwt}`);
+      client.SearchNearbyPosts(
+        request,
+        metadata,
+        { deadline: new Date(Date.now() + 1000) },
+        (error: any, result: any) => (error ? reject(error) : resolve(result)),
+      );
+    });
+  const query = { latitude: 37.5, longitude: 127, radiusM: 350, limit: 200 };
+  it('returns 200 candidates and truncation with an ES256 Post token', async () => {
+    const response = await call(query);
+    expect(response.items).toHaveLength(200);
+    expect(response.truncated).toBe(true);
+    expect(response.items[199].distanceM).toBe(199);
+  });
+  it.each([0, 201, -1])('rejects invalid limit %s', async (limit) => {
+    await expect(call({ ...query, limit })).rejects.toMatchObject({
+      code: status.INVALID_ARGUMENT,
+    });
+  });
+  it.each([150, 250, 350])('accepts supported radius %s', async (radiusM) => {
+    expect((await call({ ...query, radiusM })).items).toHaveLength(200);
+  });
+  it('rejects invalid coordinates/radius and dependency failures', async () => {
+    await expect(call({ ...query, latitude: 91 })).rejects.toMatchObject({
+      code: status.INVALID_ARGUMENT,
+    });
+    await expect(call({ ...query, radiusM: 500 })).rejects.toMatchObject({
+      code: status.INVALID_ARGUMENT,
+    });
+    await expect(call({ ...query, latitude: 1 })).rejects.toMatchObject({
+      code: status.UNAVAILABLE,
+    });
+  });
+  it('rejects legacy HS256 and signed tokens with the wrong identity', async () => {
+    await expect(call(query, token())).rejects.toMatchObject({
+      code: status.UNAUTHENTICATED,
+    });
+    await expect(
+      call(query, esToken({}, { sub: 'http-gateway' })),
+    ).rejects.toMatchObject({ code: status.UNAUTHENTICATED });
+  });
+});

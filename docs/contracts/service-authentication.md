@@ -166,3 +166,10 @@ Gateway가 사용자 Access JWT도 검증하고, 필요한 내부 신원 헤더�
 서명 `kid`를 바꾼 다음, 이전 토큰의 최대 수명과 배포 겹침이 지난 후 옛
 공개키를 제거한다. 개인키 유출 시에는 해당 호출 서비스의 키를 즉시 교체하고
 옛 `kid`를 거부한다. 이 경우 유효 기간이 남은 토큰도 실패할 수 있다.
+
+
+## 유사 게시물 검색 기반의 추가 계약
+
+`MapPostQuery.SearchNearbyPosts`는 ES256으로 인증한 `post-service`만 허용한다. 기존 두 MapAuthorization RPC의 HS256 전환 예외를 신규 RPC에 확장하지 않는다. Post는 기존 두 위치 인가 클라이언트와 동일한 내부 ES256 서명 함수를 사용한다. 자세한 입력/응답은 Map `contracts/map-authorization.proto`에 정의한다.
+
+`POST /api/v1/posts/similar`는 생성과 같은 사용자 인증 정책을 따른다. 현재 로컬·테스트 X-User-Id만 지원하고 운영 사용자 인증 미연결 시 503이다. 목표 Gateway 호출자는 http-gateway이며 사용자 인증/내부 헤더 정제는 기존 전환 선행 조건이다. 모델 미연결도 명시적인 503이며 API 추가가 운영 인증 개방을 뜻하지 않는다.

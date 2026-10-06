@@ -1,9 +1,15 @@
+import { FindSimilarPosts } from './semantic/search.js';
+import {
+  SimilarPostsBody,
+  SimilarPostsResponse,
+} from './presentation/similar.openapi.js';
 import {
   BadRequestException,
   Body,
   Controller,
   Get,
   Headers,
+  HttpCode,
   Param,
   Post,
   Query,
@@ -38,6 +44,7 @@ import {
   participantInput,
   postId,
   postInput,
+  similarInput,
   reactionInput,
   userId,
 } from './presentation/post.input.js';
@@ -79,7 +86,34 @@ export class PostController {
     private readonly createReaction: CreateReaction,
     private readonly joinPost: JoinPost,
     private readonly readPosts: ReadPosts,
+    private readonly findSimilar: FindSimilarPosts,
   ) {}
+
+  @Post('similar')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: '작성 초안의 유사 게시물 조회',
+    description:
+      '350m·최근 24시간, 후보 최대 200개. 초안을 저장하지 않습니다. 모델 미연결 시 SIMILARITY_CHECK_UNAVAILABLE(503). 로컬·테스트 인증 정책은 작성 API와 같습니다.',
+  })
+  @ApiHeader({
+    name: 'X-User-Id',
+    description: '양의 정수 사용자 ID (로컬·테스트 전용)',
+  })
+  @ApiBody({ type: SimilarPostsBody })
+  @ApiOkResponse({ type: SimilarPostsResponse })
+  @ApiForbiddenResponse({ description: '사용자 또는 위치 인가 거부' })
+  @ApiServiceUnavailableResponse({
+    description:
+      'SIMILARITY_CHECK_UNAVAILABLE: 모델·임계값 미준비, 의존성 오류 또는 timeout. 운영 사용자 인증 미연결도 503.',
+  })
+  similar(
+    @Headers('x-user-id') header: string | undefined,
+    @Body() body: unknown,
+  ) {
+    const actorId = userId(header);
+    return this.findSimilar.execute(similarInput(body), actorId);
+  }
 
   @Get(':postId')
   @ApiOperation({

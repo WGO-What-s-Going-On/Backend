@@ -12,3 +12,10 @@
 초기 gRPC 메타데이터의 `authorization` 값은 정확히 하나의 `Bearer <JWT>`여야 한다. 새 토큰은 ES256, `typ=wgo-service+jwt`, 등록된 `kid`, `iss=wgo-post-service`, `sub=post-service`, `aud=wgo-map-service`를 사용한다. `iat`와 `exp`는 정수 Unix 초이며, 수명은 최대 60초, 미래 발급 허용치는 5초다. 허용 호출자는 두 RPC 모두 `post-service`다. 전환 기간에는 같은 issuer, subject, audience, 시간 조건을 만족하는 기존 HS256 `typ=JWT` 토큰도 허용한다. ES256 검증 실패 시 HS256으로 재시도하지 않는다.
 
 누락·중복·잘못된 토큰은 `UNAUTHENTICATED`, 인증된 호출자의 권한 부족은 `PERMISSION_DENIED`, 입력 오류는 `INVALID_ARGUMENT`, 위치 저장소 장애는 `UNAVAILABLE` gRPC 상태로 응답한다. 호출자는 deadline을 설정해야 한다. 요청·응답 proto 필드는 이 전환에서 바뀌지 않는다.
+
+
+## MapPostQuery.SearchNearbyPosts
+
+같은 proto에 정의된 신규 검색 RPC다. 좌표·radiusM(150/250/350)·limit(1–200)을 받으며 `{items:[{postId,distanceM}],truncated}`를 반환한다. 공간 인덱스의 ACTIVE·미만료 후보를 거리·postId 순서로 조회하고 다음 후보가 존재하면 truncated=true다. 최대 200개이며 공개 HTTP의 100개/커서 계약은 유지한다. Post가 MongoDB 원본의 최근 24시간·최종 상태를 별도로 검증한다.
+
+ES256으로 인증된 post-service만 허용한다. 기존 MapAuthorization의 HS256 호환성은 이 RPC에 적용하지 않는다. 누락/HS256/잘못된 신원은 UNAUTHENTICATED, 입력 오류는 INVALID_ARGUMENT, 저장소 장애는 UNAVAILABLE이다. Post는 MAP_GRPC_TIMEOUT_MS deadline을 적용한다.

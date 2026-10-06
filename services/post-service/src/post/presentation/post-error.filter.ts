@@ -1,3 +1,4 @@
+import { SimilarityUnavailableError } from '../semantic/policy.js';
 import {
   ArgumentsHost,
   BadRequestException,
@@ -18,6 +19,7 @@ import {
 } from '../domain/post.js';
 
 @Catch(
+  SimilarityUnavailableError,
   PostNotFoundError,
   PostInactiveError,
   InvalidPostError,
@@ -29,6 +31,12 @@ export class PostErrorFilter implements ExceptionFilter {
     const response = host
       .switchToHttp()
       .getResponse<{ status(code: number): { json(body: unknown): void } }>();
+    if (error instanceof SimilarityUnavailableError) {
+      response
+        .status(503)
+        .json({ statusCode: 503, code: error.message, message: error.message });
+      return;
+    }
     const httpError =
       error instanceof PostNotFoundError
         ? new NotFoundException(error.message)

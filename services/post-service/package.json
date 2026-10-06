@@ -13,7 +13,12 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "semantic:command": "node dist/post/semantic/cli.js",
+    "semantic:init": "pnpm build && pnpm semantic:command init",
+    "semantic:backfill": "pnpm build && pnpm semantic:command backfill",
+    "semantic:rebuild": "pnpm build && pnpm semantic:command rebuild",
+    "semantic:fixture": "RUN_SEMANTIC_INTEGRATION=1 vitest run test/semantic.integration.test.ts"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.5",

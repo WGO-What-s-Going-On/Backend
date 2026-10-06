@@ -1,3 +1,4 @@
+import { SemanticModule } from './semantic/semantic.module.js';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { InternalPostController, PostController } from './post.controller.js';
@@ -40,6 +41,7 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
 
 @Module({
   imports: [
+    SemanticModule,
     MongooseModule.forFeature([
       { name: 'Post', schema: PostSchema, collection: 'posts' },
       { name: 'Comment', schema: CommentSchema, collection: 'post_comments' },

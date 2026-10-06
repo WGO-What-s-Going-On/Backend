@@ -26,3 +26,21 @@ message LocationDecision {
   bool allowed = 1;
   string reason = 2; // LOCATION_MISSING, LOCATION_STALE, OUTSIDE_RADIUS
 }
+
+service MapPostQuery {
+  rpc SearchNearbyPosts (NearbyPostsRequest) returns (NearbyPostsResponse);
+}
+message NearbyPostsRequest {
+  double latitude = 1;
+  double longitude = 2;
+  int32 radius_m = 3;
+  int32 limit = 4;
+}
+message NearbyPost {
+  string post_id = 1;
+  double distance_m = 2;
+}
+message NearbyPostsResponse {
+  repeated NearbyPost items = 1;
+  bool truncated = 2;
+}

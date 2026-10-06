@@ -5,9 +5,9 @@ import { PostConsumer } from './post-consumer.js';
 
 const store = new CassandraLocationStore();
 // Validate trusted keys before starting external connections or consumers.
-const grpc = createGrpcServer(store);
-await store.connect();
 const index = new PostIndex();
+const grpc = createGrpcServer(store, index);
+await store.connect();
 await index.connect();
 const consumer = new PostConsumer(index);
 void consumer.run().catch((error) => {
