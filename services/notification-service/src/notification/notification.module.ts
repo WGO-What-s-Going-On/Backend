@@ -9,6 +9,7 @@ import { PushSubscriptionService } from '../push-subscription/push-subscription.
 import { NotificationController } from './notification.controller.js';
 import { FirebasePushAdapter } from '../firebase/firebase-push.adapter.js';
 import { PUSH_SENDER } from '../firebase/push.js';
+import { NotificationState } from '../redis/notification-state.js';
 import { NOTIFICATION_REPOSITORY } from './notification.repository.js';
 import { NotificationService } from './notification.service.js';
 
@@ -32,6 +33,14 @@ import { NotificationService } from './notification.service.js';
     PushSubscriptionService,
     FirebasePushAdapter,
     { provide: PUSH_SENDER, useExisting: FirebasePushAdapter },
+    {
+      provide: NotificationState,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) =>
+        NotificationState.fromUrl(
+          config.get<string>('redis.url') ?? 'redis://localhost:6382',
+        ),
+    },
   ],
   exports: [NotificationService, NOTIFICATION_REPOSITORY],
 })

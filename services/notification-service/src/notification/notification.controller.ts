@@ -16,6 +16,11 @@ export class NotificationController {
     return this.notifications.list(requireUserId(header), limit === undefined ? 20 : Number(limit), cursor);
   }
 
+  @Get('unread-count')
+  async unread(@Headers('x-user-id') header: unknown) {
+    return { count: await this.notifications.unread(requireUserId(header)) };
+  }
+
   @Patch(':notificationId/read')
   async markRead(@Headers('x-user-id') header: unknown, @Param('notificationId') notificationId: string) {
     const result = await this.notifications.markRead(requireUserId(header), notificationId);
