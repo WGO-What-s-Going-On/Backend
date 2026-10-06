@@ -17,8 +17,14 @@ export class DynamoDbNotificationRepository implements NotificationRepository {
     this.table = config.get<string>('dynamodb.notificationsTable') ?? 'notifications';
   }
 
-  async create(notification: Notification): Promise<void> {
-    await this.client.send(new PutCommand({ TableName: this.table, Item: notification, ConditionExpression: 'attribute_not_exists(notificationId)' }));
+  async create(notification: Notification): Promise<boolean> {
+    try {
+      await this.client.send(new PutCommand({ TableName: this.table, Item: notification, ConditionExpression: 'attribute_not_exists(notificationId)' }));
+      return true;
+    } catch (error) {
+      if ((error as { name?: string }).name === 'ConditionalCheckFailedException') return false;
+      throw error;
+    }
   }
 
   async list(userId: string, limit: number, cursor?: string): Promise<NotificationPage> {

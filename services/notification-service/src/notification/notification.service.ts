@@ -15,11 +15,11 @@ export class NotificationService {
     @Optional() private readonly state?: NotificationState,
   ) {}
 
-  async create(input: CreateNotificationInput, now = new Date()): Promise<Notification | null> {
+  async create(input: CreateNotificationInput, now = new Date(), notificationId?: string): Promise<Notification | null> {
     if (input.actorId !== undefined && input.actorId === input.userId) return null;
     const createdAt = now.toISOString();
     const notification: Notification = {
-      notificationId: `${createdAt}_${randomUUID()}`,
+      notificationId: notificationId ?? `${createdAt}_${randomUUID()}`,
       userId: input.userId,
       type: input.type,
       title: input.title,
@@ -33,8 +33,8 @@ export class NotificationService {
       createdAt,
       expiresAt: Math.floor(now.getTime() / 1000) + THIRTY_DAYS_SECONDS,
     };
-    await this.repository.create(notification);
-    await this.state?.incrementUnread(input.userId);
+    const created = await this.repository.create(notification);
+    if (created) await this.state?.incrementUnread(input.userId);
     return notification;
   }
 

@@ -10,6 +10,9 @@ import { NotificationController } from './notification.controller.js';
 import { FirebasePushAdapter } from '../firebase/firebase-push.adapter.js';
 import { PUSH_SENDER } from '../firebase/push.js';
 import { NotificationState } from '../redis/notification-state.js';
+import { PostEventConsumer } from '../event-consumer/post-event.consumer.js';
+import { PostEventHandler } from '../event-consumer/post-event.handler.js';
+import { RECIPIENT_RESOLVER, UnavailableRecipientResolver } from '../event-consumer/recipient-resolver.js';
 import { NOTIFICATION_REPOSITORY } from './notification.repository.js';
 import { NotificationService } from './notification.service.js';
 
@@ -41,6 +44,9 @@ import { NotificationService } from './notification.service.js';
           config.get<string>('redis.url') ?? 'redis://localhost:6382',
         ),
     },
+    { provide: RECIPIENT_RESOLVER, useClass: UnavailableRecipientResolver },
+    PostEventHandler,
+    PostEventConsumer,
   ],
   exports: [NotificationService, NOTIFICATION_REPOSITORY],
 })

@@ -6,7 +6,7 @@ import { NotificationService } from '../src/notification/notification.service.js
 
 class MemoryRepository implements NotificationRepository {
   items: Notification[] = [];
-  async create(value: Notification) { this.items.push(value); }
+  async create(value: Notification) { if (this.items.some((item) => item.userId === value.userId && item.notificationId === value.notificationId)) return false; this.items.push(value); return true; }
   async list(userId: string, limit: number, cursor?: string): Promise<NotificationPage> {
     const rows = this.items.filter((item) => item.userId === userId).sort((a, b) => b.notificationId.localeCompare(a.notificationId));
     const start = cursor ? rows.findIndex((item) => item.notificationId === cursor) + 1 : 0;
