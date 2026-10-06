@@ -1,0 +1,11 @@
+services:
+  redis:
+    image: redis:8-alpine
+    profiles: ['redis']
+    ports:
+      - '6383:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 2s
+      retries: 10
