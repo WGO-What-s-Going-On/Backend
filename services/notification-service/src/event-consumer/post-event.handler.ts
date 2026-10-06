@@ -49,7 +49,11 @@ export class PostEventHandler {
         candidateId,
       );
       if (notificationId !== candidateId) {
-        await this.repository.increment(recipient, notificationId);
+        const bundled = await this.repository.increment(
+          recipient,
+          notificationId,
+        );
+        if (!bundled) throw new Error('bundle notification is not durable yet');
         await this.state.complete(event.eventId, recipient);
         return;
       }
