@@ -5,8 +5,13 @@ export interface RedisCommands {
   isOpen: boolean;
   connect(): Promise<unknown>;
   quit(): Promise<unknown>;
-  set(key: string, value: string, options?: { NX?: boolean; EX?: number }): Promise<string | null>;
+  set(
+    key: string,
+    value: string,
+    options?: { NX?: boolean; EX?: number },
+  ): Promise<string | null>;
   get(key: string): Promise<string | null>;
+  del(key: string): Promise<number>;
   incr(key: string): Promise<number>;
   decr(key: string): Promise<number>;
   expire(key: string, seconds: number): Promise<boolean>;
@@ -27,19 +32,44 @@ export class NotificationState implements OnModuleDestroy {
   }
 
   async claim(eventId: string, userId: string): Promise<boolean> {
-    return (await this.run((redis) => redis.set(`notification:dedup:${eventId}:${userId}`, '1', { NX: true, EX: DEDUP_TTL_SECONDS }))) === 'OK';
+    const key = this.dedupKey(eventId, userId);
+    if ((await this.run((redis) => redis.get(key))) === 'done') return false;
+    return (
+      (await this.run((redis) =>
+        redis.set(key, 'processing', { NX: true, EX: 30 }),
+      )) === 'OK'
+    );
+  }
+
+  async complete(eventId: string, userId: string): Promise<void> {
+    await this.run((redis) =>
+      redis.set(this.dedupKey(eventId, userId), 'done', {
+        EX: DEDUP_TTL_SECONDS,
+      }),
+    );
+  }
+
+  async release(eventId: string, userId: string): Promise<void> {
+    await this.run((redis) => redis.del(this.dedupKey(eventId, userId)));
   }
 
   async unread(userId: string, load: () => Promise<number>): Promise<number> {
     try {
-      const cached = await this.run((redis) => redis.get(`notification:unread:${userId}`));
-      if (cached !== null && Number.isInteger(Number(cached))) return Number(cached);
+      const cached = await this.run((redis) =>
+        redis.get(`notification:unread:${userId}`),
+      );
+      if (cached !== null && Number.isInteger(Number(cached)))
+        return Number(cached);
     } catch {
       // DynamoDB remains the source of truth when the cache is unavailable.
     }
     const count = await load();
     try {
-      await this.run((redis) => redis.set(`notification:unread:${userId}`, String(count), { EX: UNREAD_TTL_SECONDS }));
+      await this.run((redis) =>
+        redis.set(`notification:unread:${userId}`, String(count), {
+          EX: UNREAD_TTL_SECONDS,
+        }),
+      );
     } catch {}
     return count;
   }
@@ -57,14 +87,24 @@ export class NotificationState implements OnModuleDestroy {
     try {
       await this.run(async (redis) => {
         const value = await redis.decr(`notification:unread:${userId}`);
-        if (value < 0) await redis.set(`notification:unread:${userId}`, '0', { EX: UNREAD_TTL_SECONDS });
+        if (value < 0)
+          await redis.set(`notification:unread:${userId}`, '0', {
+            EX: UNREAD_TTL_SECONDS,
+          });
       });
     } catch {}
   }
 
-  async reserveBundle(userId: string, targetId: string, type: string, notificationId: string): Promise<string> {
+  async reserveBundle(
+    userId: string,
+    targetId: string,
+    type: string,
+    notificationId: string,
+  ): Promise<string> {
     const key = `notification:bundle:${userId}:${targetId}:${type}`;
-    const reserved = await this.run((redis) => redis.set(key, notificationId, { NX: true, EX: BUNDLE_TTL_SECONDS }));
+    const reserved = await this.run((redis) =>
+      redis.set(key, notificationId, { NX: true, EX: BUNDLE_TTL_SECONDS }),
+    );
     if (reserved === 'OK') return notificationId;
     const existing = await this.run((redis) => redis.get(key));
     if (!existing) throw new Error('bundle reservation lost');
@@ -75,8 +115,14 @@ export class NotificationState implements OnModuleDestroy {
     if (this.redis.isOpen) await this.redis.quit();
   }
 
-  private async run<T>(action: (redis: RedisCommands) => Promise<T>): Promise<T> {
+  private async run<T>(
+    action: (redis: RedisCommands) => Promise<T>,
+  ): Promise<T> {
     if (!this.redis.isOpen) await this.redis.connect();
     return action(this.redis);
+  }
+
+  private dedupKey(eventId: string, userId: string): string {
+    return `notification:dedup:${eventId}:${userId}`;
   }
 }
