@@ -3,10 +3,15 @@ import { ConfigService } from '@nestjs/config';
 
 import { createDynamoDocumentClient, DYNAMODB_DOCUMENT_CLIENT } from '../persistence/dynamodb.client.js';
 import { DynamoDbNotificationRepository } from '../persistence/dynamodb-notification.repository.js';
+import { DynamoDbPushSubscriptionRepository } from '../persistence/dynamodb-push-subscription.repository.js';
+import { PUSH_SUBSCRIPTION_REPOSITORY } from '../push-subscription/push-subscription.repository.js';
+import { PushSubscriptionService } from '../push-subscription/push-subscription.service.js';
+import { NotificationController } from './notification.controller.js';
 import { NOTIFICATION_REPOSITORY } from './notification.repository.js';
 import { NotificationService } from './notification.service.js';
 
 @Module({
+  controllers: [NotificationController],
   providers: [
     {
       provide: DYNAMODB_DOCUMENT_CLIENT,
@@ -17,7 +22,12 @@ import { NotificationService } from './notification.service.js';
       provide: NOTIFICATION_REPOSITORY,
       useClass: DynamoDbNotificationRepository,
     },
+    {
+      provide: PUSH_SUBSCRIPTION_REPOSITORY,
+      useClass: DynamoDbPushSubscriptionRepository,
+    },
     NotificationService,
+    PushSubscriptionService,
   ],
   exports: [NotificationService, NOTIFICATION_REPOSITORY],
 })
