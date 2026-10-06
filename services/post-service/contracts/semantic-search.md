@@ -20,7 +20,7 @@ MongoDB posts 스키마는 바뀌지 않는다. ES `_id=postId`, keyword: postId
 
 ## 소비·복구
 
-기존 `post:events` eventId/eventType/data 형식은 유지한다. `post-semantic-v1`은 Map과 독립된 Consumer Group이고 `post-semantic-v1:dead`가 Dead Letter Stream이다. PostCreated 및 향후 PostExpired/PostDeleted의 envelope 식별자·생산자·schemaVersion=1·occurredAt을 검증한 뒤 최신 MongoDB 원본만 사용한다. 미지원 유형은 ACK, 손상된 대상은 즉시 DLQ다. 동일 해시·버전 벡터를 재사용하고 상태·시간을 다시 저장한다. 원본 없음/삭제/만료는 ES 삭제다.
+기존 `post:events` eventId/eventType/data 형식은 유지한다. `post-semantic-v1`은 Map과 독립된 Consumer Group이고 `post-semantic-v1:dead`가 Dead Letter Stream이다. PostCreated 및 PostExpired/PostDeleted의 envelope 식별자·생산자·schemaVersion=1·occurredAt을 검증한 뒤 최신 MongoDB 원본만 사용한다. 미지원 유형은 ACK, 손상된 대상은 즉시 DLQ다. 동일 해시·버전 벡터를 재사용하고 상태·시간을 다시 저장한다. 원본 없음/삭제/만료는 ES 삭제다.
 
 저장 후 ACK, 실패 시 Pending 유지, XAUTOCLAIM(유예 30초, 작업 제한 10초), 최대 배달 5회 후 DLQ 성공 뒤 ACK한다. DLQ 필드는 streamId/eventId/error/data다. ACK 장애도 재전달되며 멱등 저장한다. 모델 미연결 때 연결/그룹 생성/소비를 시작하지 않는다. 그룹별 Redis lease로 전체 Worker 동시성 1을 유지하고 재구축 중 소비를 일시 중지한다. lease TTL=60초, 갱신=10초이며 소유권 상실 시 작업 signal을 중단한다. 수동 Redis flush/lease 삭제는 실행 중 금지한다.
 
@@ -28,7 +28,7 @@ MongoDB posts 스키마는 바뀌지 않는다. ES `_id=postId`, keyword: postId
 
 실제 모델의 별칭은 `post-semantic-e5-small-761b726-fp32-w480-o64-v1-read`, 그룹은 `post-semantic-e5-small-761b726-fp32-w480-o64-v1`이다. 위 v1 예시는 fixture/기존 버전이며 실제 모델과 별도 인덱스·그룹을 사용한다. 모델/별칭/평가된 임계값을 같은 배포 설정으로 관리한다. 임계값 기본값은 없고 미설정 시 추천은 503이다. 인덱싱은 임계값 없이 실행할 수 있다.
 
-현재 상태 이벤트 생산은 후속 작업이다. 그 전에는 만료 필터·최종 원본 확인이 노출을 막으며 정기 rebuild로 남은 파생 문서를 정리한다. 실제 모델 연결·기준 벡터 일치·전체 연동은 테스트한다. 한국어 중복 품질·운영 임계값·ECS 추론 부하는 별도 평가 대상이다.
+Post가 삭제·만료 상태와 Outbox를 함께 기록하고 PostDeleted/PostExpired를 발행한다. 상세 계약은 [post-events.md](./post-events.md)를 따른다. 전달 지연 중에는 만료 필터·최종 원본 확인이 노출을 막으며 정기 rebuild로 남은 파생 문서를 정리한다. 실제 모델 연결·기준 벡터 일치·전체 연동은 테스트한다. 한국어 중복 품질·운영 임계값·ECS 추론 부하는 별도 평가 대상이다.
 
 
 ## Map 주변 조회 커서 연결

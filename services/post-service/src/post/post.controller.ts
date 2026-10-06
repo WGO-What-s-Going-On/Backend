@@ -1,3 +1,4 @@
+import { PostLifecycle } from './application/lifecycle.js';
 import { FindSimilarPosts } from './semantic/search.js';
 import {
   SimilarPostsBody,
@@ -7,6 +8,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   HttpCode,
@@ -23,6 +25,7 @@ import {
   ApiForbiddenResponse,
   ApiHeader,
   ApiNotFoundResponse,
+  ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
@@ -41,6 +44,7 @@ import { ReadPosts } from './application/queries.js';
 import { PostErrorFilter } from './presentation/post-error.filter.js';
 import {
   commentInput,
+  commentId,
   participantInput,
   postId,
   postInput,
@@ -87,7 +91,106 @@ export class PostController {
     private readonly joinPost: JoinPost,
     private readonly readPosts: ReadPosts,
     private readonly findSimilar: FindSimilarPosts,
+    private readonly lifecycle: PostLifecycle,
   ) {}
+
+  @Delete(':postId')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: '작성자 본인의 게시물 삭제',
+    description:
+      '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. 운영 인증 연동 전에는 503입니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiHeader({
+    name: 'X-User-Id',
+    description: '양의 정수 사용자 ID (로컬·테스트 전용)',
+  })
+  @ApiNoContentResponse({ description: '처리 완료 또는 이미 처리됨' })
+  @ApiNotFoundResponse({ description: '게시물 또는 대상 댓글이 없음' })
+  @ApiForbiddenResponse({ description: '잘못된 사용자 ID 또는 작성자 불일치' })
+  @ApiServiceUnavailableResponse({ description: '운영 인증 연동 전' })
+  async deletePost(
+    @Param('postId') id: string,
+    @Headers('x-user-id') header: string | undefined,
+  ): Promise<void> {
+    await this.lifecycle.deletePost(postId(id), userId(header));
+  }
+
+  @Delete(':postId/comments/:commentId')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: '작성자 본인의 댓글 삭제',
+    description:
+      '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. 운영 인증 연동 전에는 503입니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiParam({ name: 'commentId' })
+  @ApiHeader({
+    name: 'X-User-Id',
+    description: '양의 정수 사용자 ID (로컬·테스트 전용)',
+  })
+  @ApiNoContentResponse({ description: '처리 완료 또는 이미 처리됨' })
+  @ApiNotFoundResponse({ description: '게시물 또는 대상 댓글이 없음' })
+  @ApiForbiddenResponse({ description: '잘못된 사용자 ID 또는 작성자 불일치' })
+  @ApiServiceUnavailableResponse({ description: '운영 인증 연동 전' })
+  async deleteComment(
+    @Param('postId') id: string,
+    @Param('commentId') cid: string,
+    @Headers('x-user-id') header: string | undefined,
+  ): Promise<void> {
+    await this.lifecycle.deleteComment(
+      postId(id),
+      commentId(cid),
+      userId(header),
+    );
+  }
+
+  @Delete(':postId/reactions')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: '본인의 LIKE 취소',
+    description:
+      '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. 운영 인증 연동 전에는 503입니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiHeader({
+    name: 'X-User-Id',
+    description: '양의 정수 사용자 ID (로컬·테스트 전용)',
+  })
+  @ApiNoContentResponse({ description: '처리 완료 또는 이미 처리됨' })
+  @ApiNotFoundResponse({ description: '게시물 또는 대상 댓글이 없음' })
+  @ApiForbiddenResponse({ description: '잘못된 사용자 ID 또는 작성자 불일치' })
+  @ApiServiceUnavailableResponse({ description: '운영 인증 연동 전' })
+  async removeReaction(
+    @Param('postId') id: string,
+    @Headers('x-user-id') header: string | undefined,
+  ): Promise<void> {
+    await this.lifecycle.removeReaction(postId(id), userId(header));
+  }
+
+  @Delete(':postId/participants')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: '본인의 게시물 참여 종료',
+    description:
+      '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. 운영 인증 연동 전에는 503입니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiHeader({
+    name: 'X-User-Id',
+    description: '양의 정수 사용자 ID (로컬·테스트 전용)',
+  })
+  @ApiNoContentResponse({ description: '처리 완료 또는 이미 처리됨' })
+  @ApiNotFoundResponse({ description: '게시물 또는 대상 댓글이 없음' })
+  @ApiForbiddenResponse({ description: '잘못된 사용자 ID 또는 작성자 불일치' })
+  @ApiServiceUnavailableResponse({ description: '운영 인증 연동 전' })
+  async leave(
+    @Param('postId') id: string,
+    @Headers('x-user-id') header: string | undefined,
+  ): Promise<void> {
+    await this.lifecycle.leave(postId(id), userId(header));
+  }
 
   @Post('similar')
   @HttpCode(200)

@@ -100,3 +100,9 @@ export function similarInput(raw: unknown): PostInput & { limit: number } {
     throw new BadRequestException('limit must be an integer between 1 and 10');
   return { ...postInput(draft), limit };
 }
+
+export function commentId(value: string): string {
+  if (!/^comment_[0-9a-f-]{36}$/.test(value))
+    throw new BadRequestException('Invalid commentId');
+  return value;
+}

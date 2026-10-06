@@ -16,11 +16,13 @@ import {
   InvalidPostError,
   PostInactiveError,
   PostNotFoundError,
+  PostOwnershipError,
 } from '../domain/post.js';
 
 @Catch(
   SimilarityUnavailableError,
   PostNotFoundError,
+  PostOwnershipError,
   PostInactiveError,
   InvalidPostError,
   ParticipationUnavailableError,
@@ -40,7 +42,8 @@ export class PostErrorFilter implements ExceptionFilter {
     const httpError =
       error instanceof PostNotFoundError
         ? new NotFoundException(error.message)
-        : error instanceof PostInactiveError
+        : error instanceof PostInactiveError ||
+            error instanceof PostOwnershipError
           ? new ForbiddenException(error.message)
           : error instanceof InvalidPostError
             ? new BadRequestException(error.message)

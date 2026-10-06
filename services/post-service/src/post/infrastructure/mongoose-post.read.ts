@@ -108,7 +108,11 @@ export class MongoosePostRead implements PostReadQueries {
   async findActiveBatch(postIds: string[]) {
     const rows = await this.posts
       .find(
-        { postId: { $in: postIds }, status: 'ACTIVE' },
+        {
+          postId: { $in: postIds },
+          status: 'ACTIVE',
+          $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+        },
         'postId title category status createdAt -_id',
       )
       .lean();

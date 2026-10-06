@@ -4,6 +4,10 @@ export interface PostState {
   postId: string;
   status: PostStatus;
   bucketCount: number;
+  authorId: number;
+  category: string;
+  expiresAt: Date | null;
+  postVersion: number;
   locationSnapshot?: { latitude: number; longitude: number };
   radiusM?: number;
 }
@@ -42,7 +46,7 @@ export interface CommentRecord {
   postId: string;
   authorId: number;
   content: string;
-  status: 'ACTIVE';
+  status: 'ACTIVE' | 'DELETED';
   createdAt: Date;
   updatedAt: Date | null;
 }
@@ -63,6 +67,7 @@ export interface ParticipantRecord {
 }
 
 export class PostNotFoundError extends Error {}
+export class PostOwnershipError extends Error {}
 export class PostInactiveError extends Error {}
 export class InvalidPostError extends Error {}
 
@@ -81,11 +86,14 @@ function requireRange(
     throw new InvalidPostError(`${name} must be between ${min} and ${max}`);
 }
 
-export function requireActive<T extends { status: PostStatus }>(
-  post: T | null,
-): asserts post is T {
+export function requireActive<
+  T extends { status: PostStatus; expiresAt?: Date | null },
+>(post: T | null): asserts post is T {
   if (!post) throw new PostNotFoundError('Post not found');
-  if (post.status !== 'ACTIVE')
+  if (
+    post.status !== 'ACTIVE' ||
+    (post.expiresAt && post.expiresAt.getTime() <= Date.now())
+  )
     throw new PostInactiveError('Post is not active');
 }
 

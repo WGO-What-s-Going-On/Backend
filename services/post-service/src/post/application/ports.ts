@@ -10,7 +10,12 @@ export type EventType =
   | 'PostCreated'
   | 'PostCommentCreated'
   | 'PostReactionCreated'
-  | 'PostParticipantJoined';
+  | 'PostParticipantJoined'
+  | 'PostReactionRemoved'
+  | 'PostCommentDeleted'
+  | 'PostDeleted'
+  | 'PostParticipantLeft'
+  | 'PostExpired';
 
 export interface OutboxEvent {
   eventId: string;
@@ -23,6 +28,14 @@ export interface OutboxEvent {
   payload: Record<string, unknown>;
 }
 
+export type StoredActivity<T> = T & {
+  activityVersion?: number;
+  bucketId?: number;
+};
+export type StoredReaction = StoredActivity<ReactionRecord> & {
+  removedAt?: Date | null;
+};
+
 // 작성 규칙 확인에 필요한 최소 조회와 API 응답용 조회를 분리한다.
 export interface PostStateQueries {
   findPost(postId: string): Promise<PostState | null>;
@@ -31,11 +44,15 @@ export interface PostStateQueries {
     authorId: number,
     mutationId: string,
   ): Promise<CommentRecord | null>;
-  findReaction(postId: string, userId: number): Promise<ReactionRecord | null>;
+  findComment(
+    postId: string,
+    commentId: string,
+  ): Promise<StoredActivity<CommentRecord> | null>;
+  findReaction(postId: string, userId: number): Promise<StoredReaction | null>;
   findParticipant(
     postId: string,
     userId: number,
-  ): Promise<ParticipantRecord | null>;
+  ): Promise<StoredActivity<ParticipantRecord> | null>;
 }
 
 export type PostDetail = PostRecord;
@@ -82,11 +99,43 @@ export interface PostCommands {
   insertParticipant(participant: ParticipantRecord): Promise<void>;
   rejoinParticipant(
     participant: ParticipantRecord,
+    activityVersion: number,
   ): Promise<ParticipantRecord | null>;
+  reactivateReaction(
+    reaction: ReactionRecord,
+    activityVersion: number,
+  ): Promise<void>;
+  removeReaction(
+    postId: string,
+    userId: number,
+    now: Date,
+    activityVersion: number,
+  ): Promise<void>;
+  deleteComment(
+    postId: string,
+    commentId: string,
+    now: Date,
+    activityVersion: number,
+  ): Promise<void>;
+  leaveParticipant(
+    postId: string,
+    userId: number,
+    now: Date,
+    activityVersion: number,
+  ): Promise<void>;
+  fenceActivities(postId: string, bucketCount: number): Promise<void>;
+  changePostStatus(
+    postId: string,
+    status: 'DELETED' | 'EXPIRED',
+    now: Date,
+    postVersion: number,
+  ): Promise<void>;
+  scheduleExpiration(postId: string, expiresAt: Date, now: Date): Promise<void>;
   increment(
     postId: string,
     bucketId: number,
     counter: 'commentCount' | 'reactionCount' | 'participantCount',
+    delta?: number,
   ): Promise<void>;
   appendEvent(event: OutboxEvent): Promise<void>;
 }

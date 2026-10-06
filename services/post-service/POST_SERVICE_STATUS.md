@@ -1,5 +1,19 @@
 # Post Service 작업 현황
 
+## 2026-10-06 활동 이벤트·수명주기·Outbox 복구
+
+- 기존 생성 4종에 게시물 작성자·카테고리와 활동 버전을 보강했다.
+- PostReactionRemoved, PostCommentDeleted, PostDeleted, PostParticipantLeft,
+  PostExpired를 상태·카운터와 같은 트랜잭션에서 기록한다.
+- 본인 DELETE 4종, 기한 기반 만료 Worker, 운영 CLI의 기한 예약·검토 결정 적용을 제공한다.
+- 상태 변경은 모든 counter bucket에 쓰기 충돌 지점을 만들어 기존 ACTIVE 스냅샷의
+  댓글·공감·참여가 삭제 뒤 커밋되지 않도록 한다. 생성 시의 bucket 분산은 유지한다.
+- Outbox는 timeout·제한 재시도·선점 회수·FAILED 격리·운영 재시도를 지원한다.
+- 현재 계약과 운영 절차는 [post-events.md](./contracts/post-events.md)가 기준이다.
+  아래 과거 검증 기록과 상세 설계의 미구현 표시는 이 절의 해당 범위에서 갱신된다.
+- Node.js 24에서 전체 통합 테스트 102개, 타입 검사, 빌드를 통과했다. 모델 실행 조건이 필요한 4개는 제외했다. 저장소 루트 포맷과 diff 검증도 완료했다.
+- Notification/User 소비자, 성장 보상, Moderation 네트워크 인증·이벤트 소비는 후속 범위다.
+
 ## 2026-09-26 게시판 WebSocket 연동
 
 - 서비스 JWT로 보호하는 내부 상세·댓글 목록·댓글 작성 경로를 추가했다.
@@ -19,10 +33,10 @@
 | 도메인 규칙 | 입력 불변 조건, ACTIVE 게시물 확인, Reaction·Participant 중복 생성 방지, 참여 종료 기록이 있는 사용자의 재참여 |
 | 인증·참여 허가 | 로컬·테스트에서 `X-User-Id` 검증 및 개발용 참여 허가. 운영 환경에서는 실제 연동 전 생성·참여 요청 거부 |
 | 저장 | `posts`, `post_comments`, `post_reactions`, `post_participants`, `outbox_events` Mongoose 스키마와 인덱스. 생성 데이터·카운터·Outbox를 단일 MongoDB 트랜잭션에 저장 |
-| 이벤트 | Outbox Worker가 Redis Stream `post:events`에 네 생성 이벤트 발행. 실패 및 선점 만료 재시도 시 `eventId` 유지 |
+| 이벤트 | 생성 4종 및 취소·삭제·이탈·만료 5종 발행. 제한 재시도·선점 회수·FAILED 격리·운영 재처리 시 `eventId` 유지 |
 | 로컬 환경 | 단일 노드 MongoDB Replica Set, 별도 포트의 Redis Compose 구성 |
 
-새 게시물은 `ACTIVE`로 생성하며 `expiresAt`은 `null`이다. Moderation의 수명주기 판단과 만료 처리는 현재 구현 범위 밖이다.
+새 게시물은 `ACTIVE`로 생성하며 `expiresAt`은 `null`이다. 만료 기한은 운영 CLI로 예약할 수 있고 만료 Worker가 처리한다. Moderation의 판단·네트워크 연동은 별도다.
 
 ### 실시간 게시판 연결 상태
 
@@ -64,8 +78,8 @@ WS Gateway는 ACTIVE 게시물 room 참여, 게시물·댓글 조회와 댓글 �
 
 - [x] **Post Service HTTP 조회 API:** 게시물 상세, 댓글 커서 조회, 내부 batch-get·meta/status 조회를 구현했다. 내부 경로는 서비스 간 인증 연동 전까지 운영에서 차단한다. 이 완료 표시는 WS Gateway 실시간 전달이나 주변 검색 조합의 완료를 뜻하지 않는다. `PostViewed` 집계도 별도 작업이다.
 - [ ] **주변 게시물 조회 조합:** Map Service의 위치 검색 결과를 HTTP Gateway가 Post Service 내부 batch-get과 조합하는 계약·구현·통합 테스트를 완료한다. 현재 HTTP Gateway는 `/api/v1/posts`를 투명 프록시만 한다.
-- [ ] **종료·취소 Command:** 게시물 수정·삭제, 댓글 삭제, LIKE 취소, 참여 종료를 각각 도메인 규칙과 조건부 쓰기로 구현한다. 카운터와 Outbox 이벤트를 같은 트랜잭션에서 갱신하고 반복 요청의 멱등성을 검증한다.
-- [ ] **만료 처리:** Moderation이 `expiresAt`을 설정한 뒤 `ACTIVE → EXPIRED` 만료 Worker와 `PostExpired` Outbox 기록을 구현한다. 중복 실행·경합·Map 인덱스 제거 흐름을 확인한다.
+- [x] **종료·취소 Command:** 게시물·댓글 삭제, LIKE 취소, 참여 종료의 트랜잭션·멱등성·이벤트를 구현했다. 게시물 수정은 별도 후속 기능이다.
+- [x] **Post 만료 처리:** 기한 예약, `ACTIVE → EXPIRED` Worker, `PostExpired` Outbox 및 중복·경합 처리를 구현했다. Moderation 네트워크 연동은 후속 범위다.
 - [ ] **API 경로 정합성:** 상세 설계에 남아 있는 Client-facing 경로와 내부 Gateway 경로의 역할을 확정하고, 구현·문서·호출자를 일치시킨다.
 
 ### 우선순위 3: 운영 검증

@@ -1,3 +1,4 @@
+import { PostLifecycle } from '../src/post/application/lifecycle.js';
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -35,9 +36,14 @@ describe('similar HTTP contract', () => {
     const module = await Test.createTestingModule({
       controllers: [PostController],
       providers: [
-        ...[CreatePost, CreateComment, CreateReaction, JoinPost, ReadPosts].map(
-          (provide) => ({ provide, useValue: {} }),
-        ),
+        ...[
+          PostLifecycle,
+          CreatePost,
+          CreateComment,
+          CreateReaction,
+          JoinPost,
+          ReadPosts,
+        ].map((provide) => ({ provide, useValue: {} })),
         { provide: FindSimilarPosts, useValue: { execute } },
       ],
     }).compile();
