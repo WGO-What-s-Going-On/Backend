@@ -50,8 +50,8 @@ export class OpenAiModerationAdapter implements ModerationProvider {
       };
     } catch (error) {
       if (error instanceof ModerationProviderError) throw error;
-      const status =
-        error instanceof OpenAI.APIError ? error.status : undefined;
+      const candidate = (error as { status?: unknown }).status;
+      const status = typeof candidate === 'number' ? candidate : undefined;
       const retryable =
         status === undefined ||
         status === 408 ||

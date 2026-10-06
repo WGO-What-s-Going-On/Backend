@@ -28,14 +28,12 @@ describe('CommentModerationService', () => {
     'stores safe and flagged results (flagged=%s)',
     async (flagged) => {
       const provider: ModerationProvider = {
-        moderate: vi
-          .fn()
-          .mockResolvedValue({
-            flagged,
-            categories: { violence: flagged },
-            categoryScores: { violence: flagged ? 0.9 : 0.01 },
-            model: 'omni-moderation-latest',
-          }),
+        moderate: vi.fn().mockResolvedValue({
+          flagged,
+          categories: { violence: flagged },
+          categoryScores: { violence: flagged ? 0.9 : 0.01 },
+          model: 'omni-moderation-latest',
+        }),
       };
       const repository = new MemoryResults();
       const service = new CommentModerationService(provider, repository);
@@ -51,14 +49,12 @@ describe('CommentModerationService', () => {
   );
 
   it('does not call OpenAI again for a duplicate event', async () => {
-    const moderate = vi
-      .fn()
-      .mockResolvedValue({
-        flagged: false,
-        categories: {},
-        categoryScores: {},
-        model: 'omni-moderation-latest',
-      });
+    const moderate = vi.fn().mockResolvedValue({
+      flagged: false,
+      categories: {},
+      categoryScores: {},
+      model: 'omni-moderation-latest',
+    });
     const service = new CommentModerationService(
       { moderate },
       new MemoryResults(),
@@ -77,18 +73,16 @@ describe('CommentModerationService', () => {
 
 describe('OpenAiModerationAdapter', () => {
   it('maps the official SDK response into the internal result', async () => {
-    const create = vi
-      .fn()
-      .mockResolvedValue({
-        model: 'omni-moderation-latest',
-        results: [
-          {
-            flagged: true,
-            categories: { violence: true },
-            category_scores: { violence: 0.9 },
-          },
-        ],
-      });
+    const create = vi.fn().mockResolvedValue({
+      model: 'omni-moderation-latest',
+      results: [
+        {
+          flagged: true,
+          categories: { violence: true },
+          category_scores: { violence: 0.9 },
+        },
+      ],
+    });
     const adapter = new OpenAiModerationAdapter(new ConfigService(), {
       moderations: { create },
     } as unknown as OpenAI);
@@ -111,5 +105,23 @@ describe('OpenAiModerationAdapter', () => {
       .catch((value: unknown) => value);
     expect(error).toBeInstanceOf(ModerationProviderError);
     expect((error as ModerationProviderError).retryable).toBe(true);
+  });
+
+  it.each([
+    [429, true],
+    [500, true],
+    [400, false],
+  ])('classifies HTTP %s retryability as %s', async (status, retryable) => {
+    const adapter = new OpenAiModerationAdapter(new ConfigService(), {
+      moderations: {
+        create: vi
+          .fn()
+          .mockRejectedValue(Object.assign(new Error('API error'), { status })),
+      },
+    } as unknown as OpenAI);
+    const error = await adapter
+      .moderate('content')
+      .catch((value: unknown) => value);
+    expect((error as ModerationProviderError).retryable).toBe(retryable);
   });
 });
