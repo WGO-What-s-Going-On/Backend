@@ -2,9 +2,9 @@
 
 `POST /api/v1/posts/similar`는 생성 입력(title/content/category/latitude/longitude/radiusM)에 선택적 `limit`(정수 1–10, 기본 5)을 받는다. 사용자 인증·입력·도메인 검증 후 기능 준비를 확인한다. 로컬·테스트의 `X-User-Id` 및 운영 사용자 인증 미연결 시 503 정책은 생성과 동일하다. 후보 ID, 벡터, 버전, 임계값 등 추가 필드는 400이다. 초안·Outbox는 저장하지 않는다.
 
-200 응답은 `items: [{postId,title,excerpt,category,distanceM,createdAt}]`, `checkStatus: completed|partial`, `partialReasons: []|[CANDIDATE_LIMIT,INDEX_LAG]`, `scope: {radiusM:350,lookbackHours:24}`, `checkedAt`이다. excerpt는 원문 최대 160 Unicode code point다. limit=1도 배열이며 결과가 없으면 빈 배열이다. category는 생성 입력 검증에만 쓰고 후보 필터로 사용하지 않는다. 임계값 이상의 코사인 점수 내림차순, 거리·postId 오름차순으로 정렬한다. 점수는 공개 응답에 노출하지 않는다.
+200 응답은 `items: [{postId,title,excerpt,category,distanceM,createdAt}]`, `checkStatus: completed|partial`, `partialReasons: []|[CANDIDATE_LIMIT,INDEX_LAG]`, `scope: {radiusM:150,lookbackHours:24}`, `checkedAt`이다. excerpt는 원문 최대 160 Unicode code point다. limit=1도 배열이며 결과가 없으면 빈 배열이다. category는 생성 입력 검증에만 쓰고 후보 필터로 사용하지 않는다. 임계값 이상의 코사인 점수 내림차순, 거리·postId 오름차순으로 정렬한다. 점수는 공개 응답에 노출하지 않는다.
 
-위치 인가 → MapPostQuery.SearchNearbyPosts(350m,200) → MongoDB ACTIVE·미만료·최근 24시간(미래 생성 제외) → 초안 임베딩 → ES script_score → MongoDB 재확인 순서다. ES에는 후보 ID·모델 버전·ACTIVE·생성/만료 시간·벡터 존재 조건을 모두 적용한다. 코사인+1의 점수를 코사인으로 복원한다. 마지막 조회에서 삭제/만료된 글은 제외하고, 해시 불일치는 INDEX_LAG다. 후보 상한 초과는 CANDIDATE_LIMIT, 유효 원본의 ES 문서/현재 버전 벡터 누락은 INDEX_LAG다. 임계값 아래 점수 자체는 부분 결과가 아니다.
+위치 인가 → MapPostQuery.SearchNearbyPosts(150m,200) → MongoDB ACTIVE·미만료·최근 24시간(미래 생성 제외) → 초안 임베딩 → ES script_score → MongoDB 재확인 순서다. ES에는 후보 ID·모델 버전·ACTIVE·생성/만료 시간·벡터 존재 조건을 모두 적용한다. 코사인+1의 점수를 코사인으로 복원한다. 마지막 조회에서 삭제/만료된 글은 제외하고, 해시 불일치는 INDEX_LAG다. 후보 상한 초과는 CANDIDATE_LIMIT, 유효 원본의 ES 문서/현재 버전 벡터 누락은 INDEX_LAG다. 임계값 아래 점수 자체는 부분 결과가 아니다.
 
 모델 미연결·기능 비활성·평가된 임계값 없음, Map/임베딩/ES/Mongo 오류 또는 timeout은 `503 {statusCode:503,code:"SIMILARITY_CHECK_UNAVAILABLE",message:"SIMILARITY_CHECK_UNAVAILABLE"}`이다. ES timed_out/shard 실패도 같은 오류다. 위치 거부는 기존 403이다. 준비 전에는 Map/ES 호출을 하지 않고, 후보가 없으면 임베딩/ES 호출을 하지 않는다. 요청 전체 제한은 10초, Map은 기존 MAP_GRPC_TIMEOUT_MS, ES는 ELASTICSEARCH_TIMEOUT_MS, Mongo 후보 읽기는 maxTimeMS 2초다.
 

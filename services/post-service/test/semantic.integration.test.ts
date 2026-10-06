@@ -233,7 +233,7 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
     expect(response.body.partialReasons).toEqual(['CANDIDATE_LIMIT']);
     expect((await similar().expect(200)).body.items).toHaveLength(5);
     expect(
-      (await mapIndex.nearby({ latitude, longitude, radiusM: 350, limit: 200 }))
+      (await mapIndex.nearby({ latitude, longitude, radiusM: 150, limit: 200 }))
         .items,
     ).toHaveLength(200);
     await index.remove(ids[199]!, signal());

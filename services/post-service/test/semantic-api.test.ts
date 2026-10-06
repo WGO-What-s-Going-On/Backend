@@ -71,7 +71,7 @@ describe('similar HTTP contract', () => {
       items: [],
       checkStatus: 'completed',
       partialReasons: [],
-      scope: { radiusM: 350, lookbackHours: 24 },
+      scope: { radiusM: 150, lookbackHours: 24 },
     });
   });
   it.each([0, 11, 1.5, '1', null])(

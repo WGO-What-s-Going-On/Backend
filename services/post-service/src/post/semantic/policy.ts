@@ -3,7 +3,7 @@ import type { PostRecord } from '../domain/post.js';
 
 export const DIMENSIONS = 384;
 export const CANDIDATE_LIMIT = 200;
-export const SCOPE = { radiusM: 350, lookbackHours: 24 } as const;
+export const SCOPE = { radiusM: 150, lookbackHours: 24 } as const;
 export type SourcePost = Pick<
   PostRecord,
   | 'postId'

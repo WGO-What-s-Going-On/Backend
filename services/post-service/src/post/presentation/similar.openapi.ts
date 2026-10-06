@@ -9,11 +9,11 @@ export class SimilarPostItem {
   @ApiProperty() title!: string;
   @ApiProperty({ maxLength: 160 }) excerpt!: string;
   @ApiProperty() category!: string;
-  @ApiProperty({ minimum: 0, maximum: 350 }) distanceM!: number;
+  @ApiProperty({ minimum: 0, maximum: 150 }) distanceM!: number;
   @ApiProperty({ format: 'date-time' }) createdAt!: string;
 }
 export class SimilarScope {
-  @ApiProperty({ enum: [350] }) radiusM!: number;
+  @ApiProperty({ enum: [150] }) radiusM!: number;
   @ApiProperty({ enum: [24] }) lookbackHours!: number;
 }
 export class SimilarPostsResponse {

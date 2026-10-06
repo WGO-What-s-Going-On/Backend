@@ -4,7 +4,7 @@
 
 ## 완료 범위
 
-- Post `POST /api/v1/posts/similar`: 생성 입력 검증·기존 인증, 기본 5/limit 1–10, 350m·최근 24시간·최대 200개 후보, 유사도/거리/ID 정렬, MongoDB 최종 상태·본문 해시 재확인, partial/503 계약.
+- Post `POST /api/v1/posts/similar`: 생성 입력 검증·기존 인증, 기본 5/limit 1–10, 150m·최근 24시간·최대 200개 후보, 유사도/거리/ID 정렬, MongoDB 최종 상태·본문 해시 재확인, partial/503 계약.
 - Map `MapPostQuery.SearchNearbyPosts`: ES256 Post 전용, 반경 150/250/350, limit 1–200, truncated. 기존 HTTP 100개/커서 및 MapAuthorization 호환성 유지.
 - 모델 포트·384차원 검증·공유 정규화/해시·ES HTTP 어댑터·mapping/별칭. 별칭 누락 시 require_alias로 잘못된 인덱스 자동 생성 차단.
 - Post 검색 Consumer Group/DLQ, 중복 벡터 재사용, 최신 원본 기준 제거, Pending/XAUTOCLAIM/5회 재시도, DLQ 성공 후 ACK, 전역 동시성 1.

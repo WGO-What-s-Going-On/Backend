@@ -61,7 +61,7 @@ describe('semantic search policy', () => {
     embedding = fixtureEmbedding();
     nearby = {
       search: vi.fn(async () => ({
-        items: posts.map((p, i) => ({ postId: p.postId, distanceM: i })),
+        items: posts.map((p, i) => ({ postId: p.postId, distanceM: i / 2 })),
         truncated: false,
       })),
     };
