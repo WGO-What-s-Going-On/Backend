@@ -7,6 +7,8 @@ import { DynamoDbPushSubscriptionRepository } from '../persistence/dynamodb-push
 import { PUSH_SUBSCRIPTION_REPOSITORY } from '../push-subscription/push-subscription.repository.js';
 import { PushSubscriptionService } from '../push-subscription/push-subscription.service.js';
 import { NotificationController } from './notification.controller.js';
+import { FirebasePushAdapter } from '../firebase/firebase-push.adapter.js';
+import { PUSH_SENDER } from '../firebase/push.js';
 import { NOTIFICATION_REPOSITORY } from './notification.repository.js';
 import { NotificationService } from './notification.service.js';
 
@@ -28,6 +30,8 @@ import { NotificationService } from './notification.service.js';
     },
     NotificationService,
     PushSubscriptionService,
+    FirebasePushAdapter,
+    { provide: PUSH_SENDER, useExisting: FirebasePushAdapter },
   ],
   exports: [NotificationService, NOTIFICATION_REPOSITORY],
 })
