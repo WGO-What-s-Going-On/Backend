@@ -175,3 +175,6 @@ pnpm semantic:fixture
 ```
 
 `semantic:fixture`는 테스트 전용 MongoDB와 Redis DB 14에 201개 생성 이벤트를 적재하여 실제 후보/검색/회수/재구축을 검증한다. ES 테스트 인덱스와 MongoDB는 종료 시 정리한다. 고정 벡터는 연동과 정렬을 검증하며 한국어 의미 품질을 입증하지 않는다. 모델 다운로드·ONNX·학습·양자화·성능 튜닝·운영 인증 개방은 후속 범위다.
+
+
+Map `SearchNearbyPosts` gRPC는 기존 공간 조회의 커서를 전달한다. `GrpcNearbyPosts.page({latitude, longitude, radiusM, limit, cursor?})`로 페이지당 최대 200개를 조회하고 반환된 `nextCursor`로 이어서 조회할 수 있다. 마지막 페이지는 `nextCursor: null`이다. 유사도 검색용 `search()`는 150m 첫 페이지 200개까지만 비교하며 추가 페이지를 자동 조회하지 않는다. 일반 페이지 조회를 사용하려면 nextCursor를 지원하는 Map을 먼저 배포한다.

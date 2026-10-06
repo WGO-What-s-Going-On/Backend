@@ -1,3 +1,4 @@
+import type { GrpcNearbyPosts } from '../src/post/semantic/grpc-candidates.js';
 import 'reflect-metadata';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
@@ -13,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import {
   EMBEDDING_PROVIDER,
+  NEARBY_POST_CANDIDATES,
   type EmbeddingProvider,
 } from '../src/post/semantic/ports.js';
 import { ElasticsearchIndex } from '../src/post/semantic/elasticsearch.js';
@@ -236,6 +238,30 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
       (await mapIndex.nearby({ latitude, longitude, radiusM: 150, limit: 200 }))
         .items,
     ).toHaveLength(200);
+    const mapClient = app.get<GrpcNearbyPosts>(NEARBY_POST_CANDIDATES);
+    const query = { latitude, longitude, radiusM: 150 as const, limit: 200 };
+    const firstPage = await mapClient.page(query);
+    const lastPage = await mapClient.page({
+      ...query,
+      cursor: firstPage.nextCursor!,
+    });
+    expect(firstPage.items).toHaveLength(200);
+    expect(lastPage.items.map((p) => p.postId)).toEqual([ids[200]]);
+    expect(lastPage).toMatchObject({ truncated: false, nextCursor: null });
+    expect(
+      new Set([...firstPage.items, ...lastPage.items].map((p) => p.postId))
+        .size,
+    ).toBe(201);
+    await expect(
+      mapClient.page({
+        ...query,
+        latitude: latitude + 0.001,
+        cursor: firstPage.nextCursor!,
+      }),
+    ).rejects.toMatchObject({ code: 3 });
+    await expect(
+      mapClient.page({ ...query, radiusM: 250, cursor: firstPage.nextCursor! }),
+    ).rejects.toMatchObject({ code: 3 });
     await index.remove(ids[199]!, signal());
     await index.refresh();
     expect((await similar().expect(200)).body.partialReasons).toContain(

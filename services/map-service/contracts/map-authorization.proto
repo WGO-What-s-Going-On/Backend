@@ -35,6 +35,7 @@ message NearbyPostsRequest {
   double longitude = 2;
   int32 radius_m = 3;
   int32 limit = 4;
+  string cursor = 5; // Empty for the first page; reuse with the same center and radius.
 }
 message NearbyPost {
   string post_id = 1;
@@ -43,4 +44,5 @@ message NearbyPost {
 message NearbyPostsResponse {
   repeated NearbyPost items = 1;
   bool truncated = 2;
+  string next_cursor = 3; // Empty when no further page exists.
 }

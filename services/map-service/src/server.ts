@@ -119,7 +119,13 @@ export function createGrpcServer(
   server.addService(pkg.wgo.map.v1.MapPostQuery.service, {
     SearchNearbyPosts: async (
       call: ServerUnaryCall<
-        { latitude: number; longitude: number; radiusM: number; limit: number },
+        {
+          latitude: number;
+          longitude: number;
+          radiusM: number;
+          limit: number;
+          cursor?: string;
+        },
         unknown
       >,
       callback: sendUnaryData<unknown>,
@@ -136,7 +142,11 @@ export function createGrpcServer(
         ![150, 250, 350].includes(input.radiusM) ||
         !Number.isInteger(input.limit) ||
         input.limit < 1 ||
-        input.limit > 200
+        input.limit > 200 ||
+        (input.cursor !== undefined &&
+          input.cursor !== '' &&
+          (input.cursor.length > 1024 ||
+            !/^[A-Za-z0-9_-]+$/.test(input.cursor)))
       )
         return callback({
           code: status.INVALID_ARGUMENT,
@@ -151,11 +161,18 @@ export function createGrpcServer(
         callback(null, {
           items: result.items,
           truncated: result.nextCursor !== null,
+          nextCursor: result.nextCursor ?? '',
         });
-      } catch {
+      } catch (error) {
         callback({
-          code: status.UNAVAILABLE,
-          message: 'Post index unavailable',
+          code:
+            error instanceof InvalidCursorError
+              ? status.INVALID_ARGUMENT
+              : status.UNAVAILABLE,
+          message:
+            error instanceof InvalidCursorError
+              ? 'Invalid nearby cursor'
+              : 'Post index unavailable',
         });
       }
     },

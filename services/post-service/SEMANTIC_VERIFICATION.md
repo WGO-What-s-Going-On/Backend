@@ -50,3 +50,9 @@ MongoDB replica set(:27017), Redis(:6380/:6381), Cassandra(:9042), 실제 Map gR
 fixture를 환경 변수로 운영 모델로 선택하는 경로는 없다. `pnpm semantic:fixture`는 테스트 suite에서만 fixture를 주입하고 테스트용 데이터를 적재한다. 실제 모델 연결 시 `createEmbeddingProvider()`를 교체하고 평가한 `SEMANTIC_THRESHOLD`를 설정해야 한다. 한국어 의미 품질·모델 다운로드/ONNX·학습·양자화·추론 부하/성능·운영 사용자 인증 개방은 검증하지 않은 후속 범위다.
 
 실행/복구 절차는 [README](README.md), 상세 HTTP·이벤트·인덱스 계약은 [검색 계약](contracts/semantic-search.md)에 있다. 테스트에 사용한 선택적 로컬 ES 컨테이너는 실행 상태로 남겼다.
+
+## Map gRPC 커서 연결 검증 (2026-10-06)
+
+구현 범위는 Map gRPC·Post 클라이언트 연결이다. 일반 목록 HTTP API는 추가하지 않았다. 기존 SearchNearbyPosts에 cursor(요청 필드 5)·next_cursor(응답 필드 3)를 추가하고, Map의 기존 공간 조회와 커서를 그대로 사용한다. 기존 응답 필드와 ES256 인증은 유지한다. Post page()는 다음 페이지를 요청할 수 있으며 search()는 150m 첫 페이지 최대 200개만 비교한다.
+
+Post 전체 통합 테스트 11개 파일·75개, Map 전체 통합 테스트 5개 파일·40개가 통과했다. 실제 Redis/Cassandra 공간 조회에서 gRPC로 200개 이후의 1개를 이어 받고, 중복 없는 201개와 마지막 nextCursor=null을 확인했다. 다른 좌표·반경에 커서를 재사용하면 INVALID_ARGUMENT이며, 잘못된 커서·빈 결과·구 서버 응답 호환성도 검증했다. 양 서비스 typecheck/build, 루트 format/format:check 및 git diff --check도 통과했다. 별도 lint script는 없다.

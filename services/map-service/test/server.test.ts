@@ -333,13 +333,16 @@ describe('Map HTTP and gRPC contract', () => {
 describe('MapPostQuery ES256-only contract', () => {
   const nearby = async (query: any) => {
     if (query.latitude === 1) throw new Error('unavailable');
+    if (query.cursor && query.cursor !== 'more') throw new InvalidCursorError();
     const items = Array.from({ length: 201 }, (_, i) => ({
       postId: `post_00000000-0000-0000-0000-${String(i).padStart(12, '0')}`,
-      distanceM: i,
+      distanceM: i / 2,
     }));
+    const remaining =
+      query.longitude === 0 ? [] : query.cursor ? items.slice(200) : items;
     return {
-      items: items.slice(0, query.limit),
-      nextCursor: items.length > query.limit ? 'more' : null,
+      items: remaining.slice(0, query.limit),
+      nextCursor: remaining.length > query.limit ? 'more' : null,
     };
   };
   const server = createGrpcServer(store, { nearby });
@@ -380,8 +383,37 @@ describe('MapPostQuery ES256-only contract', () => {
     const response = await call(query);
     expect(response.items).toHaveLength(200);
     expect(response.truncated).toBe(true);
-    expect(response.items[199].distanceM).toBe(199);
+    expect(response.items[199].distanceM).toBe(99.5);
+    expect(response.nextCursor).toBe('more');
   });
+  it('passes the existing cursor through gRPC and returns an empty terminal cursor', async () => {
+    const first = await call(query);
+    const second = await call({ ...query, cursor: first.nextCursor });
+    expect(second.items).toHaveLength(1);
+    expect(second.items[0].postId).toBe(
+      'post_00000000-0000-0000-0000-000000000200',
+    );
+    expect(second.nextCursor).toBe('');
+    expect(second.truncated).toBe(false);
+    expect(
+      new Set([...first.items, ...second.items].map((p) => p.postId)).size,
+    ).toBe(201);
+  });
+  it('returns empty items and cursor when no nearby posts exist', async () => {
+    expect(await call({ ...query, longitude: 0 })).toEqual({
+      items: [],
+      truncated: false,
+      nextCursor: '',
+    });
+  });
+  it.each(['bad', '!', 'a'.repeat(1025)])(
+    'rejects invalid cursors',
+    async (cursor) => {
+      await expect(call({ ...query, cursor })).rejects.toMatchObject({
+        code: status.INVALID_ARGUMENT,
+      });
+    },
+  );
   it.each([0, 201, -1])('rejects invalid limit %s', async (limit) => {
     await expect(call({ ...query, limit })).rejects.toMatchObject({
       code: status.INVALID_ARGUMENT,

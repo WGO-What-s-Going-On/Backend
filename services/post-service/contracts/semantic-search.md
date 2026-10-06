@@ -23,3 +23,10 @@ MongoDB posts 스키마는 바뀌지 않는다. ES `_id=postId`, keyword: postId
 재구축은 lease → Stream watermark 기록 → 새 물리 인덱스 원본 전체 스캔 → 종료 watermark까지 따라잡기 → 누적 발행 수와 재생 수 및 삭제 watermark로 Stream trim/delete 검사 → 원본/ES 양방향 대조 → refresh → 원자적 별칭 교체 순서다. 보존 기간 이전 원본도 스캔한다. 검증 중 원본 변경/누락 또는 이벤트 손상이 발견되면 전환하지 않고 재시도를 요구한다. 기존 Pending과 그룹 위치는 유지하여 새 별칭에 중복 재처리한다. 진행 상태는 `post-semantic-v1:rebuild` 해시(index/watermark/end/phase/scanned/verified/error)에 남긴다. 실패한 물리 인덱스와 이전 인덱스는 자동 삭제하지 않는다. 복구/rollback 확인 뒤 운영자가 정리한다. [ES alias API](https://www.elastic.co/guide/en/elasticsearch/reference/8.19/aliases.html)의 다중 action으로 전환한다.
 
 현재 상태 이벤트 생산은 후속 작업이다. 그 전에는 만료 필터·최종 원본 확인이 노출을 막으며 정기 rebuild로 남은 파생 문서를 정리한다. 실제 모델/한국어 품질/추론 성능은 이 구현의 검증 범위 밖이다.
+
+
+## Map 주변 조회 커서 연결
+
+기존 `MapPostQuery.SearchNearbyPosts`의 요청에 `cursor`(필드 5), 응답에 `next_cursor`(필드 3)를 추가한다. 응답 items/postId/distanceM/truncated는 그대로다. Map은 기존 Redis GEO·Cassandra 공간 조회와 커서를 재사용해 페이지당 최대 200개를 반환한다. 첫 페이지의 cursor와 마지막 페이지의 nextCursor는 gRPC에서 빈 문자열이다. Post `GrpcNearbyPosts.page()`는 마지막 nextCursor를 null로 변환하며, 같은 좌표·반경으로 다음 페이지를 요청할 수 있다.
+
+유사도 검색용 `search()`는 150m·limit=200·cursor 없는 한 번의 RPC만 호출한다. 다음 페이지가 있어도 자동으로 추가 조회하지 않으며 기존 CANDIDATE_LIMIT 부분 결과를 유지한다. 구 Map 서버의 nextCursor 없는 응답도 유사도 검색에서는 호환되지만, 일반 페이지 조회에서 truncated=true이고 nextCursor가 없으면 오류로 처리해 다음 페이지를 잃지 않도록 한다.

@@ -13,11 +13,20 @@ import {
   mapMetadata,
 } from '../infrastructure/map-service-auth.js';
 import type { NearbyPostCandidates } from './ports.js';
+import type {
+  NearbyPostsPage,
+  NearbyPostsQuery,
+  NearbyPostsQueryPort,
+} from '../application/ports.js';
 import { CANDIDATE_LIMIT, SCOPE } from './policy.js';
 
-type Response = Awaited<ReturnType<NearbyPostCandidates['search']>>;
+type Response = Awaited<ReturnType<NearbyPostCandidates['search']>> & {
+  nextCursor?: string;
+};
 @Injectable()
-export class GrpcNearbyPosts implements NearbyPostCandidates, OnModuleDestroy {
+export class GrpcNearbyPosts
+  implements NearbyPostCandidates, NearbyPostsQueryPort, OnModuleDestroy
+{
   private readonly client: Client & {
     SearchNearbyPosts(
       request: object,
@@ -40,10 +49,28 @@ export class GrpcNearbyPosts implements NearbyPostCandidates, OnModuleDestroy {
   onModuleDestroy() {
     this.client.close();
   }
-  search(latitude: number, longitude: number): Promise<Response> {
+  async search(latitude: number, longitude: number) {
+    // 다음 페이지가 있어도 추천 후보는 요청당 최대 200개로 고정한다.
+    const { items, truncated } = await this.request({
+      latitude,
+      longitude,
+      radiusM: SCOPE.radiusM,
+      limit: CANDIDATE_LIMIT,
+    });
+    return { items, truncated };
+  }
+  async page(query: NearbyPostsQuery): Promise<NearbyPostsPage> {
+    const response = await this.request(query);
+    const nextCursor = response.nextCursor || null;
+    // 구 서버의 truncated만 있는 응답을 마지막 페이지로 오인하지 않는다.
+    if (response.truncated !== (nextCursor !== null))
+      throw new Error('Map pagination response unavailable');
+    return { items: response.items, truncated: response.truncated, nextCursor };
+  }
+  private request(query: NearbyPostsQuery): Promise<Response> {
     return new Promise((resolve, reject) =>
       this.client.SearchNearbyPosts(
-        { latitude, longitude, radiusM: SCOPE.radiusM, limit: CANDIDATE_LIMIT },
+        query,
         mapMetadata(),
         { deadline: mapDeadline() },
         (error, response) => (error ? reject(error) : resolve(response)),
