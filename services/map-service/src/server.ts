@@ -60,7 +60,10 @@ export function validGatewayToken(
   }
 }
 
-export function createGrpcServer(store: LocationStore): Server {
+export function createGrpcServer(
+  store: LocationStore,
+  index?: Pick<PostIndex, 'nearby'>,
+): Server {
   const keys = trustedKeys();
   const definition = loadSync(
     resolve(process.cwd(), 'contracts/map-authorization.proto'),
@@ -112,6 +115,67 @@ export function createGrpcServer(store: LocationStore): Server {
   server.addService(pkg.wgo.map.v1.MapAuthorization.service, {
     CheckPostCreation: check(false),
     CheckPostParticipation: check(true),
+  });
+  server.addService(pkg.wgo.map.v1.MapPostQuery.service, {
+    SearchNearbyPosts: async (
+      call: ServerUnaryCall<
+        {
+          latitude: number;
+          longitude: number;
+          radiusM: number;
+          limit: number;
+          cursor?: string;
+        },
+        unknown
+      >,
+      callback: sendUnaryData<unknown>,
+    ) => {
+      // 신규 RPC에는 기존 위치 인가의 HS256 전환 예외를 적용하지 않는다.
+      if (serviceCaller(call.metadata, keys, '') !== 'post-service')
+        return callback({
+          code: status.UNAUTHENTICATED,
+          message: 'ES256 post-service token required',
+        });
+      const input = call.request;
+      if (
+        !validCoordinates(input.latitude, input.longitude) ||
+        ![150, 250, 350].includes(input.radiusM) ||
+        !Number.isInteger(input.limit) ||
+        input.limit < 1 ||
+        input.limit > 200 ||
+        (input.cursor !== undefined &&
+          input.cursor !== '' &&
+          (input.cursor.length > 1024 ||
+            !/^[A-Za-z0-9_-]+$/.test(input.cursor)))
+      )
+        return callback({
+          code: status.INVALID_ARGUMENT,
+          message: 'Invalid nearby query',
+        });
+      try {
+        if (!index) throw new Error('Post index unavailable');
+        const result = await index.nearby({
+          ...input,
+          radiusM: input.radiusM as 150 | 250 | 350,
+        });
+        callback(null, {
+          items: result.items,
+          truncated: result.nextCursor !== null,
+          nextCursor: result.nextCursor ?? '',
+        });
+      } catch (error) {
+        callback({
+          code:
+            error instanceof InvalidCursorError
+              ? status.INVALID_ARGUMENT
+              : status.UNAVAILABLE,
+          message:
+            error instanceof InvalidCursorError
+              ? 'Invalid nearby cursor'
+              : 'Post index unavailable',
+        });
+      }
+    },
   });
   return server;
 }

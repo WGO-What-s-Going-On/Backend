@@ -147,3 +147,48 @@ pnpm build
 
 테스트를 개발 중 계속 실행하려면 `pnpm test:watch`를 사용한다. 통합 테스트는
 MongoDB Replica Set과 Redis가 실행 중일 때 `RUN_INTEGRATION=1 pnpm test`로 실행한다.
+
+## 유사 게시물 조회·벡터 인덱싱 기반
+
+`POST /api/v1/posts/similar`와 Map 200개 후보 gRPC, ES 검색, 독립 Redis Streams Worker, 원본 기반 backfill/rebuild를 구현했다. 계약과 실패/복구 정책은 [semantic-search.md](contracts/semantic-search.md), HTTP 스키마는 `/docs`에서 확인한다. 공개 batch-get 최대 100개와 생성/조회 동작은 유지한다.
+
+**실제 E5-small CPU FP32 모델을 연결했다.** API·Worker·CLI가 같은 `E5EmbeddingProvider`를 사용한다. 모델은 프로세스당 한 번 로드·워밍업하며 시작/요청 중 다운로드하지 않는다. 파일 누락·checksum 불일치·로딩 실패 또는 `SEMANTIC_MODEL_ENABLED=false`이면 추천은 503 `SIMILARITY_CHECK_UNAVAILABLE`, Worker는 미실행이다. ES나 모델이 없어도 기존 앱 시작·생존 확인·생성/조회는 유지한다. 로딩 실패를 복구한 뒤에는 프로세스를 재시작한다.
+
+`SEMANTIC_THRESHOLD` 기본값은 없으며 한국어 평가 후 설정해야 한다. 모델이 준비돼도 임계값 미설정 시 추천은 503이다. 인덱싱/재구축은 임계값 없이 가능하다. 환경 변수로 fixture 벡터를 활성화하는 경로는 없다.
+
+모델 경로는 Post 디렉터리 기준 `.cache/models/Xenova/multilingual-e5-small`, 또는 `SEMANTIC_MODEL_PATH`다. ONNX revision `761b726dd34fb83930e26aab4e9ac3899aa1fa78`과 파일 checksum을 고정한다. Transformers.js 3.8.1, ONNX Runtime 1.21.0, CPU 스레드 1개를 사용한다. JSON은 공백을 제외한 직렬화 결과, ONNX는 파일 바이트의 SHA-256을 검증한다. 배포 이미지에는 준비된 모델 디렉터리를 포함하거나 읽기 전용으로 마운트한다.
+
+초안과 원본 모두 `query: `, 패딩 제외 mean pooling, L2 정규화를 적용한다. 긴 입력은 접두사·특수 토큰을 포함한 최대 480토큰 창/64토큰 중첩으로 전체를 처리하고 창별 정규화 벡터를 평균 후 재정규화한다. 모델 버전은 `e5-small-761b726-fp32-w480-o64-v1`이다. 모델/전처리/런타임 변경 시 버전·별칭·임계값을 함께 갱신하고 재구축한다.
+
+API와 Worker는 동시성 1·대기 최대 16개의 큐를 공유한다. 요청 우선이지만 연속 3건 이후 대기 중인 인덱싱에 차례를 준다. 대기를 포함한 제한은 10초이며 취소된 대기 작업은 제거한다. 실행 중인 네이티브 추론은 종료까지 슬롯을 유지하고 취소 후 결과를 버린다. 종료 시 대기 작업을 취소하고 진행 중인 추론이 끝난 뒤 모델을 해제한다.
+
+```bash
+pnpm semantic:model:prepare # 고정 revision 다운로드/checksum 검사; 기존 캐시는 재사용
+pnpm semantic:model:test    # 네트워크 없이 실제 CPU 모델 검증
+# 선택적 로컬 ES (Mongo/Redis와 별도, 보안 비활성은 loopback 개발용)
+docker compose -f compose.semantic.yaml up -d --wait
+pnpm semantic:init
+# 모델 준비 실패/비활성 시 데이터 변경 전에 종료한다.
+pnpm semantic:backfill
+pnpm semantic:rebuild
+```
+
+기존 `post-semantic-v1-read` fixture 별칭을 운영 설정에 남기지 않는다. 실제 모델의 기본 별칭은 `post-semantic-e5-small-761b726-fp32-w480-o64-v1-read`다. 먼저 Worker를 끈 상태로 모델 준비·backfill을 완료하고, 평가된 임계값과 새 별칭을 설정한 뒤 Worker를 활성화한다. `.env` 파일은 앱에서 읽지만 CLI는 셸 환경 변수를 사용하므로 필요한 값을 export한다.
+
+backfill도 새 물리 인덱스를 검증한 뒤 별칭을 교체한다. 실행 중 Worker job이 lease를 보유하면 명령은 busy로 종료하므로 잠시 뒤 재시도한다. 긴 재구축은 `SEMANTIC_WORKER_ENABLED=false`로 소비 프로세스를 정상 종료한 뒤 수행할 수 있다. 원본 스캔 중에도 Outbox 발행은 계속되며 watermark 이후 이벤트를 따라잡는다. 실패한 인덱스는 공개하지 않는다. Stream 보존 구간 유실·원본 동시 변경으로 검증이 실패하면 원본에서 다시 실행한다.
+
+실제 MongoDB(replica set), Redis(:6380), Cassandra(:9042, Map schema), Map gRPC 및 Elasticsearch(:9200)를 연결하는 테스트/fixture 적재 명령:
+
+```bash
+# Node 24, 설치된 Post/Map 의존성 및 Map schema.cql 필요
+(cd ../map-service && pnpm build)
+RUN_INTEGRATION=1 pnpm test
+pnpm semantic:fixture
+# 모든 저장소 + 실제 E5 모델 + HTTP 추천/Worker/재구축 검증
+RUN_INTEGRATION=1 RUN_SEMANTIC_INTEGRATION=1 RUN_EMBEDDING_MODEL=1 pnpm test
+```
+
+`semantic:fixture`는 테스트 전용 MongoDB와 Redis DB 14에 201개 생성 이벤트를 적재하여 실제 후보/검색/회수/재구축을 검증한다. ES 테스트 인덱스와 MongoDB는 종료 시 정리한다. 고정 벡터는 연동과 정렬을 검증한다. 실제 모델 테스트도 기준 추론 일치·장문 끝부분 반영·연동을 검증하며 한국어 중복 판별 품질을 보증하지 않는다. 운영 임계값 평가·추가 학습·양자화·ECS 부하 튜닝·운영 인증 개방은 후속 범위다.
+
+
+Map `SearchNearbyPosts` gRPC는 기존 공간 조회의 커서를 전달한다. `GrpcNearbyPosts.page({latitude, longitude, radiusM, limit, cursor?})`로 페이지당 최대 200개를 조회하고 반환된 `nextCursor`로 이어서 조회할 수 있다. 마지막 페이지는 `nextCursor: null`이다. 유사도 검색용 `search()`는 150m 첫 페이지 200개까지만 비교하며 추가 페이지를 자동 조회하지 않는다. 일반 페이지 조회를 사용하려면 nextCursor를 지원하는 Map을 먼저 배포한다.

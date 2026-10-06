@@ -1,3 +1,4 @@
+import { FindSimilarPosts } from '../src/post/semantic/search.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -29,6 +30,7 @@ describe('OpenAPI document', () => {
         CreateReaction,
         JoinPost,
         ReadPosts,
+        FindSimilarPosts,
       ].map((provide) => ({ provide, useValue: {} })),
     }).compile();
     app = module.createNestApplication();
@@ -52,6 +54,7 @@ describe('OpenAPI document', () => {
     expect(Object.keys(document.paths).sort()).toEqual(
       [
         '/api/v1/posts',
+        '/api/v1/posts/similar',
         '/api/v1/posts/{postId}',
         '/api/v1/posts/{postId}/comments',
         '/api/v1/posts/{postId}/participants',

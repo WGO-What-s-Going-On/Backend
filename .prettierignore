@@ -4,4 +4,4 @@
 **/coverage/
 **/.vitest/
 .idea/
-
+services/post-service/.cache/

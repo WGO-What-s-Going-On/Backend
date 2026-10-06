@@ -80,3 +80,8 @@ flowchart LR
 ```
 
 Run the store backed tests with `RUN_INTEGRATION=1 pnpm test` after applying `schema.cql`. Post index tests use Redis database 15; location history tests use the configured `REDIS_URL` (port 6381 by default) and write test rows to Cassandra.
+
+
+### Post 추천 후보 gRPC
+
+`MapPostQuery.SearchNearbyPosts`를 위치 인가와 같은 gRPC 서버에 등록한다. ES256 Post 신원만 허용하고 150/250/350m 내 페이지당 최대 200개 후보 및 truncated·nextCursor를 반환한다. cursor를 보내 기존 주변 조회의 다음 페이지를 요청할 수 있다. Post 유사도 검색은 150m·첫 페이지 최대 200개만 비교한다. 기존 HTTP 최대 100개/커서 및 MapAuthorization HS256 전환 호환성은 유지한다. [계약](contracts/map-authorization.md). Post의 실제 임베딩 모델은 미연결이며 후보 RPC 자체는 모델과 무관하다. 실제 검색 연동 검증은 Post의 `pnpm semantic:fixture`에서 MongoDB·Redis·Cassandra·Map gRPC·ES를 함께 사용한다.

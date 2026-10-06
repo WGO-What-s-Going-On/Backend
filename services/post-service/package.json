@@ -13,11 +13,19 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "semantic:command": "node dist/post/semantic/cli.js",
+    "semantic:model:prepare": "pnpm build && node dist/post/semantic/prepare-model.js",
+    "semantic:model:test": "RUN_EMBEDDING_MODEL=1 vitest run test/embedding-model.test.ts",
+    "semantic:init": "pnpm build && pnpm semantic:command init",
+    "semantic:backfill": "pnpm build && pnpm semantic:command backfill",
+    "semantic:rebuild": "pnpm build && pnpm semantic:command rebuild",
+    "semantic:fixture": "RUN_SEMANTIC_INTEGRATION=1 vitest run test/semantic.integration.test.ts"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.5",
     "@grpc/proto-loader": "^0.8.1",
+    "@huggingface/transformers": "3.8.1",
     "@nestjs/common": "12.0.4",
     "@nestjs/config": "12.0.0",
     "@nestjs/core": "12.0.4",

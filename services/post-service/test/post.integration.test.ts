@@ -1,3 +1,4 @@
+import { SemanticWorker } from '../src/post/semantic/worker.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
@@ -62,6 +63,7 @@ suite('post creation integration', () => {
   const header = { 'X-User-Id': '123' };
 
   beforeAll(async () => {
+    vi.stubEnv('SEMANTIC_MODEL_ENABLED', 'false');
     process.env.NODE_ENV = 'test';
     process.env.MONGODB_URI =
       'mongodb://localhost:27017/wgo_post_integration?replicaSet=rs0';
@@ -162,6 +164,7 @@ suite('post creation integration', () => {
     map.forceShutdown();
     await redis.quit();
     await app.close();
+    vi.unstubAllEnvs();
   });
 
   it('creates an active post and its outbox event', async () => {
@@ -188,6 +191,31 @@ suite('post creation integration', () => {
         eventType: 'PostCreated',
       }),
     ).toBe(1);
+  });
+
+  it('keeps creation/read available while model-free similarity is 503 and worker is stopped', async () => {
+    const before = {
+      posts: await posts.countDocuments(),
+      events: await outbox.countDocuments(),
+    };
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/posts/similar')
+      .set(header)
+      .send({
+        title: 'Test',
+        content: 'Details',
+        category: 'INCIDENT',
+        latitude: 37.5,
+        longitude: 127,
+        radiusM: 250,
+      })
+      .expect(503);
+    expect(response.body.code).toBe('SIMILARITY_CHECK_UNAVAILABLE');
+    expect(app.get(SemanticWorker).redis.isOpen).toBe(false);
+    expect(await posts.countDocuments()).toBe(before.posts);
+    expect(await outbox.countDocuments()).toBe(before.events);
+    await request(app.getHttpServer()).get(`/api/v1/posts/${id}`).expect(200);
+    await request(app.getHttpServer()).get('/health/live').expect(200);
   });
 
   it('rejects invalid input and missing identity', async () => {

@@ -120,3 +120,20 @@ export const POST_UNIT_OF_WORK = Symbol('POST_UNIT_OF_WORK');
 export const POST_STATE_QUERIES = Symbol('POST_STATE_QUERIES');
 export const POST_READ_QUERIES = Symbol('POST_READ_QUERIES');
 export const LOCATION_AUTHORIZATION = Symbol('LOCATION_AUTHORIZATION');
+
+// Map 공간 조회 계약을 재사용한다. 유사도 검색은 첫 페이지 한 번만 요청한다.
+export interface NearbyPostsQuery {
+  latitude: number;
+  longitude: number;
+  radiusM: 150 | 250 | 350;
+  limit: number;
+  cursor?: string;
+}
+export interface NearbyPostsPage {
+  items: { postId: string; distanceM: number }[];
+  truncated: boolean;
+  nextCursor: string | null;
+}
+export interface NearbyPostsQueryPort {
+  page(query: NearbyPostsQuery): Promise<NearbyPostsPage>;
+}

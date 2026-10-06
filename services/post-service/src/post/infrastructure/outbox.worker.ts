@@ -15,6 +15,8 @@ export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
   private readonly workerId = randomUUID();
   private timer?: NodeJS.Timeout;
   private running = false;
+  private stopped = false;
+  private publishing: Promise<void> = Promise.resolve();
   private wakeRequested = false;
   private readonly redis = createClient({
     url: process.env.REDIS_URL ?? 'redis://localhost:6380',
@@ -30,33 +32,47 @@ export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     // 즉시 깨우기가 누락되거나 Redis가 잠시 실패한 경우를 위한 복구 폴링이다.
     this.timer = setInterval(() => {
-      void this.publishPending();
+      void this.publishPending().catch((error) =>
+        this.logger.warn(`Outbox polling failed: ${String(error)}`),
+      );
     }, 1000);
     this.timer.unref();
   }
 
   wake(): void {
+    if (this.stopped) return;
     // 요청 응답을 발행 작업이 기다리지 않도록 다음 이벤트 루프에서 처리한다.
     this.wakeRequested = true;
     setImmediate(() => {
-      void this.publishPending();
+      void this.publishPending().catch((error) =>
+        this.logger.warn(`Outbox polling failed: ${String(error)}`),
+      );
     });
   }
 
   async onModuleDestroy(): Promise<void> {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
+    // MongoDB 연결이 닫히기 전에 이미 선점한 이벤트의 저장·발행을 마친다.
+    await this.publishing;
     if (this.redis.isOpen) await this.redis.quit();
   }
 
   async publishPending(): Promise<void> {
+    if (this.stopped) return;
     if (this.running) {
       this.wakeRequested = true;
+      await this.publishing;
       return;
     }
     this.running = true;
+    let complete!: () => void;
+    this.publishing = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
     this.wakeRequested = false;
     try {
-      while (true) {
+      while (!this.stopped) {
         const now = new Date();
         // 원자적으로 선점하므로 여러 Worker가 떠 있어도 한 번에 하나만 발행을 시도한다.
         // 선점 중 죽은 Worker의 이벤트는 claimedUntil 이후 다시 가져온다.
@@ -136,7 +152,8 @@ export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
       }
     } finally {
       this.running = false;
-      if (this.wakeRequested) this.wake();
+      complete();
+      if (this.wakeRequested && !this.stopped) this.wake();
     }
   }
 }
