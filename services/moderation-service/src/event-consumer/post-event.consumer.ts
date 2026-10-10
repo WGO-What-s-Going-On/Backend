@@ -70,13 +70,18 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
   async process(entry: Entry): Promise<void> {
     try {
       const event = parsePostEvent(entry.message);
-      if (event && (await this.claim(event.eventId))) {
-        try {
-          await this.processor.process(event);
-          await this.complete(event.eventId);
-        } catch (error) {
-          await this.release(event.eventId);
-          throw error;
+      if (event) {
+        const claim = await this.claim(event.eventId);
+        // 처리 중인 원본이 실패할 수 있으므로 완료 전 중복은 pending으로 남긴다.
+        if (claim === 'busy') return;
+        if (claim === 'acquired') {
+          try {
+            await this.processor.process(event);
+            await this.complete(event.eventId);
+          } catch (error) {
+            await this.release(event.eventId);
+            throw error;
+          }
         }
       }
       await this.redis.xAck(this.stream, this.group, entry.id);
@@ -104,12 +109,13 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async claim(eventId: string): Promise<boolean> {
+  private async claim(eventId: string): Promise<'done' | 'acquired' | 'busy'> {
     const key = `moderation:dedup:${eventId}`;
-    if ((await this.redis.get(key)) === 'done') return false;
-    return (
-      (await this.redis.set(key, 'processing', { NX: true, EX: 30 })) === 'OK'
-    );
+    if ((await this.redis.get(key)) === 'done') return 'done';
+    return (await this.redis.set(key, 'processing', { NX: true, EX: 30 })) ===
+      'OK'
+      ? 'acquired'
+      : 'busy';
   }
 
   private async complete(eventId: string): Promise<void> {

@@ -118,6 +118,22 @@ describe('PostEventConsumer', () => {
     expect(redis.del).toHaveBeenCalled();
   });
 
+  it('keeps a processing duplicate pending until the claim can be recovered', async () => {
+    const { consumer, redis, process } = setup();
+    const entry = {
+      id: '1-0',
+      message: fields('PostCreated', { post: { postId: 'post_1' } }),
+    };
+    await redis.set('moderation:dedup:evt_1', 'processing');
+    await consumer.process(entry);
+    expect(process).not.toHaveBeenCalled();
+    expect(redis.xAck).not.toHaveBeenCalled();
+    await redis.del('moderation:dedup:evt_1');
+    await consumer.process(entry);
+    expect(process).toHaveBeenCalledOnce();
+    expect(redis.xAck).toHaveBeenCalledOnce();
+  });
+
   it('dead-letters malformed events before ACK', async () => {
     const { consumer, redis } = setup();
     await consumer.process({
