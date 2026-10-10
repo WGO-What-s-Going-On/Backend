@@ -88,3 +88,25 @@ pnpm build
 ```
 
 단위 테스트는 실제 OpenAI credential 없이 SDK client와 Redis repository port를 대역으로 실행합니다.
+
+### 실제 Redis 통합 검증
+
+```bash
+docker compose --profile redis up -d
+docker compose exec -T redis redis-cli PING
+pnpm test:integration
+```
+
+Compose 전용 Redis(`localhost:6383`)의 DB 15를 기본으로 사용합니다. `MODERATION_TEST_REDIS_URL`로 별도의 빈 테스트 DB를 지정할 수 있습니다. 기존 key가 있으면 데이터를 보존하고 테스트를 실패시킵니다. 테스트가 만든 key만 정리하며 FLUSHDB/FLUSHALL은 사용하지 않습니다. 같은 테스트 DB를 사용하는 integration과 smoke 명령은 순서대로 실행하세요.
+
+`dev` Post Service의 `application/commands.ts` payload와 `infrastructure/outbox.worker.ts` envelope/Stream fields를 사용합니다. 실제 consumer, result repository, Lifecycle Lua CAS, scheduler와 출력 Stream을 검증하며 OpenAI만 대역을 사용합니다. Pending recovery는 Redis XCLAIM의 IDLE 옵션으로 PEL 나이를 준비한 뒤 production XAUTOCLAIM을 실행하므로 production retry/idle 기본값을 변경하지 않습니다.
+
+### 실제 OpenAI smoke 검증
+
+```bash
+pnpm test:openai-smoke
+```
+
+`OPENAI_API_KEY`가 현재 프로세스 환경에 있을 때만 실행합니다. Key가 없으면 `OpenAI smoke test skipped: OPENAI_API_KEY unavailable`을 출력하고 건너뜁니다. `.env`를 자동으로 읽거나 key를 찾지 않습니다.
+
+Production adapter의 `omni-moderation-latest`로 안전한 문장과 짧은 위협 문장을 각 1회 요청하여 flagged/categories/category scores/model을 확인합니다. 두 요청이 성공하면 실제 Redis 댓글 처리→OpenAI→결과 저장→Lifecycle activity→ACK를 1회 검증합니다. 실제 분류 결과의 기대값은 smoke 확인용이며 모델 정확도 평가가 아닙니다. SDK 예외 상세와 credential은 출력하지 않습니다.

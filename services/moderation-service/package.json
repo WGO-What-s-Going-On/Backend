@@ -13,7 +13,9 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:openai-smoke": "vitest run --config vitest.smoke.config.ts"
   },
   "dependencies": {
     "@nestjs/common": "12.0.4",
