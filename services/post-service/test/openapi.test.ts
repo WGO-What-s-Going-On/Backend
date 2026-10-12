@@ -1,4 +1,5 @@
 import { PostLifecycle } from '../src/post/application/lifecycle.js';
+import { MongooseVote } from '../src/post/infrastructure/mongoose-vote.js';
 import { FindSimilarPosts } from '../src/post/semantic/search.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -8,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HealthController } from '../src/health/health.controller.js';
 import {
   CreateComment,
+  CreateCommentReaction,
   CreatePost,
   CreateReaction,
   JoinPost,
@@ -27,8 +29,10 @@ describe('OpenAPI document', () => {
       controllers: [HealthController, PostController, InternalPostController],
       providers: [
         PostLifecycle,
+        MongooseVote,
         CreatePost,
         CreateComment,
+        CreateCommentReaction,
         CreateReaction,
         JoinPost,
         ReadPosts,
@@ -60,8 +64,12 @@ describe('OpenAPI document', () => {
         '/api/v1/posts/{postId}',
         '/api/v1/posts/{postId}/comments',
         '/api/v1/posts/{postId}/comments/{commentId}',
+        '/api/v1/posts/{postId}/comments/{commentId}/reactions',
+        '/api/v1/posts/{postId}/comments/{commentId}/reactions/{type}',
         '/api/v1/posts/{postId}/participants',
         '/api/v1/posts/{postId}/reactions',
+        '/api/v1/posts/{postId}/reactions/{type}',
+        '/api/v1/posts/{postId}/vote',
         '/health/live',
         '/internal/v1/posts/batch-get',
         '/internal/v1/posts/{postId}',
@@ -88,6 +96,20 @@ describe('OpenAPI document', () => {
     ).toMatchObject({ maxLength: 128 });
     expect(
       document.components.schemas.PostResponse.properties.counters,
+    ).toBeDefined();
+    expect(
+      document.components.schemas.CreateReactionBody.properties.type.enum,
+    ).toEqual(['CURIOUS', 'STILL_HAPPENING', 'HELPFUL', 'ENDED']);
+    expect(
+      document.components.schemas.CreateCommentReactionBody.properties.type
+        .enum,
+    ).toEqual(['HELPFUL', 'AGREE', 'DIFFERENT']);
+    expect(
+      document.paths['/api/v1/posts/{postId}/reactions'].post.responses['409'],
+    ).toBeDefined();
+    expect(
+      document.paths['/api/v1/posts/{postId}/comments/{commentId}/reactions']
+        .post.responses['409'],
     ).toBeDefined();
   });
 });

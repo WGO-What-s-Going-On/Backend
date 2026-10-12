@@ -1,5 +1,14 @@
 # Post Service 작업 현황
 
+## 2026-10-12 댓글 공감
+
+- 댓글별 `HELPFUL`(도움돼요), `AGREE`(맞아요), `DIFFERENT`(정보가 달라요) 공감을
+  생성·취소한다. `(commentId, userId, type)` 유일 인덱스는 종류별 이력을 보존하고,
+  활성 공감에 대한 `(commentId, userId)` 부분 유일 인덱스로 한 개만 허용한다.
+  게시물 공감도 같은 규칙을 적용한다. 댓글 목록에서 `reactionCounts`를 반환한다.
+- 댓글 공감 변경은 MongoDB 트랜잭션으로 저장하지만 Outbox 이벤트는 아직 만들지 않는다.
+- 신규 공감은 ACTIVE 게시물·댓글에만 허용하고, 기존 공감 취소는 종료 뒤에도 허용한다.
+
 ## 2026-10-06 활동 이벤트·수명주기·Outbox 복구
 
 - 기존 생성 4종에 게시물 작성자·카테고리와 활동 버전을 보강했다.
@@ -28,7 +37,7 @@
 
 | 영역 | 완료 내용 |
 | --- | --- |
-| 생성 API | `POST /api/v1/posts`, `/{postId}/comments`, `/{postId}/reactions` (`LIKE`), `/{postId}/participants` |
+| 생성 API | `POST /api/v1/posts`, `/{postId}/comments`, `/{postId}/reactions` (4종 공감), `/{postId}/participants` |
 | 조회 API | MongoDB 현재 상태를 읽는 HTTP 상세·댓글 커서 조회(ACTIVE만), 내부 batch-get·meta·status 조회. 운영 meta/status는 서비스 JWT 필요 |
 | 도메인 규칙 | 입력 불변 조건, ACTIVE 게시물 확인, Reaction·Participant 중복 생성 방지, 참여 종료 기록이 있는 사용자의 재참여 |
 | 인증·참여 허가 | 로컬·테스트에서 `X-User-Id` 검증 및 개발용 참여 허가. 운영 환경에서는 실제 연동 전 생성·참여 요청 거부 |
@@ -78,7 +87,7 @@ WS Gateway는 ACTIVE 게시물 room 참여, 게시물·댓글 조회와 댓글 �
 
 - [x] **Post Service HTTP 조회 API:** 게시물 상세, 댓글 커서 조회, 내부 batch-get·meta/status 조회를 구현했다. 내부 경로는 서비스 간 인증 연동 전까지 운영에서 차단한다. 이 완료 표시는 WS Gateway 실시간 전달이나 주변 검색 조합의 완료를 뜻하지 않는다. `PostViewed` 집계도 별도 작업이다.
 - [ ] **주변 게시물 조회 조합:** Map Service의 위치 검색 결과를 HTTP Gateway가 Post Service 내부 batch-get과 조합하는 계약·구현·통합 테스트를 완료한다. 현재 HTTP Gateway는 `/api/v1/posts`를 투명 프록시만 한다.
-- [x] **종료·취소 Command:** 게시물·댓글 삭제, LIKE 취소, 참여 종료의 트랜잭션·멱등성·이벤트를 구현했다. 게시물 수정은 별도 후속 기능이다.
+- [x] **종료·취소 Command:** 게시물·댓글 삭제, 종류별 공감 취소, 참여 종료의 트랜잭션·멱등성·이벤트를 구현했다. 게시물 수정은 별도 후속 기능이다.
 - [x] **Post 만료 처리:** 기한 예약, `ACTIVE → EXPIRED` Worker, `PostExpired` Outbox 및 중복·경합 처리를 구현했다. Moderation 네트워크 연동은 후속 범위다.
 - [ ] **API 경로 정합성:** 상세 설계에 남아 있는 Client-facing 경로와 내부 Gateway 경로의 역할을 확정하고, 구현·문서·호출자를 일치시킨다.
 

@@ -1,4 +1,5 @@
 import { PostLifecycle } from '../src/post/application/lifecycle.js';
+import { MongooseVote } from '../src/post/infrastructure/mongoose-vote.js';
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -6,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostController } from '../src/post/post.controller.js';
 import {
   CreateComment,
+  CreateCommentReaction,
   CreatePost,
   CreateReaction,
   JoinPost,
@@ -38,8 +40,10 @@ describe('similar HTTP contract', () => {
       providers: [
         ...[
           PostLifecycle,
+          MongooseVote,
           CreatePost,
           CreateComment,
+          CreateCommentReaction,
           CreateReaction,
           JoinPost,
           ReadPosts,

@@ -1,4 +1,5 @@
 import { SimilarityUnavailableError } from '../semantic/policy.js';
+import { VoteUnavailableError } from '../application/vote.js';
 import {
   ArgumentsHost,
   BadRequestException,
@@ -17,6 +18,7 @@ import {
   PostInactiveError,
   PostNotFoundError,
   PostOwnershipError,
+  ReactionConflictError,
 } from '../domain/post.js';
 
 @Catch(
@@ -27,6 +29,8 @@ import {
   InvalidPostError,
   ParticipationUnavailableError,
   LocationDeniedError,
+  ReactionConflictError,
+  VoteUnavailableError,
 )
 export class PostErrorFilter implements ExceptionFilter {
   catch(error: Error, host: ArgumentsHost): void {
@@ -39,10 +43,19 @@ export class PostErrorFilter implements ExceptionFilter {
         .json({ statusCode: 503, code: error.message, message: error.message });
       return;
     }
+    if (error instanceof ReactionConflictError) {
+      response.status(409).json({
+        statusCode: 409,
+        code: 'REACTION_ALREADY_EXISTS',
+        message: error.message,
+      });
+      return;
+    }
     const httpError =
       error instanceof PostNotFoundError
         ? new NotFoundException(error.message)
-        : error instanceof PostInactiveError ||
+        : error instanceof VoteUnavailableError ||
+            error instanceof PostInactiveError ||
             error instanceof PostOwnershipError
           ? new ForbiddenException(error.message)
           : error instanceof InvalidPostError

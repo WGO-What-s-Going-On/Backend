@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import type { Model } from 'mongoose';
 import type { CommentCursor, PostReadQueries } from '../application/ports.js';
+import { emptyCommentReactionCounts } from '../domain/post.js';
 
 @Injectable()
 export class MongoosePostRead implements PostReadQueries {
@@ -99,6 +100,10 @@ export class MongoosePostRead implements PostReadQueries {
         authorId: row.authorId,
         content: row.content,
         status: row.status,
+        reactionCounts: {
+          ...emptyCommentReactionCounts(),
+          ...(row.reactionCounts ?? {}),
+        },
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       },

@@ -51,11 +51,65 @@ export interface CommentRecord {
   updatedAt: Date | null;
 }
 
+export enum CommentReactionType {
+  HELPFUL = 'HELPFUL',
+  AGREE = 'AGREE',
+  DIFFERENT = 'DIFFERENT',
+}
+
+export type CommentReactionCounts = Record<CommentReactionType, number>;
+
+export function emptyCommentReactionCounts(): CommentReactionCounts {
+  return { HELPFUL: 0, AGREE: 0, DIFFERENT: 0 };
+}
+
+export interface CommentReactionRecord {
+  postId: string;
+  commentId: string;
+  userId: number;
+  type: CommentReactionType;
+  createdAt: Date;
+}
+
+export function createCommentReaction(
+  postId: string,
+  commentId: string,
+  userId: number,
+  type: CommentReactionType,
+  now: Date,
+): CommentReactionRecord {
+  return { postId, commentId, userId, type, createdAt: now };
+}
+
+export enum PostReactionType {
+  CURIOUS = 'CURIOUS',
+  STILL_HAPPENING = 'STILL_HAPPENING',
+  HELPFUL = 'HELPFUL',
+  ENDED = 'ENDED',
+}
+
+// 이전 LIKE 기록은 새로 만들지 않지만 취소와 이벤트 재발행을 위해 읽을 수 있어야 한다.
+export type StoredPostReactionType = PostReactionType | 'LIKE';
+
 export interface ReactionRecord {
   postId: string;
   userId: number;
-  type: 'LIKE';
+  type: StoredPostReactionType;
   createdAt: Date;
+}
+
+export class ReactionConflictError extends Error {}
+
+// 이미 고른 종류를 다시 누르는 것은 재시도이고, 다른 종류는 취소 후에만 선택할 수 있다.
+export function requireReactionSlot<T extends { type: string }>(
+  active: T | null,
+  requested: string,
+): T | null {
+  if (active && active.type !== requested)
+    throw new ReactionConflictError(
+      'Cancel the current reaction before choosing another',
+    );
+  return active;
 }
 
 export interface ParticipantRecord {
@@ -154,9 +208,10 @@ export function createComment(
 export function createReaction(
   postId: string,
   userId: number,
+  type: PostReactionType,
   now: Date,
 ): ReactionRecord {
-  return { postId, userId, type: 'LIKE', createdAt: now };
+  return { postId, userId, type, createdAt: now };
 }
 
 export function joinParticipant(

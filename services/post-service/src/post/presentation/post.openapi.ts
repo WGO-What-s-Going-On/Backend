@@ -1,4 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { CommentReactionType, PostReactionType } from '../domain/post.js';
 
 // 이 클래스들은 OpenAPI 스키마 전용이다. 실제 요청 검증은 post.input.ts와 post-query.input.ts에서 수행한다.
 
@@ -42,7 +43,31 @@ export class InternalCreateCommentBody extends CreateCommentBody {
 }
 
 export class CreateReactionBody {
-  @ApiProperty({ enum: ['LIKE'], example: 'LIKE' }) type!: 'LIKE';
+  @ApiProperty({ enum: PostReactionType, example: PostReactionType.CURIOUS })
+  type!: PostReactionType;
+}
+
+export class CreateCommentReactionBody {
+  @ApiProperty({
+    enum: CommentReactionType,
+    example: CommentReactionType.HELPFUL,
+  })
+  type!: CommentReactionType;
+}
+
+export class CommentReactionResponse {
+  @ApiProperty({ example: postIdExample }) postId!: string;
+  @ApiProperty({ example: 'comment_123e4567-e89b-12d3-a456-426614174000' })
+  commentId!: string;
+  @ApiProperty({ example: 123 }) userId!: number;
+  @ApiProperty({ enum: CommentReactionType }) type!: CommentReactionType;
+  @ApiProperty(dateTime) createdAt!: string;
+}
+
+export class CommentReactionCountsResponse {
+  @ApiProperty({ example: 0 }) HELPFUL!: number;
+  @ApiProperty({ example: 0 }) AGREE!: number;
+  @ApiProperty({ example: 0 }) DIFFERENT!: number;
 }
 
 export class JoinPostBody {}
@@ -96,6 +121,12 @@ export class CommentResponse {
       '삭제 후 같은 mutationId로 재시도하면 DELETED인 기존 댓글을 반환할 수 있습니다.',
   })
   status!: string;
+  @ApiPropertyOptional({
+    type: () => CommentReactionCountsResponse,
+    description:
+      '댓글 목록 조회에서 제공하며, 기존 댓글의 누락된 값은 0입니다.',
+  })
+  reactionCounts?: CommentReactionCountsResponse;
   @ApiProperty(dateTime) createdAt!: string;
   @ApiProperty({ ...dateTime, nullable: true, example: null }) updatedAt!:
     | string
@@ -115,7 +146,7 @@ export class CommentPageResponse {
 export class ReactionResponse {
   @ApiProperty({ example: postIdExample }) postId!: string;
   @ApiProperty({ example: 123 }) userId!: number;
-  @ApiProperty({ enum: ['LIKE'] }) type!: string;
+  @ApiProperty({ enum: PostReactionType }) type!: PostReactionType;
   @ApiProperty(dateTime) createdAt!: string;
 }
 

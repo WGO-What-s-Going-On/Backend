@@ -1,4 +1,7 @@
 import { PostLifecycle } from './application/lifecycle.js';
+import { MongooseVote } from './infrastructure/mongoose-vote.js';
+import { VoteBody, VoteResponse } from './presentation/vote.openapi.js';
+import { CommentReactionType, PostReactionType } from './domain/post.js';
 import { FindSimilarPosts } from './semantic/search.js';
 import {
   SimilarPostsBody,
@@ -14,6 +17,7 @@ import {
   HttpCode,
   Param,
   Post,
+  Put,
   Query,
   UseFilters,
 } from '@nestjs/common';
@@ -22,6 +26,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiCreatedResponse,
+  ApiConflictResponse,
   ApiForbiddenResponse,
   ApiHeader,
   ApiNotFoundResponse,
@@ -36,6 +41,7 @@ import {
 } from '@nestjs/swagger';
 import {
   CreateComment,
+  CreateCommentReaction,
   CreatePost,
   CreateReaction,
   JoinPost,
@@ -44,12 +50,15 @@ import { ReadPosts } from './application/queries.js';
 import { PostErrorFilter } from './presentation/post-error.filter.js';
 import {
   commentInput,
+  commentReactionInput,
+  commentReactionType,
   commentId,
   participantInput,
   postId,
   postInput,
   similarInput,
   reactionInput,
+  reactionType,
   userId,
 } from './presentation/post.input.js';
 import {
@@ -67,6 +76,8 @@ import {
   BatchGetResponse,
   CommentPageResponse,
   CommentResponse,
+  CommentReactionResponse,
+  CreateCommentReactionBody,
   CreateCommentBody,
   CreatePostBody,
   CreateReactionBody,
@@ -87,12 +98,89 @@ export class PostController {
   constructor(
     private readonly createPost: CreatePost,
     private readonly createComment: CreateComment,
+    private readonly createCommentReaction: CreateCommentReaction,
     private readonly createReaction: CreateReaction,
     private readonly joinPost: JoinPost,
     private readonly readPosts: ReadPosts,
     private readonly findSimilar: FindSimilarPosts,
     private readonly lifecycle: PostLifecycle,
+    private readonly votes: MongooseVote,
   ) {}
+
+  @Get(':postId/vote')
+  @ApiOperation({
+    summary: '투표 및 합의 결과 조회',
+    description:
+      '종료·삭제 후에도 후보와 확정 결과를 반환합니다. 기존 게시물과 후보 부족은 NONE입니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiHeader({
+    name: 'X-User-Id',
+    required: false,
+    description: '로컬·테스트에서만 본인 선택 조회',
+  })
+  @ApiOkResponse({ type: VoteResponse })
+  @ApiNotFoundResponse({ description: '게시물이 없음' })
+  vote(
+    @Param('postId') id: string,
+    @Headers('x-user-id') header: string | undefined,
+  ) {
+    return this.votes.read(
+      postId(id),
+      header && process.env.NODE_ENV !== 'production'
+        ? userId(header)
+        : undefined,
+    );
+  }
+
+  @Put(':postId/vote')
+  @ApiOperation({
+    summary: '후보 선택 또는 표 이동',
+    description:
+      'Map Service 위치 검증 후 사용자당 한 표를 기록합니다. 같은 선택은 멱등 처리합니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiHeader({ name: 'X-User-Id', description: '로컬·테스트 전용 사용자 ID' })
+  @ApiBody({ type: VoteBody })
+  @ApiOkResponse({ type: VoteResponse })
+  @ApiForbiddenResponse({ description: '투표 종료 또는 위치 거부' })
+  @ApiServiceUnavailableResponse({
+    description: '운영 인증 미연결 또는 Map Service 장애',
+  })
+  chooseVote(
+    @Param('postId') id: string,
+    @Headers('x-user-id') header: string | undefined,
+    @Body() body: unknown,
+  ) {
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      Object.keys(body).length !== 1 ||
+      !('commentId' in body)
+    )
+      throw new BadRequestException('commentId required');
+    return this.votes.choose(
+      postId(id),
+      userId(header),
+      commentId((body as VoteBody).commentId),
+    );
+  }
+
+  @Delete(':postId/vote')
+  @ApiOperation({
+    summary: '본인 표 취소',
+    description: '새 위치 확인 없이 본인 표를 취소합니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiHeader({ name: 'X-User-Id', description: '로컬·테스트 전용 사용자 ID' })
+  @ApiOkResponse({ type: VoteResponse })
+  cancelVote(
+    @Param('postId') id: string,
+    @Headers('x-user-id') header: string | undefined,
+  ) {
+    return this.votes.cancel(postId(id), userId(header));
+  }
 
   @Delete(':postId')
   @HttpCode(204)
@@ -146,10 +234,41 @@ export class PostController {
     );
   }
 
+  @Delete(':postId/comments/:commentId/reactions/:type')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: '본인의 댓글 공감 취소',
+    description:
+      '같은 취소 요청은 추가 변경 없이 204를 반환합니다. 댓글 또는 게시물 비활성화 후에도 취소할 수 있습니다. 이벤트는 발행하지 않습니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiParam({ name: 'commentId' })
+  @ApiParam({ name: 'type', enum: CommentReactionType })
+  @ApiHeader({
+    name: 'X-User-Id',
+    description: '양의 정수 사용자 ID (로컬·테스트 전용)',
+  })
+  @ApiNoContentResponse({ description: '처리 완료 또는 이미 처리됨' })
+  @ApiNotFoundResponse({ description: '게시물 또는 댓글이 없음' })
+  @ApiServiceUnavailableResponse({ description: '운영 인증 연동 전' })
+  async removeCommentReaction(
+    @Param('postId') id: string,
+    @Param('commentId') cid: string,
+    @Param('type') type: string,
+    @Headers('x-user-id') header: string | undefined,
+  ): Promise<void> {
+    await this.lifecycle.removeCommentReaction(
+      postId(id),
+      commentId(cid),
+      userId(header),
+      commentReactionType(type),
+    );
+  }
+
   @Delete(':postId/reactions')
   @HttpCode(204)
   @ApiOperation({
-    summary: '본인의 LIKE 취소',
+    summary: '기존 LIKE 공감 취소',
     description:
       '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. 운영 인증 연동 전에는 503입니다.',
   })
@@ -166,7 +285,35 @@ export class PostController {
     @Param('postId') id: string,
     @Headers('x-user-id') header: string | undefined,
   ): Promise<void> {
-    await this.lifecycle.removeReaction(postId(id), userId(header));
+    await this.lifecycle.removeReaction(postId(id), userId(header), 'LIKE');
+  }
+
+  @Delete(':postId/reactions/:type')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: '본인의 지정한 종류 공감 취소',
+    description:
+      '반복 요청은 추가 이벤트 없이 204. 기존 LIKE 취소는 이전 경로도 지원합니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiParam({ name: 'type', enum: PostReactionType })
+  @ApiHeader({
+    name: 'X-User-Id',
+    description: '양의 정수 사용자 ID (로컬·테스트 전용)',
+  })
+  @ApiNoContentResponse({ description: '처리 완료 또는 이미 처리됨' })
+  @ApiNotFoundResponse({ description: '게시물이 없음' })
+  @ApiServiceUnavailableResponse({ description: '운영 인증 연동 전' })
+  async removeReactionByType(
+    @Param('postId') id: string,
+    @Param('type') type: string,
+    @Headers('x-user-id') header: string | undefined,
+  ): Promise<void> {
+    await this.lifecycle.removeReaction(
+      postId(id),
+      userId(header),
+      reactionType(type),
+    );
   }
 
   @Delete(':postId/participants')
@@ -322,10 +469,46 @@ export class PostController {
     return this.createComment.execute(postId(id), commentInput(body), authorId);
   }
 
+  @Post(':postId/comments/:commentId/reactions')
+  @ApiOperation({
+    summary: '댓글 공감 작성',
+    description:
+      '한 사용자가 댓글에 종류별로 하나씩 누를 수 있습니다. 같은 종류의 반복 요청은 기존 공감을 반환하며 이벤트는 발행하지 않습니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiParam({ name: 'commentId' })
+  @ApiHeader({
+    name: 'X-User-Id',
+    description: '양의 정수 사용자 ID (로컬·테스트 전용)',
+  })
+  @ApiBody({ type: CreateCommentReactionBody })
+  @ApiCreatedResponse({ type: CommentReactionResponse })
+  @ApiConflictResponse({
+    description:
+      'REACTION_ALREADY_EXISTS: 다른 종류의 공감을 취소한 뒤 다시 선택해야 함',
+  })
+  @ApiNotFoundResponse({ description: '게시물 또는 댓글이 없음' })
+  @ApiForbiddenResponse({ description: '게시물 또는 댓글이 비활성 상태' })
+  @ApiServiceUnavailableResponse({ description: '운영 인증 연동 전' })
+  commentReaction(
+    @Param('postId') id: string,
+    @Param('commentId') cid: string,
+    @Headers('x-user-id') header: string | undefined,
+    @Body() body: unknown,
+  ) {
+    return this.createCommentReaction.execute(
+      postId(id),
+      commentId(cid),
+      userId(header),
+      commentReactionInput(body),
+    );
+  }
+
   @Post(':postId/reactions')
   @ApiOperation({
-    summary: 'LIKE 반응 작성',
-    description: '같은 사용자의 반복 요청은 기존 반응을 반환합니다.',
+    summary: '게시물 공감 작성',
+    description:
+      '한 사용자가 종류별로 하나씩 누를 수 있으며, 같은 종류의 반복 요청은 기존 반응을 반환합니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiHeader({
@@ -335,6 +518,10 @@ export class PostController {
   })
   @ApiBody({ type: CreateReactionBody })
   @ApiCreatedResponse({ type: ReactionResponse })
+  @ApiConflictResponse({
+    description:
+      'REACTION_ALREADY_EXISTS: 다른 종류의 공감을 취소한 뒤 다시 선택해야 함',
+  })
   @ApiNotFoundResponse({ description: '게시물이 없음' })
   @ApiForbiddenResponse({
     description: '사용자 ID가 유효하지 않거나 게시물이 비활성 상태',
@@ -346,8 +533,11 @@ export class PostController {
     @Body() body: unknown,
   ) {
     const actorId = userId(header);
-    reactionInput(body);
-    return this.createReaction.execute(postId(id), actorId);
+    return this.createReaction.execute(
+      postId(id),
+      actorId,
+      reactionInput(body),
+    );
   }
 
   @Post(':postId/participants')

@@ -1,14 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import {
   createComment,
+  createCommentReaction,
   createPost,
   createReaction,
+  PostReactionType,
   joinParticipant,
+  PostInactiveError,
+  PostNotFoundError,
+  ReactionConflictError,
+  requireReactionSlot,
   requireActive,
 } from '../domain/post.js';
 import type {
   PostInput,
   CommentRecord,
+  CommentReactionRecord,
+  CommentReactionType,
   PostRecord,
   ReactionRecord,
   ParticipantRecord,
@@ -163,20 +171,32 @@ export class CreateReaction {
     private readonly partitionStrategy: PartitionStrategy,
   ) {}
 
-  async execute(postId: string, userId: number): Promise<ReactionRecord> {
+  async execute(
+    postId: string,
+    userId: number,
+    type: PostReactionType,
+  ): Promise<ReactionRecord> {
     const now = new Date();
-    const reaction = createReaction(postId, userId, now);
+    const reaction = createReaction(postId, userId, type, now);
     try {
       return await this.unitOfWork.execute(async (transaction) => {
         const post = await active(transaction, postId);
-        const existing = await transaction.queries.findReaction(postId, userId);
-        if (existing && !existing.removedAt)
+        const activeReaction = requireReactionSlot(
+          await transaction.queries.findActiveReaction(postId, userId),
+          type,
+        );
+        if (activeReaction)
           return {
-            postId: existing.postId,
-            userId: existing.userId,
-            type: existing.type,
-            createdAt: existing.createdAt,
+            postId: activeReaction.postId,
+            userId: activeReaction.userId,
+            type: activeReaction.type,
+            createdAt: activeReaction.createdAt,
           };
+        const existing = await transaction.queries.findReaction(
+          postId,
+          userId,
+          type,
+        );
         const bucketId = this.partitionStrategy.resolveBucket(
           `${userId}:${reaction.type}`,
           post.bucketCount,
@@ -212,16 +232,103 @@ export class CreateReaction {
         return reaction;
       });
     } catch (error) {
-      // 동시에 들어온 LIKE 요청도 기존 반응을 반환해 카운터와 이벤트가 늘지 않게 한다.
+      // 다른 종류가 동시에 커밋됐다면 부분 유일 인덱스 충돌을 도메인 오류로 바꾼다.
       if (error instanceof UniqueConflictError) {
-        const existing = await this.queries.findReaction(postId, userId);
-        if (existing && !existing.removedAt)
+        const existing = requireReactionSlot(
+          await this.queries.findActiveReaction(postId, userId),
+          type,
+        );
+        if (existing)
           return {
             postId: existing.postId,
             userId: existing.userId,
             type: existing.type,
             createdAt: existing.createdAt,
           };
+        throw new ReactionConflictError('Reaction changed; retry the request');
+      }
+      throw error;
+    }
+  }
+}
+
+export class CreateCommentReaction {
+  constructor(
+    private readonly unitOfWork: PostUnitOfWork,
+    private readonly queries: PostStateQueries,
+  ) {}
+
+  async execute(
+    postId: string,
+    commentId: string,
+    userId: number,
+    type: CommentReactionType,
+  ): Promise<CommentReactionRecord> {
+    const reaction = createCommentReaction(
+      postId,
+      commentId,
+      userId,
+      type,
+      new Date(),
+    );
+    try {
+      return await this.unitOfWork.execute(async (tx) => {
+        await active(tx, postId);
+        const comment = await tx.queries.findComment(postId, commentId);
+        if (!comment) throw new PostNotFoundError('Comment not found');
+        if (comment.status !== 'ACTIVE')
+          throw new PostInactiveError('Comment is not active');
+        const activeReaction = requireReactionSlot(
+          await tx.queries.findActiveCommentReaction(commentId, userId),
+          type,
+        );
+        if (activeReaction)
+          return {
+            postId,
+            commentId,
+            userId,
+            type,
+            createdAt: activeReaction.createdAt,
+          };
+        const existing = await tx.queries.findCommentReaction(
+          commentId,
+          userId,
+          type,
+        );
+        if (existing) await tx.commands.reactivateCommentReaction(reaction);
+        else await tx.commands.insertCommentReaction(reaction);
+        // 댓글 문서 쓰기는 댓글 삭제와 충돌하고, bucket 쓰기는 게시물 종료와 충돌한다.
+        if (
+          !(await tx.commands.incrementCommentReaction(
+            postId,
+            commentId,
+            type,
+            1,
+          ))
+        )
+          throw new PostInactiveError('Comment is not active');
+        await tx.commands.increment(
+          postId,
+          comment.bucketId ?? 0,
+          'commentReactionCount',
+        );
+        return reaction;
+      });
+    } catch (error) {
+      if (error instanceof UniqueConflictError) {
+        const existing = requireReactionSlot(
+          await this.queries.findActiveCommentReaction(commentId, userId),
+          type,
+        );
+        if (existing)
+          return {
+            postId,
+            commentId,
+            userId,
+            type,
+            createdAt: existing.createdAt,
+          };
+        throw new ReactionConflictError('Reaction changed; retry the request');
       }
       throw error;
     }

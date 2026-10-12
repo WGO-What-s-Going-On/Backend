@@ -9,6 +9,7 @@ import {
   PostSchema,
   CommentSchema,
   ReactionSchema,
+  CommentReactionSchema,
   ParticipantSchema,
   CounterSchema,
   OutboxSchema,
@@ -20,6 +21,7 @@ async function main() {
   const [command, id, value, extra, ...rest] = process.argv.slice(2);
   const arity: Record<string, number> = {
     'outbox-failed': 0,
+    'reaction-conflicts': 0,
     'outbox-retry': 2,
     'schedule-expiration': 2,
     expire: 1,
@@ -33,9 +35,13 @@ async function main() {
     arity[command] !== args.length
   )
     throw new Error(
-      'Usage: post:operations outbox-failed | outbox-retry <eventId> <reason> | schedule-expiration <postId> <ISO-date> | expire <postId> | moderate-post <postId> <decisionId> | moderate-comment <postId> <commentId> <decisionId>',
+      'Usage: post:operations outbox-failed | reaction-conflicts | outbox-retry <eventId> <reason> | schedule-expiration <postId> <ISO-date> | expire <postId> | moderate-post <postId> <decisionId> | moderate-comment <postId> <commentId> <decisionId>',
     );
-  if (!command.startsWith('outbox') && !/^post_[0-9a-f-]{36}$/.test(id!))
+  if (
+    !command.startsWith('outbox') &&
+    command !== 'reaction-conflicts' &&
+    !/^post_[0-9a-f-]{36}$/.test(id!)
+  )
     throw new Error('Invalid post ID');
   if (command === 'moderate-comment' && !/^comment_[0-9a-f-]{36}$/.test(value!))
     throw new Error('Invalid comment ID');
@@ -52,6 +58,38 @@ async function main() {
   });
   try {
     await db.asPromise();
+    if (command === 'reaction-conflicts') {
+      const findConflicts = (
+        collection: string,
+        target: 'postId' | 'commentId',
+      ) =>
+        db
+          .collection(collection)
+          .aggregate([
+            { $match: { removedAt: null } },
+            {
+              $group: {
+                _id: { targetId: `$${target}`, userId: '$userId' },
+                count: { $sum: 1 },
+                types: { $addToSet: '$type' },
+              },
+            },
+            { $match: { count: { $gt: 1 } } },
+            { $sort: { '_id.targetId': 1, '_id.userId': 1 } },
+          ])
+          .toArray();
+      console.info(
+        JSON.stringify(
+          {
+            post: await findConflicts('post_reactions', 'postId'),
+            comment: await findConflicts('post_comment_reactions', 'commentId'),
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     const outbox = db.model('Outbox', OutboxSchema, 'outbox_events');
     const recovery = new OutboxRecovery(outbox);
     if (command === 'outbox-failed') {
@@ -69,6 +107,11 @@ async function main() {
       db.model('Post', PostSchema, 'posts'),
       db.model('Comment', CommentSchema, 'post_comments'),
       db.model('Reaction', ReactionSchema, 'post_reactions'),
+      db.model(
+        'CommentReaction',
+        CommentReactionSchema,
+        'post_comment_reactions',
+      ),
       db.model('Participant', ParticipantSchema, 'post_participants'),
       outbox,
       db.model('Counter', CounterSchema, 'post_counters'),

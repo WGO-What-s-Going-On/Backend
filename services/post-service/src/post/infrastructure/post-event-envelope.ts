@@ -1,3 +1,5 @@
+import { PostReactionType } from '../domain/post.js';
+
 export class InvalidOutboxEvent extends Error {}
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -69,7 +71,11 @@ export function serializePostEvent(row: Record<string, any>): string {
       throw new Error('Invalid category');
     if (key === 'comment' && !id(target.commentId, 'comment'))
       throw new Error('Invalid comment ID');
-    if (key === 'reaction' && target.type !== 'LIKE')
+    if (
+      key === 'reaction' &&
+      target.type !== 'LIKE' &&
+      !Object.values(PostReactionType).includes(target.type)
+    )
       throw new Error('Invalid reaction type');
     const requiredDates: Record<string, string[]> = {
       PostCreated: [],

@@ -1,4 +1,5 @@
 import { Schema } from 'mongoose';
+import { CommentReactionType, PostReactionType } from '../domain/post.js';
 
 const options = { versionKey: false, strict: true } as const;
 
@@ -21,6 +22,9 @@ export const PostSchema = new Schema(
     createdAt: { type: Date, required: true },
     updatedAt: { type: Date, required: true },
     expiresAt: { type: Date, default: null },
+    voteAt: { type: Date, default: null },
+    vote: { type: Schema.Types.Mixed, default: null },
+    voteRevision: { type: Number, default: 0 },
     bucketCount: { type: Number, required: true, default: 1 },
     postVersion: { type: Number, default: 1 },
     deletedAt: { type: Date, default: null },
@@ -29,6 +33,18 @@ export const PostSchema = new Schema(
   options,
 );
 PostSchema.index({ status: 1, expiresAt: 1 });
+PostSchema.index({ 'vote.status': 1, voteAt: 1 });
+
+export const VoteSelectionSchema = new Schema(
+  {
+    postId: { type: String, required: true },
+    userId: { type: Number, required: true },
+    commentId: { type: String, default: null },
+    updatedAt: { type: Date, required: true },
+  },
+  options,
+);
+VoteSelectionSchema.index({ postId: 1, userId: 1 }, { unique: true });
 
 export const CommentSchema = new Schema(
   {
@@ -38,9 +54,15 @@ export const CommentSchema = new Schema(
     authorId: { type: Number, required: true },
     mutationId: { type: String },
     activityVersion: { type: Number, default: 1 },
+    voteSelectionFence: { type: Number, default: 0 },
     deletedAt: { type: Date, default: null },
     content: { type: String, required: true },
     status: { type: String, required: true },
+    reactionCounts: {
+      HELPFUL: { type: Number, default: 0 },
+      AGREE: { type: Number, default: 0 },
+      DIFFERENT: { type: Number, default: 0 },
+    },
     createdAt: { type: Date, required: true },
     updatedAt: { type: Date, default: null },
   },
@@ -61,7 +83,12 @@ export const ReactionSchema = new Schema(
     postId: { type: String, required: true },
     bucketId: { type: Number, required: true, default: 0 },
     userId: { type: Number, required: true },
-    type: { type: String, required: true },
+    // LIKE는 이전 데이터와 미발행 Outbox 재처리를 위해서만 저장 허용한다.
+    type: {
+      type: String,
+      required: true,
+      enum: [...Object.values(PostReactionType), 'LIKE'],
+    },
     activityVersion: { type: Number, default: 1 },
     removedAt: { type: Date, default: null },
     createdAt: { type: Date, required: true },
@@ -69,6 +96,35 @@ export const ReactionSchema = new Schema(
   options,
 );
 ReactionSchema.index({ postId: 1, userId: 1, type: 1 }, { unique: true });
+// 취소 이력은 남기되 같은 사용자의 활성 게시물 공감은 하나만 허용한다.
+ReactionSchema.index(
+  { postId: 1, userId: 1 },
+  { unique: true, partialFilterExpression: { removedAt: null } },
+);
+
+export const CommentReactionSchema = new Schema(
+  {
+    postId: { type: String, required: true },
+    commentId: { type: String, required: true },
+    userId: { type: Number, required: true },
+    type: {
+      type: String,
+      required: true,
+      enum: Object.values(CommentReactionType),
+    },
+    createdAt: { type: Date, required: true },
+    removedAt: { type: Date, default: null },
+  },
+  options,
+);
+CommentReactionSchema.index(
+  { commentId: 1, userId: 1, type: 1 },
+  { unique: true },
+);
+CommentReactionSchema.index(
+  { commentId: 1, userId: 1 },
+  { unique: true, partialFilterExpression: { removedAt: null } },
+);
 
 export const CounterSchema = new Schema(
   {

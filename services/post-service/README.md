@@ -92,19 +92,35 @@ curl -X POST http://localhost:3002/api/v1/posts \
 ```
 
 응답의 `postId`를 사용해 `/api/v1/posts/{postId}/comments` (`{"content":"..."}`),
-`/reactions` (`{"type":"LIKE"}`), `/participants` (`{}`)에 POST할 수 있다.
+`/reactions` (`{"type":"CURIOUS"}` 등), `/participants` (`{}`)에 POST할 수 있다.
+공감 종류는 `CURIOUS`(👀 저도 궁금해요), `STILL_HAPPENING`(✅ 지금도 그래요),
+`HELPFUL`(🙌 도움됐어요), `ENDED`(🏁 이제 끝났어요)다. 한 사용자는 게시물당
+활성 공감을 하나만 누를 수 있다. 다른 종류로 바꾸려면 기존 공감을 먼저 취소해야 한다.
+같은 종류의 재요청은 기존 결과를 반환하고, 다른 종류의 중복 요청은
+`409 REACTION_ALREADY_EXISTS`를 반환한다. 생성·취소 이벤트의 `reaction.type`에
+종류가 포함된다.
+
+댓글에는 `POST /api/v1/posts/{postId}/comments/{commentId}/reactions`로
+`{"type":"HELPFUL"}`(👍 도움돼요), `AGREE`(✅ 맞아요), `DIFFERENT`(⚠️ 정보가 달라요)를
+누를 수 있다. 같은 사용자는 댓글당 활성 공감을 하나만 누를 수 있으며,
+`DELETE /api/v1/posts/{postId}/comments/{commentId}/reactions/{type}`으로 취소한다.
+다른 종류로 바꾸려면 먼저 취소해야 한다. 같은 종류의 재요청은 기존 결과를
+반환하고, 다른 종류의 중복 요청은 `409 REACTION_ALREADY_EXISTS`를 반환한다.
+댓글 목록에는 `reactionCounts`로 세 종류의 현재 수가 제공된다. 댓글 공감의
+생성·취소 이벤트는 아직 발행하지 않는다.
 새 게시물의 `expiresAt`은 `null`이며 Moderation 연동 후 설정된다. Redis Stream은
 `docker compose exec redis redis-cli XRANGE post:events - +`로 확인한다.
 
 ## 상태 변경과 이벤트 복구
 
-본인 게시물·댓글 삭제, 본인의 LIKE 취소와 참여 이탈은 다음 DELETE 경로를 사용한다.
+본인 게시물·댓글 삭제, 본인의 공감 취소와 참여 이탈은 다음 DELETE 경로를 사용한다.
 모두 성공·반복 처리에 204를 반환하며 본문은 없다. 기존과 동일하게 로컬·테스트에서
 `X-User-Id`를 사용하고 운영 인증 연동 전에는 503이다.
 
 - `/api/v1/posts/{postId}`
 - `/api/v1/posts/{postId}/comments/{commentId}`
-- `/api/v1/posts/{postId}/reactions`
+- `/api/v1/posts/{postId}/reactions/{type}` (`type`은 위 네 값)
+- `/api/v1/posts/{postId}/reactions` (이전 `LIKE` 기록 취소 전용)
 - `/api/v1/posts/{postId}/participants`
 
 작성자 불일치는 403, 없는 게시물·댓글은 404다. 삭제·만료된 게시물에서도 본인의
@@ -117,11 +133,16 @@ Redis timeout은 발행 여부가 불명확할 수 있으므로 재전달에도 
 
 ```bash
 pnpm build
+pnpm post:operations reaction-conflicts
 pnpm post:operations outbox-failed
 # 실제 ID로 교체한다. 재시도 사유는 필수다.
 pnpm post:operations outbox-retry evt_<UUID> "Redis 복구 확인"
 pnpm post:operations schedule-expiration post_<UUID> 2026-10-07T03:00:00.000Z
 ```
+
+새 활성 공감 유일 인덱스를 적용하기 전에 `reaction-conflicts`로 기존 게시물·댓글에서
+사용자별 활성 공감이 둘 이상인 기록을 확인한다. 결과가 있으면 유지할 종류를 정한 뒤
+기존 DELETE API로 나머지를 취소해야 인덱스를 생성할 수 있다.
 
 만료·운영 삭제·재처리의 상세 명령, 환경 변수, 배포 순서와 보장 범위는
 [이벤트 계약의 운영 절차](./contracts/post-events.md)를 참고한다.

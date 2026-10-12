@@ -5,6 +5,10 @@ import {
   requireActive,
 } from '../domain/post.js';
 import { event } from './event.js';
+import type {
+  CommentReactionType,
+  StoredPostReactionType,
+} from '../domain/post.js';
 import type { PartitionStrategy } from './partition.js';
 import type { PostTransaction, PostUnitOfWork } from './ports.js';
 
@@ -28,15 +32,25 @@ export class PostLifecycle {
     private readonly partition: PartitionStrategy,
   ) {}
 
-  async removeReaction(postId: string, userId: number): Promise<void> {
+  async removeReaction(
+    postId: string,
+    userId: number,
+    type: StoredPostReactionType,
+  ): Promise<void> {
     await this.unitOfWork.execute(async (tx) => {
       const post = await existingPost(tx, postId);
-      const reaction = await tx.queries.findReaction(postId, userId);
+      const reaction = await tx.queries.findReaction(postId, userId, type);
       // 취소는 게시물 비활성화 후에도 허용한다. 없는 공감 관계를 새로 만들지 않는다.
       if (!reaction || reaction.removedAt) return;
       const now = new Date();
       const activityVersion = (reaction.activityVersion ?? 1) + 1;
-      await tx.commands.removeReaction(postId, userId, now, activityVersion);
+      await tx.commands.removeReaction(
+        postId,
+        userId,
+        type,
+        now,
+        activityVersion,
+      );
       await tx.commands.increment(
         postId,
         reaction.bucketId ?? 0,
@@ -61,6 +75,38 @@ export class PostLifecycle {
           },
           now,
         ),
+      );
+    });
+  }
+
+  async removeCommentReaction(
+    postId: string,
+    commentId: string,
+    userId: number,
+    type: CommentReactionType,
+  ): Promise<void> {
+    await this.unitOfWork.execute(async (tx) => {
+      await existingPost(tx, postId);
+      const comment = await tx.queries.findComment(postId, commentId);
+      if (!comment) throw new PostNotFoundError('Comment not found');
+      const reaction = await tx.queries.findCommentReaction(
+        commentId,
+        userId,
+        type,
+      );
+      if (!reaction || reaction.removedAt) return;
+      await tx.commands.removeCommentReaction(
+        commentId,
+        userId,
+        type,
+        new Date(),
+      );
+      await tx.commands.incrementCommentReaction(postId, commentId, type, -1);
+      await tx.commands.increment(
+        postId,
+        comment.bucketId ?? 0,
+        'commentReactionCount',
+        -1,
       );
     });
   }
@@ -107,6 +153,7 @@ export class PostLifecycle {
       const now = new Date();
       const activityVersion = (comment.activityVersion ?? 1) + 1;
       await tx.commands.deleteComment(postId, commentId, now, activityVersion);
+      await tx.commands.cancelVoteForComment(postId, commentId, now);
       await tx.commands.increment(
         postId,
         comment.bucketId ?? 0,
@@ -209,6 +256,7 @@ export class PostLifecycle {
       const now = new Date();
       const postVersion = post.postVersion + 1;
       await tx.commands.fenceActivities(postId, post.bucketCount);
+      await tx.commands.closeVote(postId, now);
       await tx.commands.changePostStatus(postId, 'DELETED', now, postVersion);
       // 하위 활동을 대량 삭제하거나 가짜 취소 이벤트를 만들지 않는다. 소비자는 postId로 무효화한다.
       await tx.commands.appendEvent(
@@ -252,6 +300,7 @@ export class PostLifecycle {
         return;
       const postVersion = post.postVersion + 1;
       await tx.commands.fenceActivities(postId, post.bucketCount);
+      await tx.commands.closeVote(postId, now);
       await tx.commands.changePostStatus(postId, 'EXPIRED', now, postVersion);
       await tx.commands.appendEvent(
         event(

@@ -627,7 +627,7 @@ WebSocket Client
 
 # 6. 게시판 Reaction
 
-좋아요와 같은 Reaction 역시 `posts` Document 내부에 사용자 ID Array를 저장하지 않는다.
+공감 Reaction 역시 `posts` Document 내부에 사용자 ID Array를 저장하지 않는다.
 
 다음과 같은 구조는 사용하지 않는다.
 
@@ -665,7 +665,7 @@ flowchart LR
 
     AGG[Counter Aggregator]
 
-    C -->|Like Request| G
+    C -->|Reaction Request| G
 
     G --> P
 
@@ -993,11 +993,14 @@ GET /api/v1/posts/{postId}/comments
 
   "userId": 123,
 
-  "type": "LIKE",
+  "type": "CURIOUS",
 
   "createdAt": "2026-09-19T01:15:00Z"
 }
 ```
+
+새 공감 종류는 `CURIOUS`, `STILL_HAPPENING`, `HELPFUL`, `ENDED`다. 기존 `LIKE`는
+저장된 기록의 취소와 이전 이벤트 재발행만 지원한다.
 
 ### Index
 
@@ -1012,9 +1015,20 @@ db.post_reactions.createIndex(
     unique: true
   }
 )
+
+db.post_reactions.createIndex(
+  { postId: 1, userId: 1 },
+  { unique: true, partialFilterExpression: { removedAt: null } }
+)
 ```
 
-이를 통해 다음 관계를 Database 수준에서 보장할 수 있다.
+첫 인덱스는 종류별 취소 이력을 보존한다. 두 번째 인덱스는 활성 공감만 대상으로
+한 사용자와 게시물 사이의 활성 공감이 최대 하나임을 보장한다. 댓글에도
+`(commentId, userId, type)` 이력 인덱스와 `(commentId, userId)` 활성 공감
+부분 유일 인덱스를 동일하게 적용한다. 다른 종류로 바꾸려면 먼저 취소한다.
+기존 데이터에 활성 공감이 여러 개면 새 인덱스 생성 전에 정리해야 한다.
+
+이력 관계는 다음과 같다.
 
 ```
 한 사용자
@@ -1215,8 +1229,10 @@ PUBLISHED
 | GET | `/api/v1/posts/{postId}/comments` | 댓글 조회 |
 | POST | `/api/v1/posts/{postId}/comments` | 댓글 작성 |
 | DELETE | `/api/v1/posts/{postId}/comments/{commentId}` | 댓글 삭제 |
-| POST | `/api/v1/posts/{postId}/reactions` | 좋아요 (`{"type":"LIKE"}`) |
-| DELETE | `/api/v1/posts/{postId}/reactions/like` | 좋아요 취소 |
+| POST | `/api/v1/posts/{postId}/comments/{commentId}/reactions` | 댓글 공감 (`HELPFUL`, `AGREE`, `DIFFERENT`) |
+| DELETE | `/api/v1/posts/{postId}/comments/{commentId}/reactions/{type}` | 지정한 댓글 공감 취소 |
+| POST | `/api/v1/posts/{postId}/reactions` | 공감 (`CURIOUS`, `STILL_HAPPENING`, `HELPFUL`, `ENDED`) |
+| DELETE | `/api/v1/posts/{postId}/reactions/{type}` | 지정한 종류의 공감 취소 |
 | POST | `/api/v1/posts/{postId}/participants` | 게시판 참여 |
 | POST | `/api/v1/posts/{postId}/leave` | 게시판 참여 종료 |
 

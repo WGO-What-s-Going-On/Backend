@@ -5,6 +5,7 @@ Notification·User Service 연동을 위한 확장안을 기록한다.
 
 **현재 계약**은 코드에서 실제 발행하는 9개 이벤트와 Post의 상태 변경·Outbox 복구다.
 **확장 제안**은 대댓글 등 선택 기능과 Notification·User의 후속 구현을 의미한다.
+댓글 공감 저장·조회·취소는 구현되어 있지만 댓글 공감 이벤트는 발행하지 않는다.
 Post는 소비자의 알림·경험치·칭호 처리를 구현하지 않는다.
 
 ## 1. 책임과 이벤트 흐름
@@ -164,16 +165,27 @@ ACTIVE 게시물에 댓글을 저장하고 카운터·Outbox를 함께 커밋하
 
 ### 3.3 `PostReactionCreated`
 
-ACTIVE 게시물에 LIKE가 처음 저장되면 발행한다. 같은 `(postId, userId, type)`의
+ACTIVE 게시물에 공감이 처음 저장되면 발행한다. 같은 `(postId, userId, type)`의
 공감이 이미 있으면 기존 결과를 반환하며 카운터와 이벤트를 추가하지 않는다.
-현재 공감 종류는 LIKE만 지원한다. 취소된 기록은 재등록 시 활성화하며 버전을 증가시킨다.
+한 사용자는 게시물당 활성 공감을 하나만 가질 수 있다. 다른 종류를 누르려면
+현재 공감을 먼저 취소해야 하며, 그렇지 않으면 HTTP `409`와
+`REACTION_ALREADY_EXISTS`를 반환한다. 취소된 기록은 재등록 시 활성화하며
+버전을 증가시킨다. 기존 `LIKE`는 새 요청에서 거부하지만 저장된
+기록의 취소와 이전 Outbox 이벤트 재발행은 지원한다.
+
+| `type` | 화면 문구 | 의미·활용 |
+| --- | --- | --- |
+| `CURIOUS` | 👀 저도 궁금해요 | 관심도·Hot 게시판 판단 |
+| `STILL_HAPPENING` | ✅ 지금도 그래요 | 현장 확인·LIVE 유지 신호 |
+| `HELPFUL` | 🙌 도움됐어요 | 게시글 품질 평가 |
+| `ENDED` | 🏁 이제 끝났어요 | 종료 판단을 위한 신호. 이 공감만으로 게시물이 자동 종료되지는 않음 |
 
 ```json
 {
   "reaction": {
     "postId": "post_22222222-2222-4222-8222-222222222222",
     "userId": 456,
-    "type": "LIKE",
+    "type": "CURIOUS",
     "createdAt": "2026-10-06T03:02:00.000Z"
   },
   "postAuthorId": 123,
@@ -182,7 +194,7 @@ ACTIVE 게시물에 LIKE가 처음 저장되면 발행한다. 같은 `(postId, u
 }
 ```
 
-`postId: string`, `userId: number`, `type: "LIKE"`, `createdAt: string`이다.
+`postId: string`, `userId: number`, `type: 위 네 값 중 하나`, `createdAt: string`이다.
 `reaction.postId = aggregateId`이고 `userId`는 공감을 누른 사용자다.
 게시물 작성자는 최상위 `postAuthorId`다. 별도 `reactionId` 없이
 `(postId, userId, type)`가 공감 관계의 식별자다.
@@ -263,7 +275,7 @@ Realtime은 현재 `comment` 객체를 클라이언트에 그대로 전달하므
 
 | 이벤트 | 실제 전이 | 필수 도메인 객체 및 최상위 문맥 | 소비 목적 |
 | --- | --- | --- | --- |
-| `PostReactionRemoved` | 활성 공감 → 취소 | `reaction: {postId, userId, type: "LIKE", createdAt, removedAt}`, `postAuthorId`, `postCategory`, `activityVersion` | 현재 공감 수 보정, 보상 회수 판정, 대기 알림 제외 |
+| `PostReactionRemoved` | 활성 공감 → 취소 | `reaction: {postId, userId, type, createdAt, removedAt}`, `postAuthorId`, `postCategory`, `activityVersion` | 해당 종류의 공감 수 보정, 보상 회수 판정, 대기 알림 제외 |
 | `PostCommentDeleted` | ACTIVE 댓글 → DELETED | `comment: {commentId, postId, authorId, deletedAt}`, `postAuthorId`, `postCategory`, `actor`, `reason`, `activityVersion`, `moderationDecisionId?` | 유효 댓글 수·보상 보정, 알림 노출 갱신 |
 | `PostDeleted` | ACTIVE 또는 EXPIRED 게시물 → DELETED | `post: {postId, authorId, category, deletedAt}`, `actor`, `reason`, `postVersion`, `moderationDecisionId?` | 관련 활동 무효화 판단, 예약 알림 정리, 공간·검색 인덱스 제거 |
 | `PostParticipantLeft` | 참여 중 → 이탈 | `participant: {postId, userId, joinedAt, leftAt}`, `postAuthorId`, `postCategory`, `activityVersion` | 현재 참여 상태·참여 기반 알림 대상 갱신 |
@@ -301,7 +313,8 @@ Moderation Service의 네트워크 소비·인증 연동은 별도 범위다. �
 | --- | --- |
 | `/api/v1/posts/{postId}` | 게시물 작성자만 삭제 |
 | `/api/v1/posts/{postId}/comments/{commentId}` | 해당 게시물에 속한 댓글의 작성자만 삭제 |
-| `/api/v1/posts/{postId}/reactions` | 인증된 사용자 자신의 LIKE 취소 |
+| `/api/v1/posts/{postId}/reactions/{type}` | 인증된 사용자 자신의 해당 종류 공감 취소. `type`은 위 네 값 |
+| `/api/v1/posts/{postId}/reactions` | 기존 `LIKE` 기록 취소 전용. 신규 `LIKE` 생성은 불가 |
 | `/api/v1/posts/{postId}/participants` | 인증된 사용자 자신의 참여 종료 |
 
 삭제된 댓글의 기존 `mutationId`로 작성 재시도하면 해당 DELETED 댓글을 반환하며
@@ -337,7 +350,7 @@ Map에는 기한 예약 이벤트를 보내지 않으며, 실제 `PostExpired`�
 | 기능 | 이벤트·계약 제안 | 도입 조건 |
 | --- | --- | --- |
 | 대댓글 | `PostCommentCreated`에 부모 댓글 문맥 추가 | 답글 저장·조회·알림 기능 도입 시. 별도 생성 이벤트로 중복 발행하지 않음 |
-| 댓글 공감 | `PostCommentReactionCreated`, `PostCommentReactionRemoved` | `commentId`, 댓글 작성자, 공감 사용자·종류·상태 버전 필요 |
+| 댓글 공감 이벤트 | `PostCommentReactionCreated`, `PostCommentReactionRemoved` | 현재 이벤트 미발행. 도입 시 `commentId`, 댓글 작성자, 공감 사용자·종류·상태 버전 계약 필요 |
 | 수정 | `PostUpdated`, `PostCommentUpdated` | 변경 대상 ID, 작성자, 변경 시각·버전 및 소비자에게 필요한 변경 값. 단순 수정에 반복 경험치 지급은 비추천 |
 | 숨김·복구 | `PostHidden`, `PostRestored`, 필요 시 댓글 대응 이벤트 | 상태 모델 및 Moderation 연동 확정 후. 현재 Post 상태에는 HIDDEN이 없음 |
 | 멘션 | 댓글의 멘션 대상 필드 또는 별도 멘션 이벤트 | 수정으로 추가·제거되는 멘션까지 알릴지 결정 후 계약 확정 |
@@ -458,6 +471,7 @@ User의 현재 envelope는 `type/version/target/payload`를 사용하므로 Post
 않는다. 커밋한 이벤트는 실행 중인 서비스의 Outbox Worker가 발행한다.
 
 ```bash
+pnpm post:operations reaction-conflicts
 pnpm post:operations outbox-failed
 pnpm post:operations outbox-retry evt_<UUID> "Redis 복구 확인"
 pnpm post:operations schedule-expiration post_<UUID> 2026-10-07T03:00:00.000Z
@@ -465,6 +479,11 @@ pnpm post:operations expire post_<UUID>
 pnpm post:operations moderate-post post_<UUID> decision-123
 pnpm post:operations moderate-comment post_<UUID> comment_<UUID> decision-456
 ```
+
+`reaction-conflicts`는 게시물·댓글별로 사용자에게 활성 공감이 둘 이상 남은 기록을
+읽기 전용으로 나열한다. 새 활성 공감 유일 인덱스를 적용하기 전에 이 결과를 확인하고,
+유지할 종류를 결정해 나머지를 기존 DELETE API로 취소한다. 충돌이 남아 있으면
+MongoDB가 새 인덱스를 생성할 수 없다.
 
 `<UUID>`는 실제 식별자로 바꾼다. `outbox-failed`는 최대 100건의 식별자·실패 정보를
 반환하며 본문 payload는 출력하지 않는다. `expire`는 기한이 되지 않으면 아무것도
