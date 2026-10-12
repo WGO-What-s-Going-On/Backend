@@ -1,4 +1,5 @@
 import { SimilarityUnavailableError } from '../semantic/policy.js';
+import { VoteUnavailableError } from '../application/vote.js';
 import {
   ArgumentsHost,
   BadRequestException,
@@ -29,6 +30,7 @@ import {
   ParticipationUnavailableError,
   LocationDeniedError,
   ReactionConflictError,
+  VoteUnavailableError,
 )
 export class PostErrorFilter implements ExceptionFilter {
   catch(error: Error, host: ArgumentsHost): void {
@@ -52,7 +54,8 @@ export class PostErrorFilter implements ExceptionFilter {
     const httpError =
       error instanceof PostNotFoundError
         ? new NotFoundException(error.message)
-        : error instanceof PostInactiveError ||
+        : error instanceof VoteUnavailableError ||
+            error instanceof PostInactiveError ||
             error instanceof PostOwnershipError
           ? new ForbiddenException(error.message)
           : error instanceof InvalidPostError

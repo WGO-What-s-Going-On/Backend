@@ -22,6 +22,9 @@ export const PostSchema = new Schema(
     createdAt: { type: Date, required: true },
     updatedAt: { type: Date, required: true },
     expiresAt: { type: Date, default: null },
+    voteAt: { type: Date, default: null },
+    vote: { type: Schema.Types.Mixed, default: null },
+    voteRevision: { type: Number, default: 0 },
     bucketCount: { type: Number, required: true, default: 1 },
     postVersion: { type: Number, default: 1 },
     deletedAt: { type: Date, default: null },
@@ -30,6 +33,18 @@ export const PostSchema = new Schema(
   options,
 );
 PostSchema.index({ status: 1, expiresAt: 1 });
+PostSchema.index({ 'vote.status': 1, voteAt: 1 });
+
+export const VoteSelectionSchema = new Schema(
+  {
+    postId: { type: String, required: true },
+    userId: { type: Number, required: true },
+    commentId: { type: String, default: null },
+    updatedAt: { type: Date, required: true },
+  },
+  options,
+);
+VoteSelectionSchema.index({ postId: 1, userId: 1 }, { unique: true });
 
 export const CommentSchema = new Schema(
   {
@@ -39,6 +54,7 @@ export const CommentSchema = new Schema(
     authorId: { type: Number, required: true },
     mutationId: { type: String },
     activityVersion: { type: Number, default: 1 },
+    voteSelectionFence: { type: Number, default: 0 },
     deletedAt: { type: Date, default: null },
     content: { type: String, required: true },
     status: { type: String, required: true },

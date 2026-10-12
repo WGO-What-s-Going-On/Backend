@@ -1,5 +1,7 @@
 import { PostLifecycle } from './application/lifecycle.js';
 import { ExpirationWorker } from './infrastructure/expiration.worker.js';
+import { VoteWorker } from './infrastructure/vote.worker.js';
+import { MongooseVote } from './infrastructure/mongoose-vote.js';
 import { SemanticModule } from './semantic/semantic.module.js';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
@@ -40,6 +42,7 @@ import {
   ParticipantSchema,
   PostSchema,
   ReactionSchema,
+  VoteSelectionSchema,
 } from './infrastructure/post.schemas.js';
 import { OutboxWorker } from './infrastructure/outbox.worker.js';
 
@@ -48,6 +51,11 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
     SemanticModule,
     MongooseModule.forFeature([
       { name: 'Post', schema: PostSchema, collection: 'posts' },
+      {
+        name: 'VoteSelection',
+        schema: VoteSelectionSchema,
+        collection: 'post_vote_selections',
+      },
       { name: 'Comment', schema: CommentSchema, collection: 'post_comments' },
       {
         name: 'CommentReaction',
@@ -72,6 +80,7 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
   providers: [
     MongoosePostStore,
     MongoosePostRead,
+    MongooseVote,
     { provide: PARTITION_STRATEGY, useClass: HashPartitionStrategy },
     { provide: POST_READ_QUERIES, useExisting: MongoosePostRead },
     {
@@ -139,6 +148,7 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
       inject: [POST_UNIT_OF_WORK, PARTITION_STRATEGY],
     },
     ExpirationWorker,
+    VoteWorker,
     OutboxWorker,
   ],
 })

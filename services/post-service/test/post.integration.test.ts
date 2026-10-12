@@ -23,6 +23,8 @@ import { AppModule } from '../src/app.module.js';
 import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
 import { JoinPost } from '../src/post/application/commands.js';
 import { HashPartitionStrategy } from '../src/post/application/partition.js';
+import { PostLifecycle } from '../src/post/application/lifecycle.js';
+import { VoteWorker } from '../src/post/infrastructure/vote.worker.js';
 
 const suite = process.env.RUN_INTEGRATION === '1' ? describe : describe.skip;
 const serviceSecret = 'integration-ws-service-secret-at-least-32';
@@ -118,8 +120,10 @@ suite('post creation integration', () => {
         return;
       }
       callback(null, {
-        allowed: call.request.userId === '123',
-        reason: call.request.userId === '123' ? '' : 'LOCATION_MISSING',
+        allowed: ['123', '789'].includes(call.request.userId),
+        reason: ['123', '789'].includes(call.request.userId)
+          ? ''
+          : 'LOCATION_MISSING',
       });
     };
     map.addService(proto.wgo.map.v1.MapAuthorization.service, {
@@ -155,6 +159,7 @@ suite('post creation integration', () => {
       counters.syncIndexes(),
       participants.syncIndexes(),
       outbox.syncIndexes(),
+      app.get<Model<any>>(getModelToken('VoteSelection')).syncIndexes(),
     ]);
     await redis.connect();
     await redis.del('post:events');
@@ -877,5 +882,273 @@ suite('post creation integration', () => {
     } finally {
       process.env.NODE_ENV = 'test';
     }
+  });
+
+  it('freezes candidates, moves and cancels a vote, and keeps the winner after expiry', async () => {
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/posts')
+      .set(header)
+      .send({
+        title: 'Vote',
+        content: 'Details',
+        category: 'INCIDENT',
+        latitude: 37.5,
+        longitude: 127,
+        radiusM: 250,
+      })
+      .expect(201);
+    const postId = created.body.postId as string;
+    const first = await request(app.getHttpServer())
+      .post(`/api/v1/posts/${postId}/comments`)
+      .set(header)
+      .send({ content: 'First' })
+      .expect(201);
+    const second = await request(app.getHttpServer())
+      .post(`/api/v1/posts/${postId}/comments`)
+      .set(header)
+      .send({ content: 'Second' })
+      .expect(201);
+    await comments.updateOne(
+      { commentId: first.body.commentId },
+      { $set: { createdAt: new Date(Date.now() - 10000) } },
+    );
+    await request(app.getHttpServer())
+      .get(`/api/v1/posts/${postId}/vote`)
+      .expect(200)
+      .then((response) => expect(response.body.status).toBe('PENDING'));
+    await posts.updateOne(
+      { postId },
+      { $set: { voteAt: new Date(Date.now() - 1000) } },
+    );
+    await app.get(VoteWorker).runOnce();
+    const open = await request(app.getHttpServer())
+      .get(`/api/v1/posts/${postId}/vote`)
+      .expect(200);
+    expect(open.body.status).toBe('OPEN');
+    expect(
+      open.body.candidates.map((candidate: any) => candidate.commentId),
+    ).toEqual([first.body.commentId, second.body.commentId]);
+    await request(app.getHttpServer())
+      .put(`/api/v1/posts/${postId}/vote`)
+      .set('X-User-Id', '456')
+      .send({ commentId: first.body.commentId })
+      .expect(403);
+    mapUnavailable = true;
+    try {
+      await request(app.getHttpServer())
+        .put(`/api/v1/posts/${postId}/vote`)
+        .set(header)
+        .send({ commentId: first.body.commentId })
+        .expect(503);
+    } finally {
+      mapUnavailable = false;
+    }
+    const chosen = await request(app.getHttpServer())
+      .put(`/api/v1/posts/${postId}/vote`)
+      .set(header)
+      .send({ commentId: first.body.commentId })
+      .expect(200);
+    expect(chosen.body.mySelection).toBe(first.body.commentId);
+    await request(app.getHttpServer())
+      .put(`/api/v1/posts/${postId}/vote`)
+      .set(header)
+      .send({ commentId: first.body.commentId })
+      .expect(200);
+    const moved = await request(app.getHttpServer())
+      .put(`/api/v1/posts/${postId}/vote`)
+      .set(header)
+      .send({ commentId: second.body.commentId })
+      .expect(200);
+    expect(
+      moved.body.candidates.map((candidate: any) => candidate.votes),
+    ).toEqual([0, 1]);
+    await request(app.getHttpServer())
+      .delete(`/api/v1/posts/${postId}/vote`)
+      .set(header)
+      .expect(200);
+    await request(app.getHttpServer())
+      .put(`/api/v1/posts/${postId}/vote`)
+      .set(header)
+      .send({ commentId: first.body.commentId })
+      .expect(200);
+    await app
+      .get(PostLifecycle)
+      .scheduleExpiration(postId, new Date(Date.now() - 1000));
+    await app.get(PostLifecycle).expire(postId);
+    const closed = await request(app.getHttpServer())
+      .get(`/api/v1/posts/${postId}/vote`)
+      .set(header)
+      .expect(200);
+    expect(closed.body.status).toBe('CLOSED');
+    expect(closed.body.winner.commentId).toBe(first.body.commentId);
+    await request(app.getHttpServer())
+      .put(`/api/v1/posts/${postId}/vote`)
+      .set(header)
+      .send({ commentId: second.body.commentId })
+      .expect(403);
+  });
+
+  it('does not open early or with too few comments and cancels when a candidate is deleted', async () => {
+    const make = async () =>
+      (
+        await request(app.getHttpServer())
+          .post('/api/v1/posts')
+          .set(header)
+          .send({
+            title: 'Vote edge',
+            content: 'Details',
+            category: 'INCIDENT',
+            latitude: 37.5,
+            longitude: 127,
+            radiusM: 250,
+          })
+          .expect(201)
+      ).body.postId as string;
+    const sparse = await make();
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${sparse}/comments`)
+      .set(header)
+      .send({ content: 'Only one' })
+      .expect(201);
+    await app.get(VoteWorker).runOnce();
+    expect(
+      (
+        await request(app.getHttpServer())
+          .get(`/api/v1/posts/${sparse}/vote`)
+          .expect(200)
+      ).body.status,
+    ).toBe('PENDING');
+    await posts.updateOne(
+      { postId: sparse },
+      { $set: { voteAt: new Date(Date.now() - 1000) } },
+    );
+    await app.get(VoteWorker).runOnce();
+    expect(
+      (
+        await request(app.getHttpServer())
+          .get(`/api/v1/posts/${sparse}/vote`)
+          .expect(200)
+      ).body.status,
+    ).toBe('NONE');
+    const early = await make();
+    await app
+      .get(PostLifecycle)
+      .scheduleExpiration(early, new Date(Date.now() - 1000));
+    await app.get(PostLifecycle).expire(early);
+    expect(
+      (
+        await request(app.getHttpServer())
+          .get(`/api/v1/posts/${early}/vote`)
+          .expect(200)
+      ).body.status,
+    ).toBe('NONE');
+    const cancelled = await make();
+    const one = await request(app.getHttpServer())
+      .post(`/api/v1/posts/${cancelled}/comments`)
+      .set(header)
+      .send({ content: 'One' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${cancelled}/comments`)
+      .set(header)
+      .send({ content: 'Two' })
+      .expect(201);
+    await posts.updateOne(
+      { postId: cancelled },
+      { $set: { voteAt: new Date(Date.now() - 1000) } },
+    );
+    await app.get(VoteWorker).runOnce();
+    await request(app.getHttpServer())
+      .delete(`/api/v1/posts/${cancelled}/comments/${one.body.commentId}`)
+      .set(header)
+      .expect(204);
+    expect(
+      (
+        await request(app.getHttpServer())
+          .get(`/api/v1/posts/${cancelled}/vote`)
+          .expect(200)
+      ).body.status,
+    ).toBe('CANCELLED');
+    const empty = await make();
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${empty}/comments`)
+      .set(header)
+      .send({ content: 'A' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${empty}/comments`)
+      .set(header)
+      .send({ content: 'B' })
+      .expect(201);
+    await posts.updateOne(
+      { postId: empty },
+      { $set: { voteAt: new Date(Date.now() - 1000) } },
+    );
+    await app.get(VoteWorker).runOnce();
+    await request(app.getHttpServer())
+      .delete(`/api/v1/posts/${empty}`)
+      .set(header)
+      .expect(204);
+    expect(
+      (
+        await request(app.getHttpServer())
+          .get(`/api/v1/posts/${empty}/vote`)
+          .expect(200)
+      ).body.winner,
+    ).toBeNull();
+  });
+
+  it('returns no winner for a tie and keeps results after post deletion', async () => {
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/posts')
+      .set(header)
+      .send({
+        title: 'Tie',
+        content: 'Details',
+        category: 'INCIDENT',
+        latitude: 37.5,
+        longitude: 127,
+        radiusM: 250,
+      })
+      .expect(201);
+    const postId = created.body.postId as string;
+    const first = await request(app.getHttpServer())
+      .post(`/api/v1/posts/${postId}/comments`)
+      .set(header)
+      .send({ content: 'First' })
+      .expect(201);
+    const second = await request(app.getHttpServer())
+      .post(`/api/v1/posts/${postId}/comments`)
+      .set(header)
+      .send({ content: 'Second' })
+      .expect(201);
+    await posts.updateOne(
+      { postId },
+      { $set: { voteAt: new Date(Date.now() - 1000) } },
+    );
+    await app.get(VoteWorker).runOnce();
+    const simultaneous = await Promise.all([
+      request(app.getHttpServer())
+        .put(`/api/v1/posts/${postId}/vote`)
+        .set(header)
+        .send({ commentId: first.body.commentId }),
+      request(app.getHttpServer())
+        .put(`/api/v1/posts/${postId}/vote`)
+        .set('X-User-Id', '789')
+        .send({ commentId: second.body.commentId }),
+    ]);
+    expect(simultaneous.map((response) => response.status)).toEqual([200, 200]);
+    await request(app.getHttpServer())
+      .delete(`/api/v1/posts/${postId}`)
+      .set(header)
+      .expect(204);
+    const result = await request(app.getHttpServer())
+      .get(`/api/v1/posts/${postId}/vote`)
+      .expect(200);
+    expect(result.body.status).toBe('CLOSED');
+    expect(result.body.winner).toBeNull();
+    await request(app.getHttpServer())
+      .get(`/api/v1/posts/${postId}`)
+      .expect(404);
   });
 });

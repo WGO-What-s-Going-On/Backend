@@ -1,4 +1,5 @@
 import { PostLifecycle } from '../src/post/application/lifecycle.js';
+import { MongooseVote } from '../src/post/infrastructure/mongoose-vote.js';
 import { FindSimilarPosts } from '../src/post/semantic/search.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -28,6 +29,7 @@ describe('OpenAPI document', () => {
       controllers: [HealthController, PostController, InternalPostController],
       providers: [
         PostLifecycle,
+        MongooseVote,
         CreatePost,
         CreateComment,
         CreateCommentReaction,
@@ -67,6 +69,7 @@ describe('OpenAPI document', () => {
         '/api/v1/posts/{postId}/participants',
         '/api/v1/posts/{postId}/reactions',
         '/api/v1/posts/{postId}/reactions/{type}',
+        '/api/v1/posts/{postId}/vote',
         '/health/live',
         '/internal/v1/posts/batch-get',
         '/internal/v1/posts/{postId}',

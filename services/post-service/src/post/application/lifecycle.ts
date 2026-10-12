@@ -153,6 +153,7 @@ export class PostLifecycle {
       const now = new Date();
       const activityVersion = (comment.activityVersion ?? 1) + 1;
       await tx.commands.deleteComment(postId, commentId, now, activityVersion);
+      await tx.commands.cancelVoteForComment(postId, commentId, now);
       await tx.commands.increment(
         postId,
         comment.bucketId ?? 0,
@@ -255,6 +256,7 @@ export class PostLifecycle {
       const now = new Date();
       const postVersion = post.postVersion + 1;
       await tx.commands.fenceActivities(postId, post.bucketCount);
+      await tx.commands.closeVote(postId, now);
       await tx.commands.changePostStatus(postId, 'DELETED', now, postVersion);
       // 하위 활동을 대량 삭제하거나 가짜 취소 이벤트를 만들지 않는다. 소비자는 postId로 무효화한다.
       await tx.commands.appendEvent(
@@ -298,6 +300,7 @@ export class PostLifecycle {
         return;
       const postVersion = post.postVersion + 1;
       await tx.commands.fenceActivities(postId, post.bucketCount);
+      await tx.commands.closeVote(postId, now);
       await tx.commands.changePostStatus(postId, 'EXPIRED', now, postVersion);
       await tx.commands.appendEvent(
         event(

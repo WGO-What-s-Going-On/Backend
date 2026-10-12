@@ -158,6 +158,12 @@ export interface PostCommands {
     now: Date,
     activityVersion: number,
   ): Promise<void>;
+  cancelVoteForComment(
+    postId: string,
+    commentId: string,
+    now: Date,
+  ): Promise<void>;
+  closeVote(postId: string, now: Date): Promise<void>;
   leaveParticipant(
     postId: string,
     userId: number,

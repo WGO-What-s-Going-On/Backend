@@ -175,9 +175,25 @@ class MongoCommands implements PostCommands {
   ) {}
 
   async insertPost(post: PostRecord): Promise<void> {
-    await this.posts.create([{ ...post, bucketCount: this.bucketCount }], {
-      session: this.session,
-    });
+    await this.posts.create(
+      [
+        {
+          ...post,
+          bucketCount: this.bucketCount,
+          voteAt: new Date(post.createdAt.getTime() + 30 * 60_000),
+          vote: {
+            status: 'PENDING',
+            candidates: [],
+            selectedAt: null,
+            closedAt: null,
+            winner: null,
+          },
+        },
+      ],
+      {
+        session: this.session,
+      },
+    );
     const rows = Array.from({ length: this.bucketCount }, (_, bucketId) =>
       (
         [
@@ -335,6 +351,89 @@ class MongoCommands implements PostCommands {
           deletedAt: now,
           updatedAt: now,
           activityVersion,
+        },
+      },
+      { session: this.session },
+    );
+  }
+
+  async cancelVoteForComment(
+    postId: string,
+    commentId: string,
+    now: Date,
+  ): Promise<void> {
+    const post = await this.posts
+      .findOne({ postId })
+      .session(this.session)
+      .lean();
+    if (
+      post?.vote?.status !== 'OPEN' ||
+      !post.vote.candidates.some(
+        (candidate: { commentId: string }) => candidate.commentId === commentId,
+      )
+    )
+      return;
+    // 후보 삭제와 투표는 같은 게시물 문서를 써서 어느 쪽이 먼저 커밋됐는지 확정한다.
+    await this.posts.updateOne(
+      { postId },
+      {
+        $set: {
+          vote: {
+            ...post.vote,
+            status: 'CANCELLED',
+            closedAt: now,
+            winner: null,
+          },
+        },
+      },
+      { session: this.session },
+    );
+  }
+
+  async closeVote(postId: string, now: Date): Promise<void> {
+    const post = await this.posts
+      .findOne({ postId })
+      .session(this.session)
+      .lean();
+    const vote = post?.vote;
+    if (
+      !vote ||
+      vote.status === 'CLOSED' ||
+      vote.status === 'CANCELLED' ||
+      vote.status === 'NONE'
+    )
+      return;
+    if (vote.status === 'PENDING') {
+      await this.posts.updateOne(
+        { postId },
+        {
+          $set: {
+            vote: { ...vote, status: 'NONE', closedAt: now, winner: null },
+          },
+        },
+        { session: this.session },
+      );
+      return;
+    }
+    const [first, second] = vote.candidates ?? [];
+    const winner =
+      vote.status === 'OPEN' && first && second && first.votes !== second.votes
+        ? (first.votes > second.votes ? first : second).votes > 0
+          ? first.votes > second.votes
+            ? first
+            : second
+          : null
+        : null;
+    await this.posts.updateOne(
+      { postId },
+      {
+        $set: {
+          vote: {
+            ...vote,
+            status: 'CLOSED',
+            closedAt: now,
+            winner: winner ? { ...winner } : null,
+          },
         },
       },
       { session: this.session },

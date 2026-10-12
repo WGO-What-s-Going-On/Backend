@@ -1,4 +1,6 @@
 import { PostLifecycle } from './application/lifecycle.js';
+import { MongooseVote } from './infrastructure/mongoose-vote.js';
+import { VoteBody, VoteResponse } from './presentation/vote.openapi.js';
 import { CommentReactionType, PostReactionType } from './domain/post.js';
 import { FindSimilarPosts } from './semantic/search.js';
 import {
@@ -15,6 +17,7 @@ import {
   HttpCode,
   Param,
   Post,
+  Put,
   Query,
   UseFilters,
 } from '@nestjs/common';
@@ -101,7 +104,83 @@ export class PostController {
     private readonly readPosts: ReadPosts,
     private readonly findSimilar: FindSimilarPosts,
     private readonly lifecycle: PostLifecycle,
+    private readonly votes: MongooseVote,
   ) {}
+
+  @Get(':postId/vote')
+  @ApiOperation({
+    summary: '투표 및 합의 결과 조회',
+    description:
+      '종료·삭제 후에도 후보와 확정 결과를 반환합니다. 기존 게시물과 후보 부족은 NONE입니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiHeader({
+    name: 'X-User-Id',
+    required: false,
+    description: '로컬·테스트에서만 본인 선택 조회',
+  })
+  @ApiOkResponse({ type: VoteResponse })
+  @ApiNotFoundResponse({ description: '게시물이 없음' })
+  vote(
+    @Param('postId') id: string,
+    @Headers('x-user-id') header: string | undefined,
+  ) {
+    return this.votes.read(
+      postId(id),
+      header && process.env.NODE_ENV !== 'production'
+        ? userId(header)
+        : undefined,
+    );
+  }
+
+  @Put(':postId/vote')
+  @ApiOperation({
+    summary: '후보 선택 또는 표 이동',
+    description:
+      'Map Service 위치 검증 후 사용자당 한 표를 기록합니다. 같은 선택은 멱등 처리합니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiHeader({ name: 'X-User-Id', description: '로컬·테스트 전용 사용자 ID' })
+  @ApiBody({ type: VoteBody })
+  @ApiOkResponse({ type: VoteResponse })
+  @ApiForbiddenResponse({ description: '투표 종료 또는 위치 거부' })
+  @ApiServiceUnavailableResponse({
+    description: '운영 인증 미연결 또는 Map Service 장애',
+  })
+  chooseVote(
+    @Param('postId') id: string,
+    @Headers('x-user-id') header: string | undefined,
+    @Body() body: unknown,
+  ) {
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      Object.keys(body).length !== 1 ||
+      !('commentId' in body)
+    )
+      throw new BadRequestException('commentId required');
+    return this.votes.choose(
+      postId(id),
+      userId(header),
+      commentId((body as VoteBody).commentId),
+    );
+  }
+
+  @Delete(':postId/vote')
+  @ApiOperation({
+    summary: '본인 표 취소',
+    description: '새 위치 확인 없이 본인 표를 취소합니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiHeader({ name: 'X-User-Id', description: '로컬·테스트 전용 사용자 ID' })
+  @ApiOkResponse({ type: VoteResponse })
+  cancelVote(
+    @Param('postId') id: string,
+    @Headers('x-user-id') header: string | undefined,
+  ) {
+    return this.votes.cancel(postId(id), userId(header));
+  }
 
   @Delete(':postId')
   @HttpCode(204)
