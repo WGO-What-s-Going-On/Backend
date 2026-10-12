@@ -26,6 +26,16 @@ import type {
   PostUnitOfWork,
 } from './ports.js';
 
+function participantView(participant: ParticipantRecord): ParticipantRecord {
+  return {
+    postId: participant.postId,
+    userId: participant.userId,
+    joinedAt: participant.joinedAt,
+    lastSeenAt: participant.lastSeenAt,
+    leftAt: participant.leftAt,
+  };
+}
+
 async function active(transaction: PostTransaction, postId: string) {
   const post = await transaction.queries.findPost(postId);
   requireActive(post);
@@ -64,6 +74,7 @@ export class CreatePost {
               category: input.category,
               expiresAt: null,
             },
+            postVersion: 1,
           },
           now,
         ),
@@ -116,7 +127,17 @@ export class CreateComment {
         );
         await transaction.commands.increment(postId, bucketId, 'commentCount');
         await transaction.commands.appendEvent(
-          event(postId, 'PostCommentCreated', { comment }, now),
+          event(
+            postId,
+            'PostCommentCreated',
+            {
+              comment,
+              postAuthorId: post.authorId,
+              postCategory: post.category,
+              activityVersion: 1,
+            },
+            now,
+          ),
         );
         return comment;
       });
@@ -149,15 +170,44 @@ export class CreateReaction {
       return await this.unitOfWork.execute(async (transaction) => {
         const post = await active(transaction, postId);
         const existing = await transaction.queries.findReaction(postId, userId);
-        if (existing) return existing;
+        if (existing && !existing.removedAt)
+          return {
+            postId: existing.postId,
+            userId: existing.userId,
+            type: existing.type,
+            createdAt: existing.createdAt,
+          };
         const bucketId = this.partitionStrategy.resolveBucket(
           `${userId}:${reaction.type}`,
           post.bucketCount,
         );
-        await transaction.commands.insertReaction({ ...reaction, bucketId });
-        await transaction.commands.increment(postId, bucketId, 'reactionCount');
+        const activityVersion = existing
+          ? (existing.activityVersion ?? 1) + 1
+          : 1;
+        if (existing)
+          await transaction.commands.reactivateReaction(
+            reaction,
+            activityVersion,
+          );
+        else
+          await transaction.commands.insertReaction({ ...reaction, bucketId });
+        await transaction.commands.increment(
+          postId,
+          existing?.bucketId ?? bucketId,
+          'reactionCount',
+        );
         await transaction.commands.appendEvent(
-          event(postId, 'PostReactionCreated', { reaction }, now),
+          event(
+            postId,
+            'PostReactionCreated',
+            {
+              reaction,
+              postAuthorId: post.authorId,
+              postCategory: post.category,
+              activityVersion,
+            },
+            now,
+          ),
         );
         return reaction;
       });
@@ -165,7 +215,13 @@ export class CreateReaction {
       // 동시에 들어온 LIKE 요청도 기존 반응을 반환해 카운터와 이벤트가 늘지 않게 한다.
       if (error instanceof UniqueConflictError) {
         const existing = await this.queries.findReaction(postId, userId);
-        if (existing) return existing;
+        if (existing && !existing.removedAt)
+          return {
+            postId: existing.postId,
+            userId: existing.userId,
+            type: existing.type,
+            createdAt: existing.createdAt,
+          };
       }
       throw error;
     }
@@ -200,17 +256,23 @@ export class JoinPost {
           postId,
           userId,
         );
-        const decision = joinParticipant(existing, postId, userId, now);
+        // 저장용 버전은 HTTP 및 기존 participant 객체에 노출하지 않는다.
+        const clean = existing ? participantView(existing) : null;
+        const decision = joinParticipant(clean, postId, userId, now);
+        const activityVersion = existing
+          ? (existing.activityVersion ?? 1) + 1
+          : 1;
         if (!decision.joined) return decision.participant;
         // 떠났다가 돌아온 사용자는 기존 참여 기록을 되살리고 새 참여 이벤트를 남긴다.
         if (existing) {
           const rejoined = await transaction.commands.rejoinParticipant(
             decision.participant,
+            activityVersion,
           );
           if (!rejoined)
-            return (
+            return participantView(
               (await transaction.queries.findParticipant(postId, userId)) ??
-              decision.participant
+                decision.participant,
             );
         } else {
           await transaction.commands.insertParticipant(decision.participant);
@@ -228,7 +290,12 @@ export class JoinPost {
           event(
             postId,
             'PostParticipantJoined',
-            { participant: decision.participant },
+            {
+              participant: decision.participant,
+              postAuthorId: activePost.authorId,
+              postCategory: activePost.category,
+              activityVersion,
+            },
             now,
           ),
         );
@@ -237,7 +304,7 @@ export class JoinPost {
     } catch (error) {
       if (error instanceof UniqueConflictError) {
         const existing = await this.queries.findParticipant(postId, userId);
-        if (existing?.leftAt === null) return existing;
+        if (existing?.leftAt === null) return participantView(existing);
       }
       throw error;
     }

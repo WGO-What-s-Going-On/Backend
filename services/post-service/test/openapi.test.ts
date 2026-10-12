@@ -1,3 +1,4 @@
+import { PostLifecycle } from '../src/post/application/lifecycle.js';
 import { FindSimilarPosts } from '../src/post/semantic/search.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -25,6 +26,7 @@ describe('OpenAPI document', () => {
     const module = await Test.createTestingModule({
       controllers: [HealthController, PostController, InternalPostController],
       providers: [
+        PostLifecycle,
         CreatePost,
         CreateComment,
         CreateReaction,
@@ -57,6 +59,7 @@ describe('OpenAPI document', () => {
         '/api/v1/posts/similar',
         '/api/v1/posts/{postId}',
         '/api/v1/posts/{postId}/comments',
+        '/api/v1/posts/{postId}/comments/{commentId}',
         '/api/v1/posts/{postId}/participants',
         '/api/v1/posts/{postId}/reactions',
         '/health/live',

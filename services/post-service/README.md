@@ -10,9 +10,14 @@
 유일하고 반복 요청은 기존 댓글을 반환한다. Outbox Worker는 트랜잭션 커밋 직후
 깨우고 1초 주기 폴링을 복구용으로 유지한다.
 
-NestJS와 MongoDB 기반의 Post Service다. 생성 API는 MongoDB 트랜잭션에
+NestJS와 MongoDB 기반의 Post Service다. 생성·상태 변경 API는 MongoDB 트랜잭션에
 도메인 데이터와 Outbox 이벤트를 함께 기록한다. Outbox Worker는 Redis Streams의
 `post:events`에 이벤트를 발행한다.
+
+현재 이벤트의 전송 형식·필드와 Notification/User 연동 확장안은
+[Post 비동기 이벤트 계약](./contracts/post-events.md)에 정리한다.
+9개 발행 이벤트, 삭제·취소·이탈 API, 만료 Worker, FAILED Outbox 조회·재시도 CLI를
+문서화한다. 소비 서비스의 후속 구현과 보상 정책은 별도로 구분한다.
 
 완료 범위와 다음 작업은 [작업 현황](./POST_SERVICE_STATUS.md)에 기록한다.
 
@@ -90,6 +95,37 @@ curl -X POST http://localhost:3002/api/v1/posts \
 `/reactions` (`{"type":"LIKE"}`), `/participants` (`{}`)에 POST할 수 있다.
 새 게시물의 `expiresAt`은 `null`이며 Moderation 연동 후 설정된다. Redis Stream은
 `docker compose exec redis redis-cli XRANGE post:events - +`로 확인한다.
+
+## 상태 변경과 이벤트 복구
+
+본인 게시물·댓글 삭제, 본인의 LIKE 취소와 참여 이탈은 다음 DELETE 경로를 사용한다.
+모두 성공·반복 처리에 204를 반환하며 본문은 없다. 기존과 동일하게 로컬·테스트에서
+`X-User-Id`를 사용하고 운영 인증 연동 전에는 503이다.
+
+- `/api/v1/posts/{postId}`
+- `/api/v1/posts/{postId}/comments/{commentId}`
+- `/api/v1/posts/{postId}/reactions`
+- `/api/v1/posts/{postId}/participants`
+
+작성자 불일치는 403, 없는 게시물·댓글은 404다. 삭제·만료된 게시물에서도 본인의
+댓글·공감·참여를 정리할 수 있다. 공감 취소·이탈 기록은 재등록 시 버전 유지를 위해
+보존한다. 새 게시물 기한은 여전히 null이며, 예약된 기한은 만료 Worker가 처리한다.
+
+Outbox는 기본 최대 10회 시도하고 실패 기록을 MongoDB의 FAILED 상태로 격리한다.
+Redis timeout은 발행 여부가 불명확할 수 있으므로 재전달에도 eventId는 유지된다.
+운영 CLI는 build 후 환경 변수를 직접 주입하여 사용한다.
+
+```bash
+pnpm build
+pnpm post:operations outbox-failed
+# 실제 ID로 교체한다. 재시도 사유는 필수다.
+pnpm post:operations outbox-retry evt_<UUID> "Redis 복구 확인"
+pnpm post:operations schedule-expiration post_<UUID> 2026-10-07T03:00:00.000Z
+```
+
+만료·운영 삭제·재처리의 상세 명령, 환경 변수, 배포 순서와 보장 범위는
+[이벤트 계약의 운영 절차](./contracts/post-events.md)를 참고한다.
+Notification/User 소비자와 Moderation의 네트워크 연동은 별도 구현 범위다.
 
 ## 조회 API
 

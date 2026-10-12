@@ -6,7 +6,11 @@ export class ReadPosts {
 
   async detail(postId: string) {
     const post = await this.queries.findDetail(postId);
-    if (!post || post.status !== 'ACTIVE')
+    if (
+      !post ||
+      post.status !== 'ACTIVE' ||
+      (post.expiresAt && post.expiresAt <= new Date())
+    )
       throw new PostNotFoundError('Post not found');
     return post;
   }

@@ -1,3 +1,5 @@
+import { PostLifecycle } from './application/lifecycle.js';
+import { ExpirationWorker } from './infrastructure/expiration.worker.js';
 import { SemanticModule } from './semantic/semantic.module.js';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
@@ -117,6 +119,13 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
         PARTITION_STRATEGY,
       ],
     },
+    {
+      provide: PostLifecycle,
+      useFactory: (unitOfWork: PostUnitOfWork, partition: PartitionStrategy) =>
+        new PostLifecycle(unitOfWork, partition),
+      inject: [POST_UNIT_OF_WORK, PARTITION_STRATEGY],
+    },
+    ExpirationWorker,
     OutboxWorker,
   ],
 })

@@ -89,7 +89,13 @@ export class CommentResponse {
   @ApiProperty({ example: postIdExample }) postId!: string;
   @ApiProperty({ example: 123 }) authorId!: number;
   @ApiProperty({ example: '현장 확인했습니다.' }) content!: string;
-  @ApiProperty({ enum: ['ACTIVE'], example: 'ACTIVE' }) status!: string;
+  @ApiProperty({
+    enum: ['ACTIVE', 'DELETED'],
+    example: 'ACTIVE',
+    description:
+      '삭제 후 같은 mutationId로 재시도하면 DELETED인 기존 댓글을 반환할 수 있습니다.',
+  })
+  status!: string;
   @ApiProperty(dateTime) createdAt!: string;
   @ApiProperty({ ...dateTime, nullable: true, example: null }) updatedAt!:
     | string
