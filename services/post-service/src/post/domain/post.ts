@@ -98,6 +98,20 @@ export interface ReactionRecord {
   createdAt: Date;
 }
 
+export class ReactionConflictError extends Error {}
+
+// 이미 고른 종류를 다시 누르는 것은 재시도이고, 다른 종류는 취소 후에만 선택할 수 있다.
+export function requireReactionSlot<T extends { type: string }>(
+  active: T | null,
+  requested: string,
+): T | null {
+  if (active && active.type !== requested)
+    throw new ReactionConflictError(
+      'Cancel the current reaction before choosing another',
+    );
+  return active;
+}
+
 export interface ParticipantRecord {
   postId: string;
   userId: number;

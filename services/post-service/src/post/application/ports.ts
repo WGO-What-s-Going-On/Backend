@@ -60,10 +60,18 @@ export interface PostStateQueries {
     userId: number,
     type: StoredPostReactionType,
   ): Promise<StoredReaction | null>;
+  findActiveReaction(
+    postId: string,
+    userId: number,
+  ): Promise<StoredReaction | null>;
   findCommentReaction(
     commentId: string,
     userId: number,
     type: CommentReactionType,
+  ): Promise<StoredCommentReaction | null>;
+  findActiveCommentReaction(
+    commentId: string,
+    userId: number,
   ): Promise<StoredCommentReaction | null>;
   findParticipant(
     postId: string,

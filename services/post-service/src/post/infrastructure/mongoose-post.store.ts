@@ -109,6 +109,16 @@ class MongoQueries implements PostStateQueries {
       : null;
   }
 
+  async findActiveReaction(
+    postId: string,
+    userId: number,
+  ): Promise<StoredReaction | null> {
+    return this.reactions
+      .findOne({ postId, userId, removedAt: null })
+      .session(this.session ?? null)
+      .lean() as Promise<StoredReaction | null>;
+  }
+
   async findCommentReaction(
     commentId: string,
     userId: number,
@@ -116,6 +126,16 @@ class MongoQueries implements PostStateQueries {
   ): Promise<StoredCommentReaction | null> {
     return this.commentReactions
       .findOne({ commentId, userId, type })
+      .session(this.session ?? null)
+      .lean() as Promise<StoredCommentReaction | null>;
+  }
+
+  async findActiveCommentReaction(
+    commentId: string,
+    userId: number,
+  ): Promise<StoredCommentReaction | null> {
+    return this.commentReactions
+      .findOne({ commentId, userId, removedAt: null })
       .session(this.session ?? null)
       .lean() as Promise<StoredCommentReaction | null>;
   }
@@ -466,12 +486,26 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
     return this.queries().findReaction(postId, userId, type);
   }
 
+  findActiveReaction(
+    postId: string,
+    userId: number,
+  ): Promise<StoredReaction | null> {
+    return this.queries().findActiveReaction(postId, userId);
+  }
+
   findCommentReaction(
     commentId: string,
     userId: number,
     type: CommentReactionType,
   ): Promise<StoredCommentReaction | null> {
     return this.queries().findCommentReaction(commentId, userId, type);
+  }
+
+  findActiveCommentReaction(
+    commentId: string,
+    userId: number,
+  ): Promise<StoredCommentReaction | null> {
+    return this.queries().findActiveCommentReaction(commentId, userId);
   }
 
   findParticipant(

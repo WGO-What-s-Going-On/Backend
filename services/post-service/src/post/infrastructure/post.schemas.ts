@@ -80,6 +80,11 @@ export const ReactionSchema = new Schema(
   options,
 );
 ReactionSchema.index({ postId: 1, userId: 1, type: 1 }, { unique: true });
+// 취소 이력은 남기되 같은 사용자의 활성 게시물 공감은 하나만 허용한다.
+ReactionSchema.index(
+  { postId: 1, userId: 1 },
+  { unique: true, partialFilterExpression: { removedAt: null } },
+);
 
 export const CommentReactionSchema = new Schema(
   {
@@ -99,6 +104,10 @@ export const CommentReactionSchema = new Schema(
 CommentReactionSchema.index(
   { commentId: 1, userId: 1, type: 1 },
   { unique: true },
+);
+CommentReactionSchema.index(
+  { commentId: 1, userId: 1 },
+  { unique: true, partialFilterExpression: { removedAt: null } },
 );
 
 export const CounterSchema = new Schema(

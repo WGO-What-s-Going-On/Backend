@@ -3,8 +3,9 @@
 ## 2026-10-12 댓글 공감
 
 - 댓글별 `HELPFUL`(도움돼요), `AGREE`(맞아요), `DIFFERENT`(정보가 달라요) 공감을
-  종류별로 생성·취소한다. `(commentId, userId, type)` 유일 인덱스로 중복을 막고,
-  댓글 목록에서 `reactionCounts`를 반환한다.
+  생성·취소한다. `(commentId, userId, type)` 유일 인덱스는 종류별 이력을 보존하고,
+  활성 공감에 대한 `(commentId, userId)` 부분 유일 인덱스로 한 개만 허용한다.
+  게시물 공감도 같은 규칙을 적용한다. 댓글 목록에서 `reactionCounts`를 반환한다.
 - 댓글 공감 변경은 MongoDB 트랜잭션으로 저장하지만 Outbox 이벤트는 아직 만들지 않는다.
 - 신규 공감은 ACTIVE 게시물·댓글에만 허용하고, 기존 공감 취소는 종료 뒤에도 허용한다.
 

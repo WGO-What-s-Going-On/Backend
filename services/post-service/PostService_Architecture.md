@@ -1015,9 +1015,20 @@ db.post_reactions.createIndex(
     unique: true
   }
 )
+
+db.post_reactions.createIndex(
+  { postId: 1, userId: 1 },
+  { unique: true, partialFilterExpression: { removedAt: null } }
+)
 ```
 
-이를 통해 다음 관계를 Database 수준에서 보장할 수 있다.
+첫 인덱스는 종류별 취소 이력을 보존한다. 두 번째 인덱스는 활성 공감만 대상으로
+한 사용자와 게시물 사이의 활성 공감이 최대 하나임을 보장한다. 댓글에도
+`(commentId, userId, type)` 이력 인덱스와 `(commentId, userId)` 활성 공감
+부분 유일 인덱스를 동일하게 적용한다. 다른 종류로 바꾸려면 먼저 취소한다.
+기존 데이터에 활성 공감이 여러 개면 새 인덱스 생성 전에 정리해야 한다.
+
+이력 관계는 다음과 같다.
 
 ```
 한 사용자

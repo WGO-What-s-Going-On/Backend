@@ -8,6 +8,8 @@ import {
   joinParticipant,
   PostInactiveError,
   PostNotFoundError,
+  ReactionConflictError,
+  requireReactionSlot,
   requireActive,
 } from '../domain/post.js';
 import type {
@@ -179,18 +181,22 @@ export class CreateReaction {
     try {
       return await this.unitOfWork.execute(async (transaction) => {
         const post = await active(transaction, postId);
+        const activeReaction = requireReactionSlot(
+          await transaction.queries.findActiveReaction(postId, userId),
+          type,
+        );
+        if (activeReaction)
+          return {
+            postId: activeReaction.postId,
+            userId: activeReaction.userId,
+            type: activeReaction.type,
+            createdAt: activeReaction.createdAt,
+          };
         const existing = await transaction.queries.findReaction(
           postId,
           userId,
           type,
         );
-        if (existing && !existing.removedAt)
-          return {
-            postId: existing.postId,
-            userId: existing.userId,
-            type: existing.type,
-            createdAt: existing.createdAt,
-          };
         const bucketId = this.partitionStrategy.resolveBucket(
           `${userId}:${reaction.type}`,
           post.bucketCount,
@@ -226,16 +232,20 @@ export class CreateReaction {
         return reaction;
       });
     } catch (error) {
-      // 동시에 들어온 같은 종류의 공감만 기존 반응으로 돌려준다.
+      // 다른 종류가 동시에 커밋됐다면 부분 유일 인덱스 충돌을 도메인 오류로 바꾼다.
       if (error instanceof UniqueConflictError) {
-        const existing = await this.queries.findReaction(postId, userId, type);
-        if (existing && !existing.removedAt)
+        const existing = requireReactionSlot(
+          await this.queries.findActiveReaction(postId, userId),
+          type,
+        );
+        if (existing)
           return {
             postId: existing.postId,
             userId: existing.userId,
             type: existing.type,
             createdAt: existing.createdAt,
           };
+        throw new ReactionConflictError('Reaction changed; retry the request');
       }
       throw error;
     }
@@ -268,19 +278,23 @@ export class CreateCommentReaction {
         if (!comment) throw new PostNotFoundError('Comment not found');
         if (comment.status !== 'ACTIVE')
           throw new PostInactiveError('Comment is not active');
-        const existing = await tx.queries.findCommentReaction(
-          commentId,
-          userId,
+        const activeReaction = requireReactionSlot(
+          await tx.queries.findActiveCommentReaction(commentId, userId),
           type,
         );
-        if (existing && !existing.removedAt)
+        if (activeReaction)
           return {
             postId,
             commentId,
             userId,
             type,
-            createdAt: existing.createdAt,
+            createdAt: activeReaction.createdAt,
           };
+        const existing = await tx.queries.findCommentReaction(
+          commentId,
+          userId,
+          type,
+        );
         if (existing) await tx.commands.reactivateCommentReaction(reaction);
         else await tx.commands.insertCommentReaction(reaction);
         // 댓글 문서 쓰기는 댓글 삭제와 충돌하고, bucket 쓰기는 게시물 종료와 충돌한다.
@@ -302,12 +316,11 @@ export class CreateCommentReaction {
       });
     } catch (error) {
       if (error instanceof UniqueConflictError) {
-        const existing = await this.queries.findCommentReaction(
-          commentId,
-          userId,
+        const existing = requireReactionSlot(
+          await this.queries.findActiveCommentReaction(commentId, userId),
           type,
         );
-        if (existing && !existing.removedAt)
+        if (existing)
           return {
             postId,
             commentId,
@@ -315,6 +328,7 @@ export class CreateCommentReaction {
             type,
             createdAt: existing.createdAt,
           };
+        throw new ReactionConflictError('Reaction changed; retry the request');
       }
       throw error;
     }

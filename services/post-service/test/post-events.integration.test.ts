@@ -140,26 +140,25 @@ suite('post activity event contracts', () => {
     expect(detail.body.counters.reactionCount).toBe(1);
   });
 
-  it('stores four independent reaction types and includes each type in events', async () => {
+  it('stores all four post reaction types across different users', async () => {
     const id = await create();
     const path = `/api/v1/posts/${id}/reactions`;
     const types = ['CURIOUS', 'STILL_HAPPENING', 'HELPFUL', 'ENDED'];
-    for (const type of types) {
+    for (const [index, type] of types.entries()) {
+      const voter = { 'X-User-Id': String(456 + index) };
       const response = await request(app.getHttpServer())
         .post(path)
-        .set(other)
+        .set(voter)
         .send({ type })
         .expect(201);
       expect(response.body.type).toBe(type);
       await request(app.getHttpServer())
         .post(path)
-        .set(other)
+        .set(voter)
         .send({ type })
         .expect(201);
     }
-    expect(
-      await db.model('Reaction').countDocuments({ postId: id, userId: 456 }),
-    ).toBe(4);
+    expect(await db.model('Reaction').countDocuments({ postId: id })).toBe(4);
     expect(
       (await events(id, 'PostReactionCreated'))
         .map((row) => row.payload.reaction.type)
@@ -175,11 +174,11 @@ suite('post activity event contracts', () => {
 
     await request(app.getHttpServer())
       .delete(`${path}/ENDED`)
-      .set(other)
+      .set({ 'X-User-Id': '459' })
       .expect(204);
     await request(app.getHttpServer())
       .delete(`${path}/ENDED`)
-      .set(other)
+      .set({ 'X-User-Id': '459' })
       .expect(204);
     expect(
       (await events(id, 'PostReactionRemoved')).map(
@@ -198,6 +197,61 @@ suite('post activity event contracts', () => {
       .set(other)
       .send({ type: 'LIKE' })
       .expect(400);
+  });
+
+  it('rejects a second post reaction until the first is cancelled', async () => {
+    const id = await create();
+    const path = `/api/v1/posts/${id}/reactions`;
+    await request(app.getHttpServer())
+      .post(path)
+      .set(other)
+      .send({ type: 'CURIOUS' })
+      .expect(201);
+    const conflict = await request(app.getHttpServer())
+      .post(path)
+      .set(other)
+      .send({ type: 'HELPFUL' })
+      .expect(409);
+    expect(conflict.body.message).toMatch(/Cancel the current reaction/);
+    expect(conflict.body.code).toBe('REACTION_ALREADY_EXISTS');
+    await expect(
+      db.model('Reaction').create({
+        postId: id,
+        userId: 456,
+        type: 'ENDED',
+        createdAt: new Date(),
+      }),
+    ).rejects.toMatchObject({ code: 11000 });
+    expect(
+      (
+        await request(app.getHttpServer())
+          .get(`/api/v1/posts/${id}`)
+          .expect(200)
+      ).body.counters.reactionCount,
+    ).toBe(1);
+    expect(await events(id, 'PostReactionCreated')).toHaveLength(1);
+    await request(app.getHttpServer())
+      .delete(`${path}/CURIOUS`)
+      .set(other)
+      .expect(204);
+    await request(app.getHttpServer())
+      .post(path)
+      .set(other)
+      .send({ type: 'HELPFUL' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(path)
+      .set(other)
+      .send({ type: 'CURIOUS' })
+      .expect(409);
+    expect(
+      (
+        await request(app.getHttpServer())
+          .get(`/api/v1/posts/${id}`)
+          .expect(200)
+      ).body.counters.reactionCount,
+    ).toBe(1);
+    expect(await events(id, 'PostReactionCreated')).toHaveLength(2);
   });
 
   it('can cancel a legacy LIKE without accepting new LIKE requests', async () => {
@@ -233,7 +287,7 @@ suite('post activity event contracts', () => {
     ).toBe(0);
   });
 
-  it('keeps comment reactions independent and never emits a comment reaction event', async () => {
+  it('keeps comment reactions independent across users and never emits a comment reaction event', async () => {
     const id = await create();
     const comment = await request(app.getHttpServer())
       .post(`/api/v1/posts/${id}/comments`)
@@ -243,21 +297,22 @@ suite('post activity event contracts', () => {
     const commentId = comment.body.commentId as string;
     const path = `/api/v1/posts/${id}/comments/${commentId}/reactions`;
     const beforeEvents = await outbox.countDocuments({ aggregateId: id });
-    for (const type of ['HELPFUL', 'AGREE', 'DIFFERENT']) {
+    for (const [index, type] of ['HELPFUL', 'AGREE', 'DIFFERENT'].entries()) {
+      const voter = { 'X-User-Id': String(456 + index) };
       const reaction = await request(app.getHttpServer())
         .post(path)
-        .set(other)
+        .set(voter)
         .send({ type })
         .expect(201);
       expect(reaction.body).toMatchObject({
         postId: id,
         commentId,
-        userId: 456,
+        userId: 456 + index,
         type,
       });
       await request(app.getHttpServer())
         .post(path)
-        .set(other)
+        .set(voter)
         .send({ type })
         .expect(201);
     }
@@ -276,15 +331,15 @@ suite('post activity event contracts', () => {
 
     await request(app.getHttpServer())
       .delete(`${path}/AGREE`)
-      .set(other)
+      .set({ 'X-User-Id': '457' })
       .expect(204);
     await request(app.getHttpServer())
       .delete(`${path}/AGREE`)
-      .set(other)
+      .set({ 'X-User-Id': '457' })
       .expect(204);
     await request(app.getHttpServer())
       .post(path)
-      .set(other)
+      .set({ 'X-User-Id': '457' })
       .send({ type: 'AGREE' })
       .expect(201);
     expect(
@@ -323,6 +378,116 @@ suite('post activity event contracts', () => {
     expect(await outbox.countDocuments({ aggregateId: id })).toBe(
       beforeEvents + 1,
     );
+  });
+
+  it('rejects a second comment reaction and permits a new choice after cancellation', async () => {
+    const id = await create();
+    const commentId = (
+      await request(app.getHttpServer())
+        .post(`/api/v1/posts/${id}/comments`)
+        .set(actor)
+        .send({ content: '현장 정보' })
+        .expect(201)
+    ).body.commentId as string;
+    const path = `/api/v1/posts/${id}/comments/${commentId}/reactions`;
+    const beforeEvents = await outbox.countDocuments({ aggregateId: id });
+    await request(app.getHttpServer())
+      .post(path)
+      .set(other)
+      .send({ type: 'HELPFUL' })
+      .expect(201);
+    const conflict = await request(app.getHttpServer())
+      .post(path)
+      .set(other)
+      .send({ type: 'AGREE' })
+      .expect(409);
+    expect(conflict.body.message).toMatch(/Cancel the current reaction/);
+    expect(conflict.body.code).toBe('REACTION_ALREADY_EXISTS');
+    await expect(
+      db.model('CommentReaction').create({
+        postId: id,
+        commentId,
+        userId: 456,
+        type: 'DIFFERENT',
+        createdAt: new Date(),
+      }),
+    ).rejects.toMatchObject({ code: 11000 });
+    await request(app.getHttpServer())
+      .delete(`${path}/HELPFUL`)
+      .set(other)
+      .expect(204);
+    await request(app.getHttpServer())
+      .post(path)
+      .set(other)
+      .send({ type: 'AGREE' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(path)
+      .set(other)
+      .send({ type: 'DIFFERENT' })
+      .expect(409);
+    const page = await request(app.getHttpServer())
+      .get(`/api/v1/posts/${id}/comments`)
+      .expect(200);
+    expect(page.body.comments[0].reactionCounts).toEqual({
+      HELPFUL: 0,
+      AGREE: 1,
+      DIFFERENT: 0,
+    });
+    expect(await outbox.countDocuments({ aggregateId: id })).toBe(beforeEvents);
+  });
+
+  it('accepts only one of two concurrent reaction types for each target', async () => {
+    const id = await create();
+    const postPath = `/api/v1/posts/${id}/reactions`;
+    const postResponses = await Promise.all(
+      ['CURIOUS', 'HELPFUL'].map((type) =>
+        request(app.getHttpServer()).post(postPath).set(other).send({ type }),
+      ),
+    );
+    expect(postResponses.map((response) => response.status).sort()).toEqual([
+      201, 409,
+    ]);
+    expect(
+      await db
+        .model('Reaction')
+        .countDocuments({ postId: id, userId: 456, removedAt: null }),
+    ).toBe(1);
+    expect(await events(id, 'PostReactionCreated')).toHaveLength(1);
+
+    const commentId = (
+      await request(app.getHttpServer())
+        .post(`/api/v1/posts/${id}/comments`)
+        .set(actor)
+        .send({ content: '정보 확인' })
+        .expect(201)
+    ).body.commentId as string;
+    const commentPath = `/api/v1/posts/${id}/comments/${commentId}/reactions`;
+    const beforeEvents = await outbox.countDocuments({ aggregateId: id });
+    const commentResponses = await Promise.all(
+      ['HELPFUL', 'AGREE'].map((type) =>
+        request(app.getHttpServer())
+          .post(commentPath)
+          .set(other)
+          .send({ type }),
+      ),
+    );
+    expect(commentResponses.map((response) => response.status).sort()).toEqual([
+      201, 409,
+    ]);
+    expect(
+      await db
+        .model('CommentReaction')
+        .countDocuments({ commentId, userId: 456, removedAt: null }),
+    ).toBe(1);
+    const page = await request(app.getHttpServer())
+      .get(`/api/v1/posts/${id}/comments`)
+      .expect(200);
+    expect(
+      page.body.comments[0].reactionCounts.HELPFUL +
+        page.body.comments[0].reactionCounts.AGREE,
+    ).toBe(1);
+    expect(await outbox.countDocuments({ aggregateId: id })).toBe(beforeEvents);
   });
 
   it('counts concurrent duplicate comment reactions once', async () => {

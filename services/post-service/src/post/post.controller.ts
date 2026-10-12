@@ -23,6 +23,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiCreatedResponse,
+  ApiConflictResponse,
   ApiForbiddenResponse,
   ApiHeader,
   ApiNotFoundResponse,
@@ -403,6 +404,10 @@ export class PostController {
   })
   @ApiBody({ type: CreateCommentReactionBody })
   @ApiCreatedResponse({ type: CommentReactionResponse })
+  @ApiConflictResponse({
+    description:
+      'REACTION_ALREADY_EXISTS: 다른 종류의 공감을 취소한 뒤 다시 선택해야 함',
+  })
   @ApiNotFoundResponse({ description: '게시물 또는 댓글이 없음' })
   @ApiForbiddenResponse({ description: '게시물 또는 댓글이 비활성 상태' })
   @ApiServiceUnavailableResponse({ description: '운영 인증 연동 전' })
@@ -434,6 +439,10 @@ export class PostController {
   })
   @ApiBody({ type: CreateReactionBody })
   @ApiCreatedResponse({ type: ReactionResponse })
+  @ApiConflictResponse({
+    description:
+      'REACTION_ALREADY_EXISTS: 다른 종류의 공감을 취소한 뒤 다시 선택해야 함',
+  })
   @ApiNotFoundResponse({ description: '게시물이 없음' })
   @ApiForbiddenResponse({
     description: '사용자 ID가 유효하지 않거나 게시물이 비활성 상태',

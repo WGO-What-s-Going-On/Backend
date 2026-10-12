@@ -101,5 +101,12 @@ describe('OpenAPI document', () => {
       document.components.schemas.CreateCommentReactionBody.properties.type
         .enum,
     ).toEqual(['HELPFUL', 'AGREE', 'DIFFERENT']);
+    expect(
+      document.paths['/api/v1/posts/{postId}/reactions'].post.responses['409'],
+    ).toBeDefined();
+    expect(
+      document.paths['/api/v1/posts/{postId}/comments/{commentId}/reactions']
+        .post.responses['409'],
+    ).toBeDefined();
   });
 });

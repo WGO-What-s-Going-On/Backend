@@ -167,8 +167,10 @@ ACTIVE 게시물에 댓글을 저장하고 카운터·Outbox를 함께 커밋하
 
 ACTIVE 게시물에 공감이 처음 저장되면 발행한다. 같은 `(postId, userId, type)`의
 공감이 이미 있으면 기존 결과를 반환하며 카운터와 이벤트를 추가하지 않는다.
-한 사용자는 게시물에 종류별로 하나씩 공감할 수 있다. 취소된 기록은 재등록 시
-활성화하며 버전을 증가시킨다. 기존 `LIKE`는 새 요청에서 거부하지만 저장된
+한 사용자는 게시물당 활성 공감을 하나만 가질 수 있다. 다른 종류를 누르려면
+현재 공감을 먼저 취소해야 하며, 그렇지 않으면 HTTP `409`와
+`REACTION_ALREADY_EXISTS`를 반환한다. 취소된 기록은 재등록 시 활성화하며
+버전을 증가시킨다. 기존 `LIKE`는 새 요청에서 거부하지만 저장된
 기록의 취소와 이전 Outbox 이벤트 재발행은 지원한다.
 
 | `type` | 화면 문구 | 의미·활용 |
@@ -469,6 +471,7 @@ User의 현재 envelope는 `type/version/target/payload`를 사용하므로 Post
 않는다. 커밋한 이벤트는 실행 중인 서비스의 Outbox Worker가 발행한다.
 
 ```bash
+pnpm post:operations reaction-conflicts
 pnpm post:operations outbox-failed
 pnpm post:operations outbox-retry evt_<UUID> "Redis 복구 확인"
 pnpm post:operations schedule-expiration post_<UUID> 2026-10-07T03:00:00.000Z
@@ -476,6 +479,11 @@ pnpm post:operations expire post_<UUID>
 pnpm post:operations moderate-post post_<UUID> decision-123
 pnpm post:operations moderate-comment post_<UUID> comment_<UUID> decision-456
 ```
+
+`reaction-conflicts`는 게시물·댓글별로 사용자에게 활성 공감이 둘 이상 남은 기록을
+읽기 전용으로 나열한다. 새 활성 공감 유일 인덱스를 적용하기 전에 이 결과를 확인하고,
+유지할 종류를 결정해 나머지를 기존 DELETE API로 취소한다. 충돌이 남아 있으면
+MongoDB가 새 인덱스를 생성할 수 없다.
 
 `<UUID>`는 실제 식별자로 바꾼다. `outbox-failed`는 최대 100건의 식별자·실패 정보를
 반환하며 본문 payload는 출력하지 않는다. `expire`는 기한이 되지 않으면 아무것도
