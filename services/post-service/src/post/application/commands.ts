@@ -3,6 +3,7 @@ import {
   createComment,
   createPost,
   createReaction,
+  PostReactionType,
   joinParticipant,
   requireActive,
 } from '../domain/post.js';
@@ -163,13 +164,21 @@ export class CreateReaction {
     private readonly partitionStrategy: PartitionStrategy,
   ) {}
 
-  async execute(postId: string, userId: number): Promise<ReactionRecord> {
+  async execute(
+    postId: string,
+    userId: number,
+    type: PostReactionType,
+  ): Promise<ReactionRecord> {
     const now = new Date();
-    const reaction = createReaction(postId, userId, now);
+    const reaction = createReaction(postId, userId, type, now);
     try {
       return await this.unitOfWork.execute(async (transaction) => {
         const post = await active(transaction, postId);
-        const existing = await transaction.queries.findReaction(postId, userId);
+        const existing = await transaction.queries.findReaction(
+          postId,
+          userId,
+          type,
+        );
         if (existing && !existing.removedAt)
           return {
             postId: existing.postId,
@@ -212,9 +221,9 @@ export class CreateReaction {
         return reaction;
       });
     } catch (error) {
-      // 동시에 들어온 LIKE 요청도 기존 반응을 반환해 카운터와 이벤트가 늘지 않게 한다.
+      // 동시에 들어온 같은 종류의 공감만 기존 반응으로 돌려준다.
       if (error instanceof UniqueConflictError) {
-        const existing = await this.queries.findReaction(postId, userId);
+        const existing = await this.queries.findReaction(postId, userId, type);
         if (existing && !existing.removedAt)
           return {
             postId: existing.postId,

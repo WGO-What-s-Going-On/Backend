@@ -332,12 +332,12 @@ suite('post creation integration', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${id}/reactions`)
       .set(header)
-      .send({ type: 'LIKE' })
+      .send({ type: 'CURIOUS' })
       .expect(201);
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${id}/reactions`)
       .set(header)
-      .send({ type: 'LIKE' })
+      .send({ type: 'CURIOUS' })
       .expect(201);
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${id}/participants`)
@@ -396,7 +396,7 @@ suite('post creation integration', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${missing}/reactions`)
       .set(header)
-      .send({ type: 'LIKE' })
+      .send({ type: 'CURIOUS' })
       .expect(404);
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${missing}/participants`)
@@ -412,7 +412,7 @@ suite('post creation integration', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${id}/reactions`)
       .set(header)
-      .send({ type: 'LIKE' })
+      .send({ type: 'CURIOUS' })
       .expect(403);
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${id}/participants`)
@@ -461,6 +461,13 @@ suite('post creation integration', () => {
         'PostReactionCreated',
         'PostParticipantJoined',
       ]),
+    );
+    const reactionEvent = entries.find(
+      (entry) => entry.message.eventType === 'PostReactionCreated',
+    );
+    if (!reactionEvent?.message.data) throw new Error('Missing reaction event');
+    expect(JSON.parse(reactionEvent.message.data).reaction.type).toBe(
+      'CURIOUS',
     );
     const first = await outbox.findOne({ eventType: 'PostCreated' }).lean();
     await outbox.updateOne(
@@ -662,12 +669,12 @@ suite('post creation integration', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${bucketedId}/reactions`)
       .set(header)
-      .send({ type: 'LIKE' })
+      .send({ type: 'CURIOUS' })
       .expect(201);
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${bucketedId}/reactions`)
       .set(header)
-      .send({ type: 'LIKE' })
+      .send({ type: 'CURIOUS' })
       .expect(201);
     expect(
       await reactions.countDocuments({ postId: bucketedId, userId: 123 }),

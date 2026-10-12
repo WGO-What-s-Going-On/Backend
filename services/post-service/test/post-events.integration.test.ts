@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { LOCATION_AUTHORIZATION } from '../src/post/application/ports.js';
 import { PostLifecycle } from '../src/post/application/lifecycle.js';
+import { PostReactionType } from '../src/post/domain/post.js';
 import { ExpirationWorker } from '../src/post/infrastructure/expiration.worker.js';
 import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
 import { MongoosePostStore } from '../src/post/infrastructure/mongoose-post.store.js';
@@ -99,19 +100,22 @@ suite('post activity event contracts', () => {
         request(app.getHttpServer())
           .post(path)
           .set(other)
-          .send({ type: 'LIKE' })
+          .send({ type: 'CURIOUS' })
           .expect(201),
       ),
     );
     await Promise.all(
       Array.from({ length: 3 }, () =>
-        request(app.getHttpServer()).delete(path).set(other).expect(204),
+        request(app.getHttpServer())
+          .delete(`${path}/CURIOUS`)
+          .set(other)
+          .expect(204),
       ),
     );
     await request(app.getHttpServer())
       .post(path)
       .set(other)
-      .send({ type: 'LIKE' })
+      .send({ type: 'CURIOUS' })
       .expect(201);
     expect(
       (await events(id, 'PostReactionCreated')).map(
@@ -124,12 +128,105 @@ suite('post activity event contracts', () => {
       postAuthorId: 123,
       postCategory: 'INCIDENT',
       activityVersion: 2,
-      reaction: { postId: id, userId: 456, type: 'LIKE' },
+      reaction: { postId: id, userId: 456, type: 'CURIOUS' },
     });
     const detail = await request(app.getHttpServer())
       .get(`/api/v1/posts/${id}`)
       .expect(200);
     expect(detail.body.counters.reactionCount).toBe(1);
+  });
+
+  it('stores four independent reaction types and includes each type in events', async () => {
+    const id = await create();
+    const path = `/api/v1/posts/${id}/reactions`;
+    const types = ['CURIOUS', 'STILL_HAPPENING', 'HELPFUL', 'ENDED'];
+    for (const type of types) {
+      const response = await request(app.getHttpServer())
+        .post(path)
+        .set(other)
+        .send({ type })
+        .expect(201);
+      expect(response.body.type).toBe(type);
+      await request(app.getHttpServer())
+        .post(path)
+        .set(other)
+        .send({ type })
+        .expect(201);
+    }
+    expect(
+      await db.model('Reaction').countDocuments({ postId: id, userId: 456 }),
+    ).toBe(4);
+    expect(
+      (await events(id, 'PostReactionCreated'))
+        .map((row) => row.payload.reaction.type)
+        .sort(),
+    ).toEqual([...types].sort());
+    expect(
+      (
+        await request(app.getHttpServer())
+          .get(`/api/v1/posts/${id}`)
+          .expect(200)
+      ).body.counters.reactionCount,
+    ).toBe(4);
+
+    await request(app.getHttpServer())
+      .delete(`${path}/ENDED`)
+      .set(other)
+      .expect(204);
+    await request(app.getHttpServer())
+      .delete(`${path}/ENDED`)
+      .set(other)
+      .expect(204);
+    expect(
+      (await events(id, 'PostReactionRemoved')).map(
+        (row) => row.payload.reaction.type,
+      ),
+    ).toEqual(['ENDED']);
+    expect(
+      (
+        await request(app.getHttpServer())
+          .get(`/api/v1/posts/${id}`)
+          .expect(200)
+      ).body.counters.reactionCount,
+    ).toBe(3);
+    await request(app.getHttpServer())
+      .post(path)
+      .set(other)
+      .send({ type: 'LIKE' })
+      .expect(400);
+  });
+
+  it('can cancel a legacy LIKE without accepting new LIKE requests', async () => {
+    const id = await create();
+    await db.model('Reaction').create({
+      postId: id,
+      bucketId: 0,
+      userId: 456,
+      type: 'LIKE',
+      activityVersion: 1,
+      removedAt: null,
+      createdAt: new Date(),
+    });
+    await db
+      .model('Counter')
+      .updateOne(
+        { postId: id, bucketId: 0, metric: 'reactionCount' },
+        { $inc: { count: 1 } },
+      );
+    await request(app.getHttpServer())
+      .delete(`/api/v1/posts/${id}/reactions`)
+      .set(other)
+      .expect(204);
+    expect(
+      (await events(id, 'PostReactionRemoved'))[0].payload.reaction.type,
+    ).toBe('LIKE');
+    expect(
+      (
+        await request(app.getHttpServer())
+          .get(`/api/v1/posts/${id}`)
+          .expect(200)
+      ).body.counters.reactionCount,
+    ).toBe(0);
   });
 
   it('authorizes comment deletion and emits no second event on retry', async () => {
@@ -225,7 +322,7 @@ suite('post activity event contracts', () => {
     await request(app.getHttpServer())
       .post(`${path}/reactions`)
       .set(other)
-      .send({ type: 'LIKE' })
+      .send({ type: 'CURIOUS' })
       .expect(403);
   });
 
@@ -283,7 +380,11 @@ suite('post activity event contracts', () => {
         kind === 'comment'
           ? new CreateComment(uow, store, partition).execute(id, 'late', 456)
           : kind === 'reaction'
-            ? new CreateReaction(uow, store, partition).execute(id, 456)
+            ? new CreateReaction(uow, store, partition).execute(
+                id,
+                456,
+                PostReactionType.CURIOUS,
+              )
             : new JoinPost(
                 uow,
                 store,
@@ -342,7 +443,7 @@ suite('post activity event contracts', () => {
     const reaction = await request(app.getHttpServer())
       .post(`/api/v1/posts/${id}/reactions`)
       .set(other)
-      .send({ type: 'LIKE' })
+      .send({ type: 'CURIOUS' })
       .expect(201);
     expect(reaction.body).not.toHaveProperty('activityVersion');
     await db.model('Counter').deleteMany({ postId: id });
@@ -359,7 +460,7 @@ suite('post activity event contracts', () => {
         { $unset: { activityVersion: 1, bucketId: 1, removedAt: 1 } },
       );
     await request(app.getHttpServer())
-      .delete(`/api/v1/posts/${id}/reactions`)
+      .delete(`/api/v1/posts/${id}/reactions/CURIOUS`)
       .set(other)
       .expect(204);
     expect(

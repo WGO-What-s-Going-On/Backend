@@ -4,6 +4,7 @@ import type {
   PostRecord,
   PostState,
   ReactionRecord,
+  StoredPostReactionType,
 } from '../domain/post.js';
 
 export type EventType =
@@ -48,7 +49,11 @@ export interface PostStateQueries {
     postId: string,
     commentId: string,
   ): Promise<StoredActivity<CommentRecord> | null>;
-  findReaction(postId: string, userId: number): Promise<StoredReaction | null>;
+  findReaction(
+    postId: string,
+    userId: number,
+    type: StoredPostReactionType,
+  ): Promise<StoredReaction | null>;
   findParticipant(
     postId: string,
     userId: number,
@@ -108,6 +113,7 @@ export interface PostCommands {
   removeReaction(
     postId: string,
     userId: number,
+    type: StoredPostReactionType,
     now: Date,
     activityVersion: number,
   ): Promise<void>;

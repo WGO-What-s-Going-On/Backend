@@ -18,6 +18,7 @@ import type {
   PostRecord,
   PostState,
   ReactionRecord,
+  StoredPostReactionType,
 } from '../domain/post.js';
 import { OutboxWorker } from './outbox.worker.js';
 
@@ -85,16 +86,17 @@ class MongoQueries implements PostStateQueries {
   async findReaction(
     postId: string,
     userId: number,
+    type: StoredPostReactionType,
   ): Promise<StoredReaction | null> {
     const reaction = await this.reactions
-      .findOne({ postId, userId, type: 'LIKE' })
+      .findOne({ postId, userId, type })
       .session(this.session ?? null)
       .lean();
     return reaction
       ? {
           postId: reaction.postId,
           userId: reaction.userId,
-          type: 'LIKE',
+          type: reaction.type,
           createdAt: reaction.createdAt,
           removedAt: reaction.removedAt ?? null,
           activityVersion: reaction.activityVersion ?? 1,
@@ -221,12 +223,13 @@ class MongoCommands implements PostCommands {
   async removeReaction(
     postId: string,
     userId: number,
+    type: StoredPostReactionType,
     now: Date,
     activityVersion: number,
   ): Promise<void> {
     // 기록을 지우지 않아 취소 후 재등록해도 버전과 관계의 식별자가 유지된다.
     await this.reactions.updateOne(
-      { postId, userId, type: 'LIKE' },
+      { postId, userId, type },
       { $set: { removedAt: now, activityVersion } },
       { session: this.session },
     );
@@ -382,8 +385,12 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
     return this.queries().findComment(postId, commentId);
   }
 
-  findReaction(postId: string, userId: number): Promise<StoredReaction | null> {
-    return this.queries().findReaction(postId, userId);
+  findReaction(
+    postId: string,
+    userId: number,
+    type: StoredPostReactionType,
+  ): Promise<StoredReaction | null> {
+    return this.queries().findReaction(postId, userId, type);
   }
 
   findParticipant(

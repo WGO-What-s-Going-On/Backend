@@ -627,7 +627,7 @@ WebSocket Client
 
 # 6. 게시판 Reaction
 
-좋아요와 같은 Reaction 역시 `posts` Document 내부에 사용자 ID Array를 저장하지 않는다.
+공감 Reaction 역시 `posts` Document 내부에 사용자 ID Array를 저장하지 않는다.
 
 다음과 같은 구조는 사용하지 않는다.
 
@@ -665,7 +665,7 @@ flowchart LR
 
     AGG[Counter Aggregator]
 
-    C -->|Like Request| G
+    C -->|Reaction Request| G
 
     G --> P
 
@@ -993,11 +993,14 @@ GET /api/v1/posts/{postId}/comments
 
   "userId": 123,
 
-  "type": "LIKE",
+  "type": "CURIOUS",
 
   "createdAt": "2026-09-19T01:15:00Z"
 }
 ```
+
+새 공감 종류는 `CURIOUS`, `STILL_HAPPENING`, `HELPFUL`, `ENDED`다. 기존 `LIKE`는
+저장된 기록의 취소와 이전 이벤트 재발행만 지원한다.
 
 ### Index
 
@@ -1215,8 +1218,8 @@ PUBLISHED
 | GET | `/api/v1/posts/{postId}/comments` | 댓글 조회 |
 | POST | `/api/v1/posts/{postId}/comments` | 댓글 작성 |
 | DELETE | `/api/v1/posts/{postId}/comments/{commentId}` | 댓글 삭제 |
-| POST | `/api/v1/posts/{postId}/reactions` | 좋아요 (`{"type":"LIKE"}`) |
-| DELETE | `/api/v1/posts/{postId}/reactions/like` | 좋아요 취소 |
+| POST | `/api/v1/posts/{postId}/reactions` | 공감 (`CURIOUS`, `STILL_HAPPENING`, `HELPFUL`, `ENDED`) |
+| DELETE | `/api/v1/posts/{postId}/reactions/{type}` | 지정한 종류의 공감 취소 |
 | POST | `/api/v1/posts/{postId}/participants` | 게시판 참여 |
 | POST | `/api/v1/posts/{postId}/leave` | 게시판 참여 종료 |
 

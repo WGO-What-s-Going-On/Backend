@@ -1,4 +1,5 @@
 import { PostLifecycle } from './application/lifecycle.js';
+import { PostReactionType } from './domain/post.js';
 import { FindSimilarPosts } from './semantic/search.js';
 import {
   SimilarPostsBody,
@@ -50,6 +51,7 @@ import {
   postInput,
   similarInput,
   reactionInput,
+  reactionType,
   userId,
 } from './presentation/post.input.js';
 import {
@@ -149,7 +151,7 @@ export class PostController {
   @Delete(':postId/reactions')
   @HttpCode(204)
   @ApiOperation({
-    summary: '본인의 LIKE 취소',
+    summary: '기존 LIKE 공감 취소',
     description:
       '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. 운영 인증 연동 전에는 503입니다.',
   })
@@ -166,7 +168,35 @@ export class PostController {
     @Param('postId') id: string,
     @Headers('x-user-id') header: string | undefined,
   ): Promise<void> {
-    await this.lifecycle.removeReaction(postId(id), userId(header));
+    await this.lifecycle.removeReaction(postId(id), userId(header), 'LIKE');
+  }
+
+  @Delete(':postId/reactions/:type')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: '본인의 지정한 종류 공감 취소',
+    description:
+      '반복 요청은 추가 이벤트 없이 204. 기존 LIKE 취소는 이전 경로도 지원합니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiParam({ name: 'type', enum: PostReactionType })
+  @ApiHeader({
+    name: 'X-User-Id',
+    description: '양의 정수 사용자 ID (로컬·테스트 전용)',
+  })
+  @ApiNoContentResponse({ description: '처리 완료 또는 이미 처리됨' })
+  @ApiNotFoundResponse({ description: '게시물이 없음' })
+  @ApiServiceUnavailableResponse({ description: '운영 인증 연동 전' })
+  async removeReactionByType(
+    @Param('postId') id: string,
+    @Param('type') type: string,
+    @Headers('x-user-id') header: string | undefined,
+  ): Promise<void> {
+    await this.lifecycle.removeReaction(
+      postId(id),
+      userId(header),
+      reactionType(type),
+    );
   }
 
   @Delete(':postId/participants')
@@ -324,8 +354,9 @@ export class PostController {
 
   @Post(':postId/reactions')
   @ApiOperation({
-    summary: 'LIKE 반응 작성',
-    description: '같은 사용자의 반복 요청은 기존 반응을 반환합니다.',
+    summary: '게시물 공감 작성',
+    description:
+      '한 사용자가 종류별로 하나씩 누를 수 있으며, 같은 종류의 반복 요청은 기존 반응을 반환합니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiHeader({
@@ -346,8 +377,11 @@ export class PostController {
     @Body() body: unknown,
   ) {
     const actorId = userId(header);
-    reactionInput(body);
-    return this.createReaction.execute(postId(id), actorId);
+    return this.createReaction.execute(
+      postId(id),
+      actorId,
+      reactionInput(body),
+    );
   }
 
   @Post(':postId/participants')

@@ -62,6 +62,7 @@ describe('OpenAPI document', () => {
         '/api/v1/posts/{postId}/comments/{commentId}',
         '/api/v1/posts/{postId}/participants',
         '/api/v1/posts/{postId}/reactions',
+        '/api/v1/posts/{postId}/reactions/{type}',
         '/health/live',
         '/internal/v1/posts/batch-get',
         '/internal/v1/posts/{postId}',
@@ -89,5 +90,8 @@ describe('OpenAPI document', () => {
     expect(
       document.components.schemas.PostResponse.properties.counters,
     ).toBeDefined();
+    expect(
+      document.components.schemas.CreateReactionBody.properties.type.enum,
+    ).toEqual(['CURIOUS', 'STILL_HAPPENING', 'HELPFUL', 'ENDED']);
   });
 });

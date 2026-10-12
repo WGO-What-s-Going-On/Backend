@@ -51,10 +51,20 @@ export interface CommentRecord {
   updatedAt: Date | null;
 }
 
+export enum PostReactionType {
+  CURIOUS = 'CURIOUS',
+  STILL_HAPPENING = 'STILL_HAPPENING',
+  HELPFUL = 'HELPFUL',
+  ENDED = 'ENDED',
+}
+
+// 이전 LIKE 기록은 새로 만들지 않지만 취소와 이벤트 재발행을 위해 읽을 수 있어야 한다.
+export type StoredPostReactionType = PostReactionType | 'LIKE';
+
 export interface ReactionRecord {
   postId: string;
   userId: number;
-  type: 'LIKE';
+  type: StoredPostReactionType;
   createdAt: Date;
 }
 
@@ -154,9 +164,10 @@ export function createComment(
 export function createReaction(
   postId: string,
   userId: number,
+  type: PostReactionType,
   now: Date,
 ): ReactionRecord {
-  return { postId, userId, type: 'LIKE', createdAt: now };
+  return { postId, userId, type, createdAt: now };
 }
 
 export function joinParticipant(

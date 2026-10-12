@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { PostReactionType } from '../domain/post.js';
 import type { PostInput } from '../domain/post.js';
 
 type Body = Record<string, unknown>;
@@ -77,11 +78,18 @@ export function commentInput(raw: unknown): string {
   return string(body.content, 'content');
 }
 
-export function reactionInput(raw: unknown): void {
+export function reactionInput(raw: unknown): PostReactionType {
   const body = object(raw);
   fields(body, ['type']);
-  if (body.type !== 'LIKE')
-    throw new BadRequestException('Only LIKE is supported');
+  if (!Object.values(PostReactionType).includes(body.type as PostReactionType))
+    throw new BadRequestException('Invalid reaction type');
+  return body.type as PostReactionType;
+}
+
+export function reactionType(value: string): PostReactionType {
+  if (!Object.values(PostReactionType).includes(value as PostReactionType))
+    throw new BadRequestException('Invalid reaction type');
+  return value as PostReactionType;
 }
 
 export function participantInput(raw: unknown): void {

@@ -1,4 +1,5 @@
 import { Schema } from 'mongoose';
+import { PostReactionType } from '../domain/post.js';
 
 const options = { versionKey: false, strict: true } as const;
 
@@ -61,7 +62,12 @@ export const ReactionSchema = new Schema(
     postId: { type: String, required: true },
     bucketId: { type: Number, required: true, default: 0 },
     userId: { type: Number, required: true },
-    type: { type: String, required: true },
+    // LIKE는 이전 데이터와 미발행 Outbox 재처리를 위해서만 저장 허용한다.
+    type: {
+      type: String,
+      required: true,
+      enum: [...Object.values(PostReactionType), 'LIKE'],
+    },
     activityVersion: { type: Number, default: 1 },
     removedAt: { type: Date, default: null },
     createdAt: { type: Date, required: true },

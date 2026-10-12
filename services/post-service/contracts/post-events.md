@@ -164,16 +164,25 @@ ACTIVE 게시물에 댓글을 저장하고 카운터·Outbox를 함께 커밋하
 
 ### 3.3 `PostReactionCreated`
 
-ACTIVE 게시물에 LIKE가 처음 저장되면 발행한다. 같은 `(postId, userId, type)`의
+ACTIVE 게시물에 공감이 처음 저장되면 발행한다. 같은 `(postId, userId, type)`의
 공감이 이미 있으면 기존 결과를 반환하며 카운터와 이벤트를 추가하지 않는다.
-현재 공감 종류는 LIKE만 지원한다. 취소된 기록은 재등록 시 활성화하며 버전을 증가시킨다.
+한 사용자는 게시물에 종류별로 하나씩 공감할 수 있다. 취소된 기록은 재등록 시
+활성화하며 버전을 증가시킨다. 기존 `LIKE`는 새 요청에서 거부하지만 저장된
+기록의 취소와 이전 Outbox 이벤트 재발행은 지원한다.
+
+| `type` | 화면 문구 | 의미·활용 |
+| --- | --- | --- |
+| `CURIOUS` | 👀 저도 궁금해요 | 관심도·Hot 게시판 판단 |
+| `STILL_HAPPENING` | ✅ 지금도 그래요 | 현장 확인·LIVE 유지 신호 |
+| `HELPFUL` | 🙌 도움됐어요 | 게시글 품질 평가 |
+| `ENDED` | 🏁 이제 끝났어요 | 종료 판단을 위한 신호. 이 공감만으로 게시물이 자동 종료되지는 않음 |
 
 ```json
 {
   "reaction": {
     "postId": "post_22222222-2222-4222-8222-222222222222",
     "userId": 456,
-    "type": "LIKE",
+    "type": "CURIOUS",
     "createdAt": "2026-10-06T03:02:00.000Z"
   },
   "postAuthorId": 123,
@@ -182,7 +191,7 @@ ACTIVE 게시물에 LIKE가 처음 저장되면 발행한다. 같은 `(postId, u
 }
 ```
 
-`postId: string`, `userId: number`, `type: "LIKE"`, `createdAt: string`이다.
+`postId: string`, `userId: number`, `type: 위 네 값 중 하나`, `createdAt: string`이다.
 `reaction.postId = aggregateId`이고 `userId`는 공감을 누른 사용자다.
 게시물 작성자는 최상위 `postAuthorId`다. 별도 `reactionId` 없이
 `(postId, userId, type)`가 공감 관계의 식별자다.
@@ -263,7 +272,7 @@ Realtime은 현재 `comment` 객체를 클라이언트에 그대로 전달하므
 
 | 이벤트 | 실제 전이 | 필수 도메인 객체 및 최상위 문맥 | 소비 목적 |
 | --- | --- | --- | --- |
-| `PostReactionRemoved` | 활성 공감 → 취소 | `reaction: {postId, userId, type: "LIKE", createdAt, removedAt}`, `postAuthorId`, `postCategory`, `activityVersion` | 현재 공감 수 보정, 보상 회수 판정, 대기 알림 제외 |
+| `PostReactionRemoved` | 활성 공감 → 취소 | `reaction: {postId, userId, type, createdAt, removedAt}`, `postAuthorId`, `postCategory`, `activityVersion` | 해당 종류의 공감 수 보정, 보상 회수 판정, 대기 알림 제외 |
 | `PostCommentDeleted` | ACTIVE 댓글 → DELETED | `comment: {commentId, postId, authorId, deletedAt}`, `postAuthorId`, `postCategory`, `actor`, `reason`, `activityVersion`, `moderationDecisionId?` | 유효 댓글 수·보상 보정, 알림 노출 갱신 |
 | `PostDeleted` | ACTIVE 또는 EXPIRED 게시물 → DELETED | `post: {postId, authorId, category, deletedAt}`, `actor`, `reason`, `postVersion`, `moderationDecisionId?` | 관련 활동 무효화 판단, 예약 알림 정리, 공간·검색 인덱스 제거 |
 | `PostParticipantLeft` | 참여 중 → 이탈 | `participant: {postId, userId, joinedAt, leftAt}`, `postAuthorId`, `postCategory`, `activityVersion` | 현재 참여 상태·참여 기반 알림 대상 갱신 |
@@ -301,7 +310,8 @@ Moderation Service의 네트워크 소비·인증 연동은 별도 범위다. �
 | --- | --- |
 | `/api/v1/posts/{postId}` | 게시물 작성자만 삭제 |
 | `/api/v1/posts/{postId}/comments/{commentId}` | 해당 게시물에 속한 댓글의 작성자만 삭제 |
-| `/api/v1/posts/{postId}/reactions` | 인증된 사용자 자신의 LIKE 취소 |
+| `/api/v1/posts/{postId}/reactions/{type}` | 인증된 사용자 자신의 해당 종류 공감 취소. `type`은 위 네 값 |
+| `/api/v1/posts/{postId}/reactions` | 기존 `LIKE` 기록 취소 전용. 신규 `LIKE` 생성은 불가 |
 | `/api/v1/posts/{postId}/participants` | 인증된 사용자 자신의 참여 종료 |
 
 삭제된 댓글의 기존 `mutationId`로 작성 재시도하면 해당 DELETED 댓글을 반환하며

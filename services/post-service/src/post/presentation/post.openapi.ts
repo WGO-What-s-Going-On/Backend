@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { PostReactionType } from '../domain/post.js';
 
 // 이 클래스들은 OpenAPI 스키마 전용이다. 실제 요청 검증은 post.input.ts와 post-query.input.ts에서 수행한다.
 
@@ -42,7 +43,8 @@ export class InternalCreateCommentBody extends CreateCommentBody {
 }
 
 export class CreateReactionBody {
-  @ApiProperty({ enum: ['LIKE'], example: 'LIKE' }) type!: 'LIKE';
+  @ApiProperty({ enum: PostReactionType, example: PostReactionType.CURIOUS })
+  type!: PostReactionType;
 }
 
 export class JoinPostBody {}
@@ -115,7 +117,7 @@ export class CommentPageResponse {
 export class ReactionResponse {
   @ApiProperty({ example: postIdExample }) postId!: string;
   @ApiProperty({ example: 123 }) userId!: number;
-  @ApiProperty({ enum: ['LIKE'] }) type!: string;
+  @ApiProperty({ enum: PostReactionType }) type!: PostReactionType;
   @ApiProperty(dateTime) createdAt!: string;
 }
 

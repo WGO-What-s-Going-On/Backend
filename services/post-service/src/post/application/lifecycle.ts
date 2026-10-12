@@ -5,6 +5,7 @@ import {
   requireActive,
 } from '../domain/post.js';
 import { event } from './event.js';
+import type { StoredPostReactionType } from '../domain/post.js';
 import type { PartitionStrategy } from './partition.js';
 import type { PostTransaction, PostUnitOfWork } from './ports.js';
 
@@ -28,15 +29,25 @@ export class PostLifecycle {
     private readonly partition: PartitionStrategy,
   ) {}
 
-  async removeReaction(postId: string, userId: number): Promise<void> {
+  async removeReaction(
+    postId: string,
+    userId: number,
+    type: StoredPostReactionType,
+  ): Promise<void> {
     await this.unitOfWork.execute(async (tx) => {
       const post = await existingPost(tx, postId);
-      const reaction = await tx.queries.findReaction(postId, userId);
+      const reaction = await tx.queries.findReaction(postId, userId, type);
       // 취소는 게시물 비활성화 후에도 허용한다. 없는 공감 관계를 새로 만들지 않는다.
       if (!reaction || reaction.removedAt) return;
       const now = new Date();
       const activityVersion = (reaction.activityVersion ?? 1) + 1;
-      await tx.commands.removeReaction(postId, userId, now, activityVersion);
+      await tx.commands.removeReaction(
+        postId,
+        userId,
+        type,
+        now,
+        activityVersion,
+      );
       await tx.commands.increment(
         postId,
         reaction.bucketId ?? 0,
