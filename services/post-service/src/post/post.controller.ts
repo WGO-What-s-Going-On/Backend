@@ -1,5 +1,5 @@
 import { PostLifecycle } from './application/lifecycle.js';
-import { PostReactionType } from './domain/post.js';
+import { CommentReactionType, PostReactionType } from './domain/post.js';
 import { FindSimilarPosts } from './semantic/search.js';
 import {
   SimilarPostsBody,
@@ -37,6 +37,7 @@ import {
 } from '@nestjs/swagger';
 import {
   CreateComment,
+  CreateCommentReaction,
   CreatePost,
   CreateReaction,
   JoinPost,
@@ -45,6 +46,8 @@ import { ReadPosts } from './application/queries.js';
 import { PostErrorFilter } from './presentation/post-error.filter.js';
 import {
   commentInput,
+  commentReactionInput,
+  commentReactionType,
   commentId,
   participantInput,
   postId,
@@ -69,6 +72,8 @@ import {
   BatchGetResponse,
   CommentPageResponse,
   CommentResponse,
+  CommentReactionResponse,
+  CreateCommentReactionBody,
   CreateCommentBody,
   CreatePostBody,
   CreateReactionBody,
@@ -89,6 +94,7 @@ export class PostController {
   constructor(
     private readonly createPost: CreatePost,
     private readonly createComment: CreateComment,
+    private readonly createCommentReaction: CreateCommentReaction,
     private readonly createReaction: CreateReaction,
     private readonly joinPost: JoinPost,
     private readonly readPosts: ReadPosts,
@@ -145,6 +151,37 @@ export class PostController {
       postId(id),
       commentId(cid),
       userId(header),
+    );
+  }
+
+  @Delete(':postId/comments/:commentId/reactions/:type')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: '본인의 댓글 공감 취소',
+    description:
+      '같은 취소 요청은 추가 변경 없이 204를 반환합니다. 댓글 또는 게시물 비활성화 후에도 취소할 수 있습니다. 이벤트는 발행하지 않습니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiParam({ name: 'commentId' })
+  @ApiParam({ name: 'type', enum: CommentReactionType })
+  @ApiHeader({
+    name: 'X-User-Id',
+    description: '양의 정수 사용자 ID (로컬·테스트 전용)',
+  })
+  @ApiNoContentResponse({ description: '처리 완료 또는 이미 처리됨' })
+  @ApiNotFoundResponse({ description: '게시물 또는 댓글이 없음' })
+  @ApiServiceUnavailableResponse({ description: '운영 인증 연동 전' })
+  async removeCommentReaction(
+    @Param('postId') id: string,
+    @Param('commentId') cid: string,
+    @Param('type') type: string,
+    @Headers('x-user-id') header: string | undefined,
+  ): Promise<void> {
+    await this.lifecycle.removeCommentReaction(
+      postId(id),
+      commentId(cid),
+      userId(header),
+      commentReactionType(type),
     );
   }
 
@@ -350,6 +387,37 @@ export class PostController {
   ) {
     const authorId = userId(header);
     return this.createComment.execute(postId(id), commentInput(body), authorId);
+  }
+
+  @Post(':postId/comments/:commentId/reactions')
+  @ApiOperation({
+    summary: '댓글 공감 작성',
+    description:
+      '한 사용자가 댓글에 종류별로 하나씩 누를 수 있습니다. 같은 종류의 반복 요청은 기존 공감을 반환하며 이벤트는 발행하지 않습니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiParam({ name: 'commentId' })
+  @ApiHeader({
+    name: 'X-User-Id',
+    description: '양의 정수 사용자 ID (로컬·테스트 전용)',
+  })
+  @ApiBody({ type: CreateCommentReactionBody })
+  @ApiCreatedResponse({ type: CommentReactionResponse })
+  @ApiNotFoundResponse({ description: '게시물 또는 댓글이 없음' })
+  @ApiForbiddenResponse({ description: '게시물 또는 댓글이 비활성 상태' })
+  @ApiServiceUnavailableResponse({ description: '운영 인증 연동 전' })
+  commentReaction(
+    @Param('postId') id: string,
+    @Param('commentId') cid: string,
+    @Headers('x-user-id') header: string | undefined,
+    @Body() body: unknown,
+  ) {
+    return this.createCommentReaction.execute(
+      postId(id),
+      commentId(cid),
+      userId(header),
+      commentReactionInput(body),
+    );
   }
 
   @Post(':postId/reactions')

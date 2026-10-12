@@ -1,5 +1,8 @@
 import type {
   CommentRecord,
+  CommentReactionCounts,
+  CommentReactionRecord,
+  CommentReactionType,
   ParticipantRecord,
   PostRecord,
   PostState,
@@ -36,6 +39,9 @@ export type StoredActivity<T> = T & {
 export type StoredReaction = StoredActivity<ReactionRecord> & {
   removedAt?: Date | null;
 };
+export type StoredCommentReaction = CommentReactionRecord & {
+  removedAt?: Date | null;
+};
 
 // 작성 규칙 확인에 필요한 최소 조회와 API 응답용 조회를 분리한다.
 export interface PostStateQueries {
@@ -54,6 +60,11 @@ export interface PostStateQueries {
     userId: number,
     type: StoredPostReactionType,
   ): Promise<StoredReaction | null>;
+  findCommentReaction(
+    commentId: string,
+    userId: number,
+    type: CommentReactionType,
+  ): Promise<StoredCommentReaction | null>;
   findParticipant(
     postId: string,
     userId: number,
@@ -61,7 +72,9 @@ export interface PostStateQueries {
 }
 
 export type PostDetail = PostRecord;
-export type CommentDetail = CommentRecord;
+export type CommentDetail = CommentRecord & {
+  reactionCounts: CommentReactionCounts;
+};
 export type CommentCursor = { createdAt: Date; id: string };
 
 export interface PostReadQueries {
@@ -101,6 +114,20 @@ export interface PostCommands {
   insertReaction(
     reaction: ReactionRecord & { bucketId: number },
   ): Promise<void>;
+  insertCommentReaction(reaction: CommentReactionRecord): Promise<void>;
+  reactivateCommentReaction(reaction: CommentReactionRecord): Promise<void>;
+  removeCommentReaction(
+    commentId: string,
+    userId: number,
+    type: CommentReactionType,
+    now: Date,
+  ): Promise<void>;
+  incrementCommentReaction(
+    postId: string,
+    commentId: string,
+    type: CommentReactionType,
+    delta: 1 | -1,
+  ): Promise<boolean>;
   insertParticipant(participant: ParticipantRecord): Promise<void>;
   rejoinParticipant(
     participant: ParticipantRecord,
@@ -140,7 +167,11 @@ export interface PostCommands {
   increment(
     postId: string,
     bucketId: number,
-    counter: 'commentCount' | 'reactionCount' | 'participantCount',
+    counter:
+      | 'commentCount'
+      | 'reactionCount'
+      | 'participantCount'
+      | 'commentReactionCount',
     delta?: number,
   ): Promise<void>;
   appendEvent(event: OutboxEvent): Promise<void>;

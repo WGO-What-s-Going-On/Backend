@@ -3,7 +3,7 @@ import {
   ForbiddenException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { PostReactionType } from '../domain/post.js';
+import { CommentReactionType, PostReactionType } from '../domain/post.js';
 import type { PostInput } from '../domain/post.js';
 
 type Body = Record<string, unknown>;
@@ -90,6 +90,20 @@ export function reactionType(value: string): PostReactionType {
   if (!Object.values(PostReactionType).includes(value as PostReactionType))
     throw new BadRequestException('Invalid reaction type');
   return value as PostReactionType;
+}
+
+export function commentReactionInput(raw: unknown): CommentReactionType {
+  const body = object(raw);
+  fields(body, ['type']);
+  return commentReactionType(body.type);
+}
+
+export function commentReactionType(value: unknown): CommentReactionType {
+  if (
+    !Object.values(CommentReactionType).includes(value as CommentReactionType)
+  )
+    throw new BadRequestException('Invalid comment reaction type');
+  return value as CommentReactionType;
 }
 
 export function participantInput(raw: unknown): void {

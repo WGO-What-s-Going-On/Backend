@@ -51,6 +51,36 @@ export interface CommentRecord {
   updatedAt: Date | null;
 }
 
+export enum CommentReactionType {
+  HELPFUL = 'HELPFUL',
+  AGREE = 'AGREE',
+  DIFFERENT = 'DIFFERENT',
+}
+
+export type CommentReactionCounts = Record<CommentReactionType, number>;
+
+export function emptyCommentReactionCounts(): CommentReactionCounts {
+  return { HELPFUL: 0, AGREE: 0, DIFFERENT: 0 };
+}
+
+export interface CommentReactionRecord {
+  postId: string;
+  commentId: string;
+  userId: number;
+  type: CommentReactionType;
+  createdAt: Date;
+}
+
+export function createCommentReaction(
+  postId: string,
+  commentId: string,
+  userId: number,
+  type: CommentReactionType,
+  now: Date,
+): CommentReactionRecord {
+  return { postId, commentId, userId, type, createdAt: now };
+}
+
 export enum PostReactionType {
   CURIOUS = 'CURIOUS',
   STILL_HAPPENING = 'STILL_HAPPENING',

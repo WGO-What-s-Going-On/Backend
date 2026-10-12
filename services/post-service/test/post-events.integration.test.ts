@@ -7,13 +7,17 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { LOCATION_AUTHORIZATION } from '../src/post/application/ports.js';
 import { PostLifecycle } from '../src/post/application/lifecycle.js';
-import { PostReactionType } from '../src/post/domain/post.js';
+import {
+  CommentReactionType,
+  PostReactionType,
+} from '../src/post/domain/post.js';
 import { ExpirationWorker } from '../src/post/infrastructure/expiration.worker.js';
 import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
 import { MongoosePostStore } from '../src/post/infrastructure/mongoose-post.store.js';
 import { OutboxRecovery } from '../src/post/infrastructure/outbox-recovery.js';
 import {
   CreateComment,
+  CreateCommentReaction,
   CreateReaction,
   JoinPost,
 } from '../src/post/application/commands.js';
@@ -229,6 +233,133 @@ suite('post activity event contracts', () => {
     ).toBe(0);
   });
 
+  it('keeps comment reactions independent and never emits a comment reaction event', async () => {
+    const id = await create();
+    const comment = await request(app.getHttpServer())
+      .post(`/api/v1/posts/${id}/comments`)
+      .set(actor)
+      .send({ content: '현장 상황' })
+      .expect(201);
+    const commentId = comment.body.commentId as string;
+    const path = `/api/v1/posts/${id}/comments/${commentId}/reactions`;
+    const beforeEvents = await outbox.countDocuments({ aggregateId: id });
+    for (const type of ['HELPFUL', 'AGREE', 'DIFFERENT']) {
+      const reaction = await request(app.getHttpServer())
+        .post(path)
+        .set(other)
+        .send({ type })
+        .expect(201);
+      expect(reaction.body).toMatchObject({
+        postId: id,
+        commentId,
+        userId: 456,
+        type,
+      });
+      await request(app.getHttpServer())
+        .post(path)
+        .set(other)
+        .send({ type })
+        .expect(201);
+    }
+    expect(
+      await db.model('CommentReaction').countDocuments({ commentId }),
+    ).toBe(3);
+    const page = await request(app.getHttpServer())
+      .get(`/api/v1/posts/${id}/comments`)
+      .expect(200);
+    expect(page.body.comments[0].reactionCounts).toEqual({
+      HELPFUL: 1,
+      AGREE: 1,
+      DIFFERENT: 1,
+    });
+    expect(await outbox.countDocuments({ aggregateId: id })).toBe(beforeEvents);
+
+    await request(app.getHttpServer())
+      .delete(`${path}/AGREE`)
+      .set(other)
+      .expect(204);
+    await request(app.getHttpServer())
+      .delete(`${path}/AGREE`)
+      .set(other)
+      .expect(204);
+    await request(app.getHttpServer())
+      .post(path)
+      .set(other)
+      .send({ type: 'AGREE' })
+      .expect(201);
+    expect(
+      (
+        await request(app.getHttpServer())
+          .get(`/api/v1/posts/${id}/comments`)
+          .expect(200)
+      ).body.comments[0].reactionCounts.AGREE,
+    ).toBe(1);
+    await request(app.getHttpServer())
+      .post(path)
+      .set(other)
+      .send({ type: 'LIKE' })
+      .expect(400);
+    await request(app.getHttpServer())
+      .delete(`${path}/LIKE`)
+      .set(other)
+      .expect(400);
+    expect(await outbox.countDocuments({ aggregateId: id })).toBe(beforeEvents);
+
+    await lifecycle.deleteComment(id, commentId, 123);
+    await request(app.getHttpServer())
+      .post(path)
+      .set(other)
+      .send({ type: 'HELPFUL' })
+      .expect(403);
+    await request(app.getHttpServer())
+      .delete(`${path}/HELPFUL`)
+      .set(other)
+      .expect(204);
+    const savedComment: any = await db
+      .model('Comment')
+      .findOne({ commentId })
+      .lean();
+    expect(savedComment.reactionCounts.HELPFUL).toBe(0);
+    expect(await outbox.countDocuments({ aggregateId: id })).toBe(
+      beforeEvents + 1,
+    );
+  });
+
+  it('counts concurrent duplicate comment reactions once', async () => {
+    const id = await create();
+    const commentId = (
+      await request(app.getHttpServer())
+        .post(`/api/v1/posts/${id}/comments`)
+        .set(actor)
+        .send({ content: '상황 공유' })
+        .expect(201)
+    ).body.commentId as string;
+    const path = `/api/v1/posts/${id}/comments/${commentId}/reactions`;
+    // 기존 댓글에는 reactionCounts가 없을 수 있다.
+    await db
+      .model('Comment')
+      .updateOne({ commentId }, { $unset: { reactionCounts: 1 } });
+    await Promise.all(
+      Array.from({ length: 3 }, () =>
+        request(app.getHttpServer())
+          .post(path)
+          .set(other)
+          .send({ type: 'HELPFUL' })
+          .expect(201),
+      ),
+    );
+    const page = await request(app.getHttpServer())
+      .get(`/api/v1/posts/${id}/comments`)
+      .expect(200);
+    expect(page.body.comments[0].reactionCounts.HELPFUL).toBe(1);
+    expect(
+      await db
+        .model('CommentReaction')
+        .countDocuments({ commentId, type: 'HELPFUL' }),
+    ).toBe(1);
+    expect(await outbox.countDocuments({ aggregateId: id })).toBe(2);
+  });
+
   it('authorizes comment deletion and emits no second event on retry', async () => {
     const id = await create();
     const result = await request(app.getHttpServer())
@@ -345,10 +476,20 @@ suite('post activity event contracts', () => {
     expect(await events(deletedId, 'PostExpired')).toHaveLength(0);
   });
 
-  it.each(['comment', 'reaction', 'participant'] as const)(
+  it.each(['comment', 'reaction', 'commentReaction', 'participant'] as const)(
     'rejects a %s using an ACTIVE snapshot after deletion commits',
     async (kind) => {
       const id = await create();
+      const commentId =
+        kind === 'commentReaction'
+          ? ((
+              await request(app.getHttpServer())
+                .post(`/api/v1/posts/${id}/comments`)
+                .set(actor)
+                .send({ content: '현장 확인' })
+                .expect(201)
+            ).body.commentId as string)
+          : null;
       const store = app.get(MongoosePostStore);
       let release!: () => void;
       let observed!: () => void;
@@ -385,15 +526,22 @@ suite('post activity event contracts', () => {
                 456,
                 PostReactionType.CURIOUS,
               )
-            : new JoinPost(
-                uow,
-                store,
-                {
-                  assertCanCreate: async () => {},
-                  assertCanJoin: async () => {},
-                },
-                partition,
-              ).execute(id, 456);
+            : kind === 'commentReaction'
+              ? new CreateCommentReaction(uow, store).execute(
+                  id,
+                  commentId!,
+                  456,
+                  CommentReactionType.HELPFUL,
+                )
+              : new JoinPost(
+                  uow,
+                  store,
+                  {
+                    assertCanCreate: async () => {},
+                    assertCanJoin: async () => {},
+                  },
+                  partition,
+                ).execute(id, 456);
       const rejected = expect(work).rejects.toThrow('Post is not active');
       await paused;
       try {
@@ -405,9 +553,19 @@ suite('post activity event contracts', () => {
       expect(
         await outbox.countDocuments({
           aggregateId: id,
-          eventType: { $nin: ['PostCreated', 'PostDeleted'] },
+          eventType: {
+            $nin: [
+              'PostCreated',
+              'PostDeleted',
+              ...(commentId ? ['PostCommentCreated'] : []),
+            ],
+          },
         }),
       ).toBe(0);
+      if (commentId)
+        expect(
+          await db.model('CommentReaction').countDocuments({ commentId }),
+        ).toBe(0);
     },
   );
 

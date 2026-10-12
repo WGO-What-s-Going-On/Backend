@@ -5,7 +5,10 @@ import {
   requireActive,
 } from '../domain/post.js';
 import { event } from './event.js';
-import type { StoredPostReactionType } from '../domain/post.js';
+import type {
+  CommentReactionType,
+  StoredPostReactionType,
+} from '../domain/post.js';
 import type { PartitionStrategy } from './partition.js';
 import type { PostTransaction, PostUnitOfWork } from './ports.js';
 
@@ -72,6 +75,38 @@ export class PostLifecycle {
           },
           now,
         ),
+      );
+    });
+  }
+
+  async removeCommentReaction(
+    postId: string,
+    commentId: string,
+    userId: number,
+    type: CommentReactionType,
+  ): Promise<void> {
+    await this.unitOfWork.execute(async (tx) => {
+      await existingPost(tx, postId);
+      const comment = await tx.queries.findComment(postId, commentId);
+      if (!comment) throw new PostNotFoundError('Comment not found');
+      const reaction = await tx.queries.findCommentReaction(
+        commentId,
+        userId,
+        type,
+      );
+      if (!reaction || reaction.removedAt) return;
+      await tx.commands.removeCommentReaction(
+        commentId,
+        userId,
+        type,
+        new Date(),
+      );
+      await tx.commands.incrementCommentReaction(postId, commentId, type, -1);
+      await tx.commands.increment(
+        postId,
+        comment.bucketId ?? 0,
+        'commentReactionCount',
+        -1,
       );
     });
   }

@@ -10,10 +10,13 @@ import type {
   OutboxEvent,
   StoredActivity,
   StoredReaction,
+  StoredCommentReaction,
 } from '../application/ports.js';
 import { UniqueConflictError } from '../application/errors.js';
 import type {
   CommentRecord,
+  CommentReactionRecord,
+  CommentReactionType,
   ParticipantRecord,
   PostRecord,
   PostState,
@@ -27,6 +30,7 @@ class MongoQueries implements PostStateQueries {
     private readonly posts: Model<any>,
     private readonly comments: Model<any>,
     private readonly reactions: Model<any>,
+    private readonly commentReactions: Model<any>,
     private readonly participants: Model<any>,
     private readonly session?: ClientSession,
   ) {}
@@ -105,6 +109,17 @@ class MongoQueries implements PostStateQueries {
       : null;
   }
 
+  async findCommentReaction(
+    commentId: string,
+    userId: number,
+    type: CommentReactionType,
+  ): Promise<StoredCommentReaction | null> {
+    return this.commentReactions
+      .findOne({ commentId, userId, type })
+      .session(this.session ?? null)
+      .lean() as Promise<StoredCommentReaction | null>;
+  }
+
   async findParticipant(
     postId: string,
     userId: number,
@@ -131,6 +146,7 @@ class MongoCommands implements PostCommands {
     private readonly posts: Model<any>,
     private readonly comments: Model<any>,
     private readonly reactions: Model<any>,
+    private readonly commentReactions: Model<any>,
     private readonly participants: Model<any>,
     private readonly outbox: Model<any>,
     private readonly counters: Model<any>,
@@ -143,9 +159,14 @@ class MongoCommands implements PostCommands {
       session: this.session,
     });
     const rows = Array.from({ length: this.bucketCount }, (_, bucketId) =>
-      (['commentCount', 'reactionCount', 'participantCount'] as const).map(
-        (metric) => ({ postId: post.postId, bucketId, metric, count: 0 }),
-      ),
+      (
+        [
+          'commentCount',
+          'reactionCount',
+          'participantCount',
+          'commentReactionCount',
+        ] as const
+      ).map((metric) => ({ postId: post.postId, bucketId, metric, count: 0 })),
     ).flat();
     await this.counters.create(rows, { session: this.session, ordered: true });
   }
@@ -164,6 +185,51 @@ class MongoCommands implements PostCommands {
     reaction: ReactionRecord & { bucketId: number },
   ): Promise<void> {
     await this.reactions.create([reaction], { session: this.session });
+  }
+
+  async insertCommentReaction(reaction: CommentReactionRecord): Promise<void> {
+    await this.commentReactions.create([reaction], { session: this.session });
+  }
+
+  async reactivateCommentReaction(
+    reaction: CommentReactionRecord,
+  ): Promise<void> {
+    await this.commentReactions.updateOne(
+      {
+        commentId: reaction.commentId,
+        userId: reaction.userId,
+        type: reaction.type,
+      },
+      { $set: { createdAt: reaction.createdAt, removedAt: null } },
+      { session: this.session },
+    );
+  }
+
+  async removeCommentReaction(
+    commentId: string,
+    userId: number,
+    type: CommentReactionType,
+    now: Date,
+  ): Promise<void> {
+    await this.commentReactions.updateOne(
+      { commentId, userId, type },
+      { $set: { removedAt: now } },
+      { session: this.session },
+    );
+  }
+
+  async incrementCommentReaction(
+    postId: string,
+    commentId: string,
+    type: CommentReactionType,
+    delta: 1 | -1,
+  ): Promise<boolean> {
+    const result = await this.comments.updateOne(
+      { postId, commentId, ...(delta === 1 ? { status: 'ACTIVE' } : {}) },
+      { $inc: { [`reactionCounts.${type}`]: delta } },
+      { session: this.session },
+    );
+    return result.matchedCount === 1;
   }
 
   async insertParticipant(participant: ParticipantRecord): Promise<void> {
@@ -275,6 +341,7 @@ class MongoCommands implements PostCommands {
       for (const metric of [
         'commentCount',
         'reactionCount',
+        'commentReactionCount',
         'participantCount',
       ]) {
         await this.counters.updateOne(
@@ -321,7 +388,11 @@ class MongoCommands implements PostCommands {
   async increment(
     postId: string,
     bucketId: number,
-    counter: 'commentCount' | 'reactionCount' | 'participantCount',
+    counter:
+      | 'commentCount'
+      | 'reactionCount'
+      | 'participantCount'
+      | 'commentReactionCount',
     delta = 1,
   ): Promise<void> {
     // 같은 트랜잭션에서 콘텐츠와 카운터를 기록하되 Post 문서에는 쓰지 않는다.
@@ -359,6 +430,8 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
     @InjectModel('Post') private readonly posts: Model<any>,
     @InjectModel('Comment') private readonly comments: Model<any>,
     @InjectModel('Reaction') private readonly reactions: Model<any>,
+    @InjectModel('CommentReaction')
+    private readonly commentReactions: Model<any>,
     @InjectModel('Participant') private readonly participants: Model<any>,
     @InjectModel('Outbox') private readonly outbox: Model<any>,
     @InjectModel('Counter') private readonly counters: Model<any>,
@@ -393,6 +466,14 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
     return this.queries().findReaction(postId, userId, type);
   }
 
+  findCommentReaction(
+    commentId: string,
+    userId: number,
+    type: CommentReactionType,
+  ): Promise<StoredCommentReaction | null> {
+    return this.queries().findCommentReaction(commentId, userId, type);
+  }
+
   findParticipant(
     postId: string,
     userId: number,
@@ -405,6 +486,7 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
       this.posts,
       this.comments,
       this.reactions,
+      this.commentReactions,
       this.participants,
       session,
     );
@@ -423,6 +505,7 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
               this.posts,
               this.comments,
               this.reactions,
+              this.commentReactions,
               this.participants,
               this.outbox,
               this.counters,

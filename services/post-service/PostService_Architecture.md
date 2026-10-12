@@ -1218,6 +1218,8 @@ PUBLISHED
 | GET | `/api/v1/posts/{postId}/comments` | 댓글 조회 |
 | POST | `/api/v1/posts/{postId}/comments` | 댓글 작성 |
 | DELETE | `/api/v1/posts/{postId}/comments/{commentId}` | 댓글 삭제 |
+| POST | `/api/v1/posts/{postId}/comments/{commentId}/reactions` | 댓글 공감 (`HELPFUL`, `AGREE`, `DIFFERENT`) |
+| DELETE | `/api/v1/posts/{postId}/comments/{commentId}/reactions/{type}` | 지정한 댓글 공감 취소 |
 | POST | `/api/v1/posts/{postId}/reactions` | 공감 (`CURIOUS`, `STILL_HAPPENING`, `HELPFUL`, `ENDED`) |
 | DELETE | `/api/v1/posts/{postId}/reactions/{type}` | 지정한 종류의 공감 취소 |
 | POST | `/api/v1/posts/{postId}/participants` | 게시판 참여 |

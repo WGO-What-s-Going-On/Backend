@@ -651,6 +651,11 @@ suite('post creation integration', () => {
         .expect(200);
       ids.push(...page.body.comments.map((comment: any) => comment.commentId));
       expect(page.body.comments[0]).not.toHaveProperty('bucketId');
+      expect(page.body.comments[0].reactionCounts).toEqual({
+        HELPFUL: 0,
+        AGREE: 0,
+        DIFFERENT: 0,
+      });
       cursor = page.body.nextCursor;
     } while (cursor);
     expect(ids).toEqual([

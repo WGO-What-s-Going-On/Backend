@@ -5,6 +5,7 @@ Notification·User Service 연동을 위한 확장안을 기록한다.
 
 **현재 계약**은 코드에서 실제 발행하는 9개 이벤트와 Post의 상태 변경·Outbox 복구다.
 **확장 제안**은 대댓글 등 선택 기능과 Notification·User의 후속 구현을 의미한다.
+댓글 공감 저장·조회·취소는 구현되어 있지만 댓글 공감 이벤트는 발행하지 않는다.
 Post는 소비자의 알림·경험치·칭호 처리를 구현하지 않는다.
 
 ## 1. 책임과 이벤트 흐름
@@ -347,7 +348,7 @@ Map에는 기한 예약 이벤트를 보내지 않으며, 실제 `PostExpired`�
 | 기능 | 이벤트·계약 제안 | 도입 조건 |
 | --- | --- | --- |
 | 대댓글 | `PostCommentCreated`에 부모 댓글 문맥 추가 | 답글 저장·조회·알림 기능 도입 시. 별도 생성 이벤트로 중복 발행하지 않음 |
-| 댓글 공감 | `PostCommentReactionCreated`, `PostCommentReactionRemoved` | `commentId`, 댓글 작성자, 공감 사용자·종류·상태 버전 필요 |
+| 댓글 공감 이벤트 | `PostCommentReactionCreated`, `PostCommentReactionRemoved` | 현재 이벤트 미발행. 도입 시 `commentId`, 댓글 작성자, 공감 사용자·종류·상태 버전 계약 필요 |
 | 수정 | `PostUpdated`, `PostCommentUpdated` | 변경 대상 ID, 작성자, 변경 시각·버전 및 소비자에게 필요한 변경 값. 단순 수정에 반복 경험치 지급은 비추천 |
 | 숨김·복구 | `PostHidden`, `PostRestored`, 필요 시 댓글 대응 이벤트 | 상태 모델 및 Moderation 연동 확정 후. 현재 Post 상태에는 HIDDEN이 없음 |
 | 멘션 | 댓글의 멘션 대상 필드 또는 별도 멘션 이벤트 | 수정으로 추가·제거되는 멘션까지 알릴지 결정 후 계약 확정 |

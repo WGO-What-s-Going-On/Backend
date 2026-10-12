@@ -96,6 +96,13 @@ curl -X POST http://localhost:3002/api/v1/posts \
 공감 종류는 `CURIOUS`(👀 저도 궁금해요), `STILL_HAPPENING`(✅ 지금도 그래요),
 `HELPFUL`(🙌 도움됐어요), `ENDED`(🏁 이제 끝났어요)다. 한 사용자가 종류별로 하나씩
 누를 수 있으며 생성·취소 이벤트의 `reaction.type`에 종류가 포함된다.
+
+댓글에는 `POST /api/v1/posts/{postId}/comments/{commentId}/reactions`로
+`{"type":"HELPFUL"}`(👍 도움돼요), `AGREE`(✅ 맞아요), `DIFFERENT`(⚠️ 정보가 달라요)를
+누를 수 있다. 같은 사용자는 댓글당 종류별로 하나씩 누를 수 있으며,
+`DELETE /api/v1/posts/{postId}/comments/{commentId}/reactions/{type}`으로 취소한다.
+댓글 목록에는 `reactionCounts`로 세 종류의 현재 수가 제공된다. 댓글 공감의
+생성·취소 이벤트는 아직 발행하지 않는다.
 새 게시물의 `expiresAt`은 `null`이며 Moderation 연동 후 설정된다. Redis Stream은
 `docker compose exec redis redis-cli XRANGE post:events - +`로 확인한다.
 

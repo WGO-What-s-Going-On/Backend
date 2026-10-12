@@ -6,6 +6,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { InternalPostController, PostController } from './post.controller.js';
 import {
   CreateComment,
+  CreateCommentReaction,
   CreatePost,
   CreateReaction,
   JoinPost,
@@ -33,6 +34,7 @@ import { MongoosePostRead } from './infrastructure/mongoose-post.read.js';
 import { MongoosePostStore } from './infrastructure/mongoose-post.store.js';
 import {
   CommentSchema,
+  CommentReactionSchema,
   CounterSchema,
   OutboxSchema,
   ParticipantSchema,
@@ -47,6 +49,11 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
     MongooseModule.forFeature([
       { name: 'Post', schema: PostSchema, collection: 'posts' },
       { name: 'Comment', schema: CommentSchema, collection: 'post_comments' },
+      {
+        name: 'CommentReaction',
+        schema: CommentReactionSchema,
+        collection: 'post_comment_reactions',
+      },
       { name: 'Counter', schema: CounterSchema, collection: 'post_counters' },
       {
         name: 'Reaction',
@@ -94,6 +101,12 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
         partition: PartitionStrategy,
       ) => new CreateComment(unitOfWork, queries, partition),
       inject: [POST_UNIT_OF_WORK, POST_STATE_QUERIES, PARTITION_STRATEGY],
+    },
+    {
+      provide: CreateCommentReaction,
+      useFactory: (unitOfWork: PostUnitOfWork, queries: PostStateQueries) =>
+        new CreateCommentReaction(unitOfWork, queries),
+      inject: [POST_UNIT_OF_WORK, POST_STATE_QUERIES],
     },
     {
       provide: CreateReaction,

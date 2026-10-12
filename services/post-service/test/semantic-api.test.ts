@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostController } from '../src/post/post.controller.js';
 import {
   CreateComment,
+  CreateCommentReaction,
   CreatePost,
   CreateReaction,
   JoinPost,
@@ -40,6 +41,7 @@ describe('similar HTTP contract', () => {
           PostLifecycle,
           CreatePost,
           CreateComment,
+          CreateCommentReaction,
           CreateReaction,
           JoinPost,
           ReadPosts,

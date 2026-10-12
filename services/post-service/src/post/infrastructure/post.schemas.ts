@@ -1,5 +1,5 @@
 import { Schema } from 'mongoose';
-import { PostReactionType } from '../domain/post.js';
+import { CommentReactionType, PostReactionType } from '../domain/post.js';
 
 const options = { versionKey: false, strict: true } as const;
 
@@ -42,6 +42,11 @@ export const CommentSchema = new Schema(
     deletedAt: { type: Date, default: null },
     content: { type: String, required: true },
     status: { type: String, required: true },
+    reactionCounts: {
+      HELPFUL: { type: Number, default: 0 },
+      AGREE: { type: Number, default: 0 },
+      DIFFERENT: { type: Number, default: 0 },
+    },
     createdAt: { type: Date, required: true },
     updatedAt: { type: Date, default: null },
   },
@@ -75,6 +80,26 @@ export const ReactionSchema = new Schema(
   options,
 );
 ReactionSchema.index({ postId: 1, userId: 1, type: 1 }, { unique: true });
+
+export const CommentReactionSchema = new Schema(
+  {
+    postId: { type: String, required: true },
+    commentId: { type: String, required: true },
+    userId: { type: Number, required: true },
+    type: {
+      type: String,
+      required: true,
+      enum: Object.values(CommentReactionType),
+    },
+    createdAt: { type: Date, required: true },
+    removedAt: { type: Date, default: null },
+  },
+  options,
+);
+CommentReactionSchema.index(
+  { commentId: 1, userId: 1, type: 1 },
+  { unique: true },
+);
 
 export const CounterSchema = new Schema(
   {

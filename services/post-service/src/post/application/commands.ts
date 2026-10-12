@@ -1,15 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import {
   createComment,
+  createCommentReaction,
   createPost,
   createReaction,
   PostReactionType,
   joinParticipant,
+  PostInactiveError,
+  PostNotFoundError,
   requireActive,
 } from '../domain/post.js';
 import type {
   PostInput,
   CommentRecord,
+  CommentReactionRecord,
+  CommentReactionType,
   PostRecord,
   ReactionRecord,
   ParticipantRecord,
@@ -229,6 +234,85 @@ export class CreateReaction {
             postId: existing.postId,
             userId: existing.userId,
             type: existing.type,
+            createdAt: existing.createdAt,
+          };
+      }
+      throw error;
+    }
+  }
+}
+
+export class CreateCommentReaction {
+  constructor(
+    private readonly unitOfWork: PostUnitOfWork,
+    private readonly queries: PostStateQueries,
+  ) {}
+
+  async execute(
+    postId: string,
+    commentId: string,
+    userId: number,
+    type: CommentReactionType,
+  ): Promise<CommentReactionRecord> {
+    const reaction = createCommentReaction(
+      postId,
+      commentId,
+      userId,
+      type,
+      new Date(),
+    );
+    try {
+      return await this.unitOfWork.execute(async (tx) => {
+        await active(tx, postId);
+        const comment = await tx.queries.findComment(postId, commentId);
+        if (!comment) throw new PostNotFoundError('Comment not found');
+        if (comment.status !== 'ACTIVE')
+          throw new PostInactiveError('Comment is not active');
+        const existing = await tx.queries.findCommentReaction(
+          commentId,
+          userId,
+          type,
+        );
+        if (existing && !existing.removedAt)
+          return {
+            postId,
+            commentId,
+            userId,
+            type,
+            createdAt: existing.createdAt,
+          };
+        if (existing) await tx.commands.reactivateCommentReaction(reaction);
+        else await tx.commands.insertCommentReaction(reaction);
+        // 댓글 문서 쓰기는 댓글 삭제와 충돌하고, bucket 쓰기는 게시물 종료와 충돌한다.
+        if (
+          !(await tx.commands.incrementCommentReaction(
+            postId,
+            commentId,
+            type,
+            1,
+          ))
+        )
+          throw new PostInactiveError('Comment is not active');
+        await tx.commands.increment(
+          postId,
+          comment.bucketId ?? 0,
+          'commentReactionCount',
+        );
+        return reaction;
+      });
+    } catch (error) {
+      if (error instanceof UniqueConflictError) {
+        const existing = await this.queries.findCommentReaction(
+          commentId,
+          userId,
+          type,
+        );
+        if (existing && !existing.removedAt)
+          return {
+            postId,
+            commentId,
+            userId,
+            type,
             createdAt: existing.createdAt,
           };
       }
