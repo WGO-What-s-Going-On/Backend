@@ -1,8 +1,20 @@
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Optional,
+} from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 
-import type { CreateNotificationInput, Notification, NotificationPage } from './notification.js';
-import { NOTIFICATION_REPOSITORY, type NotificationRepository } from './notification.repository.js';
+import type {
+  CreateNotificationInput,
+  Notification,
+  NotificationPage,
+} from './notification.js';
+import {
+  NOTIFICATION_REPOSITORY,
+  type NotificationRepository,
+} from './notification.repository.js';
 import { NotificationState } from '../redis/notification-state.js';
 
 const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
@@ -15,8 +27,13 @@ export class NotificationService {
     @Optional() private readonly state?: NotificationState,
   ) {}
 
-  async create(input: CreateNotificationInput, now = new Date(), notificationId?: string): Promise<Notification | null> {
-    if (input.actorId !== undefined && input.actorId === input.userId) return null;
+  async create(
+    input: CreateNotificationInput,
+    now = new Date(),
+    notificationId?: string,
+  ): Promise<Notification | null> {
+    if (input.actorId !== undefined && input.actorId === input.userId)
+      return null;
     const createdAt = now.toISOString();
     const notification: Notification = {
       notificationId: notificationId ?? `${createdAt}_${randomUUID()}`,
@@ -39,11 +56,15 @@ export class NotificationService {
   }
 
   list(userId: string, limit = 20, cursor?: string): Promise<NotificationPage> {
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit must be between 1 and 100');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+      throw new BadRequestException('limit must be between 1 and 100');
     return this.repository.list(userId, limit, cursor);
   }
 
-  async markRead(userId: string, notificationId: string): Promise<Notification | null> {
+  async markRead(
+    userId: string,
+    notificationId: string,
+  ): Promise<Notification | null> {
     const notification = await this.repository.markRead(userId, notificationId);
     if (notification) await this.state?.decrementUnread(userId);
     return notification;

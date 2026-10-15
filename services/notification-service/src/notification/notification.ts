@@ -12,6 +12,7 @@ export interface Notification {
   isRead: boolean;
   createdAt: string;
   expiresAt: number;
+  commentId?: string;
 }
 
 export interface CreateNotificationInput {

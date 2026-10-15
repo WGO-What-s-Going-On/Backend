@@ -57,13 +57,20 @@ try {
     }
     console.info(`Local table ready: ${TableName}`);
   }
-  const ttl = await client.send(new DescribeTimeToLiveCommand({ TableName: notifications }));
-  if (!['ENABLED', 'ENABLING'].includes(ttl.TimeToLiveDescription?.TimeToLiveStatus ?? '')) await client.send(
-    new UpdateTimeToLiveCommand({
-      TableName: notifications,
-      TimeToLiveSpecification: { AttributeName: 'expiresAt', Enabled: true },
-    }),
+  const ttl = await client.send(
+    new DescribeTimeToLiveCommand({ TableName: notifications }),
   );
+  if (
+    !['ENABLED', 'ENABLING'].includes(
+      ttl.TimeToLiveDescription?.TimeToLiveStatus ?? '',
+    )
+  )
+    await client.send(
+      new UpdateTimeToLiveCommand({
+        TableName: notifications,
+        TimeToLiveSpecification: { AttributeName: 'expiresAt', Enabled: true },
+      }),
+    );
 } finally {
   client.destroy();
 }

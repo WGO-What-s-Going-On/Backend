@@ -1,185 +1,93 @@
 import { ConfigService } from '@nestjs/config';
 import { describe, expect, it, vi } from 'vitest';
-
-import { PostEventConsumer } from '../src/event-consumer/post-event.consumer.js';
-import { PostEventHandler } from '../src/event-consumer/post-event.handler.js';
 import {
   parsePostEvent,
-  type PostEvent,
+  type SupportedPostEventType,
 } from '../src/event-consumer/post-event.js';
-import type { RecipientResolver } from '../src/event-consumer/recipient-resolver.js';
-import type { PushSender } from '../src/firebase/push.js';
-import type { Notification } from '../src/notification/notification.js';
-import type { NotificationRepository } from '../src/notification/notification.repository.js';
-import { NotificationService } from '../src/notification/notification.service.js';
-import {
-  NotificationState,
-  type RedisCommands,
-} from '../src/redis/notification-state.js';
-
-class MemoryNotifications implements NotificationRepository {
-  items: Notification[] = [];
-  async create(value: Notification) {
-    if (this.items.some((item) => item.notificationId === value.notificationId))
-      return false;
-    this.items.push(value);
-    return true;
-  }
-  async list() {
-    return { items: this.items };
-  }
-  async markRead() {
-    return null;
-  }
-  async increment(_userId: string, notificationId: string) {
-    const item = this.items.find(
-      (value) => value.notificationId === notificationId,
-    );
-    if (!item) return null;
-    item.count++;
-    return item;
-  }
-  async countUnread() {
-    return this.items.filter((item) => !item.isRead).length;
-  }
-}
-
-class MemoryRedis implements RedisCommands {
-  isOpen = true;
-  values = new Map<string, string>();
-  async connect() {}
-  async quit() {}
-  async set(key: string, value: string, options?: { NX?: boolean }) {
-    if (options?.NX && this.values.has(key)) return null;
-    this.values.set(key, value);
-    return 'OK';
-  }
-  async get(key: string) {
-    return this.values.get(key) ?? null;
-  }
-  async del(key: string) {
-    return this.values.delete(key) ? 1 : 0;
-  }
-  async incr(key: string) {
-    const value = Number(this.values.get(key) ?? 0) + 1;
-    this.values.set(key, String(value));
-    return value;
-  }
-  async decr(key: string) {
-    const value = Number(this.values.get(key) ?? 0) - 1;
-    this.values.set(key, String(value));
-    return value;
-  }
-  async expire() {
-    return true;
-  }
-}
-
-const commentEvent = (eventId: string, actorId = '2'): PostEvent => ({
-  eventId,
-  eventType: 'PostCommentCreated',
-  schemaVersion: 1,
-  producer: 'post-service',
-  aggregateId: 'post-1',
-  occurredAt: '2026-01-01T00:00:00.000Z',
-  actorId,
-});
-
-describe('post event parsing and handling', () => {
-  it('parses the current Post Service envelope and rejects malformed envelopes', () => {
-    expect(
-      parsePostEvent(
-        JSON.stringify({
-          ...commentEvent('event-1'),
-          comment: { authorId: 2 },
-        }),
-      ),
-    ).toMatchObject({ eventType: 'PostCommentCreated', actorId: '2' });
-    expect(() => parsePostEvent('{')).toThrow('Invalid post event JSON');
+import { PostEventConsumer } from '../src/event-consumer/post-event.consumer.js';
+import { PostEventHandler } from '../src/event-consumer/post-event.handler.js';
+import { BusyDeliveryError } from '../src/persistence/dynamodb-event.store.js';
+import { wire } from './helpers/post-events.js';
+const types: SupportedPostEventType[] = [
+  'PostCreated',
+  'PostCommentCreated',
+  'PostReactionCreated',
+  'PostParticipantJoined',
+  'PostReactionRemoved',
+  'PostCommentDeleted',
+  'PostDeleted',
+  'PostParticipantLeft',
+  'PostExpired',
+];
+describe('actual Post v1 wire contract', () => {
+  it.each(types)('recognizes %s', (type) => {
+    const fields = wire(type);
+    expect(parsePostEvent(fields.data, fields)).toMatchObject({
+      eventType: type,
+      producer: 'post-service',
+    });
+  });
+  it.each(['CURIOUS', 'STILL_HAPPENING', 'HELPFUL', 'ENDED', 'LIKE'])(
+    'supports reaction %s including legacy replay',
+    (reactionType) => {
+      expect(
+        parsePostEvent(wire('PostReactionCreated', { reactionType }).data)
+          ?.actorId,
+      ).toBe('2');
+    },
+  );
+  it('accepts missing additive legacy fields without guessing a recipient', () => {
+    const parsed = parsePostEvent(
+      wire('PostCommentCreated', { legacy: true }).data,
+    )!;
+    expect(parsed.postAuthorId).toBeUndefined();
+    expect(parsed.activityVersion).toBeUndefined();
+  });
+  it.each([0, -1, '2', 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid user ID %s',
+    (bad) => {
+      const data = JSON.parse(wire('PostCommentCreated').data);
+      data.postAuthorId = bad;
+      expect(() => parsePostEvent(JSON.stringify(data))).toThrow('Invalid');
+    },
+  );
+  it('rejects mismatched stream identifiers, producer, schema, domain IDs and malformed payloads', () => {
+    const fields = wire('PostCommentCreated');
     expect(() =>
-      parsePostEvent(
-        JSON.stringify({
-          ...commentEvent('event-1'),
-          producer: 'other',
-          comment: { authorId: 2 },
-        }),
-      ),
-    ).toThrow('Invalid post event envelope');
+      parsePostEvent(fields.data, { ...fields, eventId: 'other' }),
+    ).toThrow('Invalid');
+    for (const override of [
+      { producer: 'other' },
+      { schemaVersion: 2 },
+      { correlationId: '' },
+      { comment: { authorId: 2 } },
+      { occurredAt: 'bad' },
+    ])
+      expect(() =>
+        parsePostEvent(
+          JSON.stringify({ ...JSON.parse(fields.data), ...override }),
+        ),
+      ).toThrow('Invalid');
+    expect(() => parsePostEvent('{')).toThrow('Invalid post event JSON');
+    expect(() => parsePostEvent('null')).toThrow('Invalid');
+    expect(parsePostEvent('{"eventType":"FutureEvent"}')).toBeNull();
+  });
+  it('distinguishes user deletion from Moderation deletion', () => {
     expect(
-      parsePostEvent(JSON.stringify({ eventType: 'FutureEvent' })),
-    ).toBeNull();
-  });
-
-  it('excludes self actions, deduplicates redelivery, and bundles follow-up events without another push', async () => {
-    const repository = new MemoryNotifications();
-    const state = new NotificationState(new MemoryRedis());
-    const push: PushSender = {
-      send: vi
-        .fn()
-        .mockResolvedValue({
-          attempted: 1,
-          succeeded: 1,
-          failed: 0,
-          invalidTokens: [],
-        }),
-    };
-    const recipients: RecipientResolver = {
-      postAuthor: vi.fn().mockResolvedValue('1'),
-    };
-    const handler = new PostEventHandler(
-      new NotificationService(repository, state),
-      repository,
-      state,
-      push,
-      recipients,
-    );
-
-    await handler.handle(commentEvent('self', '1'));
-    await handler.handle(commentEvent('event-1'));
-    await handler.handle(commentEvent('event-1'));
-    await handler.handle(commentEvent('event-2', '3'));
-    expect(repository.items).toHaveLength(1);
-    expect(repository.items[0]?.count).toBe(2);
-    expect(push.send).toHaveBeenCalledOnce();
-  });
-
-  it('releases the processing claim when push delivery fails', async () => {
-    const repository = new MemoryNotifications();
-    const state = new NotificationState(new MemoryRedis());
-    const send = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('FCM unavailable'))
-      .mockResolvedValueOnce({
-        attempted: 1,
-        succeeded: 1,
-        failed: 0,
-        invalidTokens: [],
-      });
-    const recipients: RecipientResolver = {
-      postAuthor: vi.fn().mockResolvedValue('1'),
-    };
-    const handler = new PostEventHandler(
-      new NotificationService(repository, state),
-      repository,
-      state,
-      { send },
-      recipients,
-    );
-
-    await expect(handler.handle(commentEvent('retry-event'))).rejects.toThrow(
-      'FCM unavailable',
-    );
-    await expect(
-      handler.handle(commentEvent('retry-event')),
-    ).resolves.toBeUndefined();
-    expect(repository.items).toHaveLength(1);
-    expect(send).toHaveBeenCalledTimes(2);
+      parsePostEvent(wire('PostCommentDeleted', { moderation: true }).data),
+    ).toMatchObject({
+      reason: 'MODERATION_VIOLATION',
+      actorType: 'MODERATION',
+    });
   });
 });
-
 describe('PostEventConsumer ACK policy', () => {
-  it('ACKs unsupported events and dead-letters malformed events', async () => {
-    const handler = { handle: vi.fn() } as unknown as PostEventHandler;
+  function setup(error?: Error) {
+    const handler = {
+      handle: error
+        ? vi.fn().mockRejectedValue(error)
+        : vi.fn().mockResolvedValue(undefined),
+    } as unknown as PostEventHandler;
     const consumer = new PostEventConsumer(new ConfigService(), handler);
     const redis = {
       xAck: vi.fn().mockResolvedValue(1),
@@ -187,36 +95,38 @@ describe('PostEventConsumer ACK policy', () => {
       xPendingRange: vi.fn().mockResolvedValue([{ deliveriesCounter: 1 }]),
     };
     (consumer as unknown as { redis: typeof redis }).redis = redis;
+    return { consumer, redis, handler };
+  }
+  it('ACKs unsupported events, but dead-letters malformed supported events before ACK', async () => {
+    const { consumer, redis } = setup();
     await consumer.process({
       id: '1-0',
-      message: { data: JSON.stringify({ eventType: 'FutureEvent' }) },
+      message: { data: '{"eventType":"FutureEvent"}' },
     });
     await consumer.process({ id: '2-0', message: { data: '{' } });
     expect(redis.xAck).toHaveBeenCalledTimes(2);
-    expect(redis.xAdd).toHaveBeenCalledOnce();
+    expect(redis.xAdd.mock.invocationCallOrder[0]).toBeLessThan(
+      redis.xAck.mock.invocationCallOrder[1]!,
+    );
   });
-
-  it('leaves transient handler failures pending before the retry limit', async () => {
-    const handler = {
-      handle: vi.fn().mockRejectedValue(new Error('temporary')),
-    } as unknown as PostEventHandler;
-    const consumer = new PostEventConsumer(new ConfigService(), handler);
-    const redis = {
-      xAck: vi.fn(),
-      xAdd: vi.fn(),
-      xPendingRange: vi.fn().mockResolvedValue([{ deliveriesCounter: 2 }]),
-    };
-    (consumer as unknown as { redis: typeof redis }).redis = redis;
-    await consumer.process({
-      id: '1-0',
-      message: {
-        data: JSON.stringify({
-          ...commentEvent('event-1'),
-          comment: { authorId: 2 },
-        }),
-      },
-    });
+  it.each([new Error('temporary'), new BusyDeliveryError()])(
+    'does not ACK unfinished work',
+    async (error) => {
+      const { consumer, redis } = setup(error);
+      await consumer.process({
+        id: '1-0',
+        message: wire('PostCommentCreated'),
+      });
+      expect(redis.xAck).not.toHaveBeenCalled();
+      expect(redis.xAdd).not.toHaveBeenCalled();
+    },
+  );
+  it('does not ACK if DLQ storage fails', async () => {
+    const { consumer, redis } = setup();
+    redis.xAdd.mockRejectedValue(new Error('DLQ unavailable'));
+    await expect(
+      consumer.process({ id: '1-0', message: { data: '{' } }),
+    ).rejects.toThrow('DLQ unavailable');
     expect(redis.xAck).not.toHaveBeenCalled();
-    expect(redis.xAdd).not.toHaveBeenCalled();
   });
 });

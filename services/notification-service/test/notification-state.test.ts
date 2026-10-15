@@ -43,9 +43,11 @@ class MemoryRedis implements RedisCommands {
 describe('NotificationState', () => {
   it('claims an event once per recipient', async () => {
     const state = new NotificationState(new MemoryRedis());
-    await expect(state.claim('event-1', 'user-1')).resolves.toBe(true);
-    await expect(state.claim('event-1', 'user-1')).resolves.toBe(false);
-    await expect(state.claim('event-1', 'user-2')).resolves.toBe(true);
+    await expect(state.claim('event-1', 'user-1')).resolves.toBe('acquired');
+    await expect(state.claim('event-1', 'user-1')).resolves.toBe('busy');
+    await expect(state.claim('event-1', 'user-2')).resolves.toBe('acquired');
+    await state.complete('event-1', 'user-1');
+    await expect(state.claim('event-1', 'user-1')).resolves.toBe('done');
   });
 
   it('loads and caches unread count, then updates the cache', async () => {
@@ -55,7 +57,7 @@ describe('NotificationState', () => {
     await expect(state.unread('user-1', load)).resolves.toBe(1);
     await state.incrementUnread('user-1');
     await expect(state.unread('user-1', load)).resolves.toBe(2);
-    expect(loads).toBe(1);
+    expect(loads).toBe(2);
   });
 
   it('reserves one notification for concurrent events in a bundle window', async () => {

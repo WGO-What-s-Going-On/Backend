@@ -26,19 +26,26 @@ export class NotificationState implements OnModuleDestroy {
   constructor(private readonly redis: RedisCommands) {}
 
   static fromUrl(url: string): NotificationState {
-    const client = createClient({ url });
+    const client = createClient({
+      url,
+      disableOfflineQueue: true,
+      socket: { reconnectStrategy: false, connectTimeout: 1000 },
+    });
     client.on('error', () => undefined);
     return new NotificationState(client as unknown as RedisCommands);
   }
 
-  async claim(eventId: string, userId: string): Promise<boolean> {
+  async claim(
+    eventId: string,
+    userId: string,
+  ): Promise<'done' | 'acquired' | 'busy'> {
     const key = this.dedupKey(eventId, userId);
-    if ((await this.run((redis) => redis.get(key))) === 'done') return false;
-    return (
-      (await this.run((redis) =>
-        redis.set(key, 'processing', { NX: true, EX: 30 }),
-      )) === 'OK'
-    );
+    if ((await this.run((redis) => redis.get(key))) === 'done') return 'done';
+    return (await this.run((redis) =>
+      redis.set(key, 'processing', { NX: true, EX: 30 }),
+    )) === 'OK'
+      ? 'acquired'
+      : 'busy';
   }
 
   async complete(eventId: string, userId: string): Promise<void> {
@@ -54,15 +61,7 @@ export class NotificationState implements OnModuleDestroy {
   }
 
   async unread(userId: string, load: () => Promise<number>): Promise<number> {
-    try {
-      const cached = await this.run((redis) =>
-        redis.get(`notification:unread:${userId}`),
-      );
-      if (cached !== null && Number.isInteger(Number(cached)))
-        return Number(cached);
-    } catch {
-      // DynamoDB remains the source of truth when the cache is unavailable.
-    }
+    // DB commit 후 cache 무효화 전에 죽어도 정확하도록 원본으로 검증한 snapshot만 반환한다.
     const count = await load();
     try {
       await this.run((redis) =>
@@ -75,23 +74,16 @@ export class NotificationState implements OnModuleDestroy {
   }
 
   async incrementUnread(userId: string): Promise<void> {
-    try {
-      await this.run(async (redis) => {
-        await redis.incr(`notification:unread:${userId}`);
-        await redis.expire(`notification:unread:${userId}`, UNREAD_TTL_SECONDS);
-      });
-    } catch {}
+    await this.invalidateUnread(userId);
   }
 
   async decrementUnread(userId: string): Promise<void> {
+    await this.invalidateUnread(userId);
+  }
+
+  async invalidateUnread(userId: string): Promise<void> {
     try {
-      await this.run(async (redis) => {
-        const value = await redis.decr(`notification:unread:${userId}`);
-        if (value < 0)
-          await redis.set(`notification:unread:${userId}`, '0', {
-            EX: UNREAD_TTL_SECONDS,
-          });
-      });
+      await this.run((redis) => redis.del(`notification:unread:${userId}`));
     } catch {}
   }
 
