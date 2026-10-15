@@ -1,6 +1,7 @@
 import {
   CreateTableCommand,
   DescribeTableCommand,
+  DescribeTimeToLiveCommand,
   DynamoDBClient,
   UpdateTimeToLiveCommand,
   waitUntilTableExists,
@@ -56,7 +57,8 @@ try {
     }
     console.info(`Local table ready: ${TableName}`);
   }
-  await client.send(
+  const ttl = await client.send(new DescribeTimeToLiveCommand({ TableName: notifications }));
+  if (!['ENABLED', 'ENABLING'].includes(ttl.TimeToLiveDescription?.TimeToLiveStatus ?? '')) await client.send(
     new UpdateTimeToLiveCommand({
       TableName: notifications,
       TimeToLiveSpecification: { AttributeName: 'expiresAt', Enabled: true },
