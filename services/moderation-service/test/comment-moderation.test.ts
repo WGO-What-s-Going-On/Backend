@@ -69,6 +69,27 @@ describe('CommentModerationService', () => {
     await service.moderate(input);
     expect(moderate).toHaveBeenCalledOnce();
   });
+
+  it('does not persist provider failures as successful decisions', async () => {
+    const repository = new MemoryResults();
+    const service = new CommentModerationService(
+      {
+        moderate: vi
+          .fn()
+          .mockRejectedValue(new ModerationProviderError('timeout', true)),
+      },
+      repository,
+    );
+    await expect(
+      service.moderate({
+        eventId: 'failed',
+        postId: 'post_1',
+        commentId: 'comment_1',
+        content: 'hello',
+      }),
+    ).rejects.toThrow('timeout');
+    expect(await repository.find('failed')).toBeNull();
+  });
 });
 
 describe('OpenAiModerationAdapter', () => {
@@ -89,10 +110,26 @@ describe('OpenAiModerationAdapter', () => {
     await expect(adapter.moderate('content')).resolves.toMatchObject({
       flagged: true,
       model: 'omni-moderation-latest',
+      categories: { violence: true },
+      categoryScores: { violence: 0.9 },
     });
     expect(create).toHaveBeenCalledWith({
       model: 'omni-moderation-latest',
       input: 'content',
+    });
+  });
+
+  it('rejects empty moderation results instead of saving a safe decision', async () => {
+    const adapter = new OpenAiModerationAdapter(new ConfigService(), {
+      moderations: {
+        create: vi
+          .fn()
+          .mockResolvedValue({ model: 'omni-moderation-latest', results: [] }),
+      },
+    } as unknown as OpenAI);
+    await expect(adapter.moderate('content')).rejects.toMatchObject({
+      retryable: false,
+      message: 'OpenAI returned no moderation result',
     });
   });
 
