@@ -14,6 +14,19 @@ function fields(eventType: string, extra: Record<string, unknown> = {}) {
     producer: 'post-service',
     correlationId: 'req_1',
     occurredAt: '2026-01-01T00:00:00.000Z',
+    ...(eventType === 'PostReactionCreated'
+      ? {
+          reaction: {
+            postId: 'post_1',
+            userId: 1,
+            type: 'ENDED',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        }
+      : {}),
+    ...(eventType === 'PostParticipantJoined'
+      ? { participant: { postId: 'post_1', userId: 1 } }
+      : {}),
     ...extra,
   };
   return { eventId: event.eventId, eventType, data: JSON.stringify(event) };
@@ -33,6 +46,18 @@ function setup(process = vi.fn().mockResolvedValue(undefined)) {
       },
     ),
     del: vi.fn(async (key: string) => (values.delete(key) ? 1 : 0)),
+    eval: vi.fn(
+      async (
+        script: string,
+        options: { keys: string[]; arguments: string[] },
+      ) => {
+        const key = options.keys[0]!;
+        if (values.get(key) !== options.arguments[0]) return 0;
+        if (script.includes("'done'")) values.set(key, 'done');
+        else if (script.includes("'DEL'")) values.delete(key);
+        return 1;
+      },
+    ),
     xAck: vi.fn().mockResolvedValue(1),
     xAdd: vi.fn().mockResolvedValue('9-0'),
     xPendingRange: vi.fn().mockResolvedValue([{ deliveriesCounter: 1 }]),
@@ -49,6 +74,51 @@ function setup(process = vi.fn().mockResolvedValue(undefined)) {
 }
 
 describe('Post event contract', () => {
+  it.each([
+    { occurredAt: 'not-a-date', post: { postId: 'post_1' } },
+    { post: { postId: 'different' } },
+    { activityVersion: 0, post: { postId: 'post_1' } },
+  ])('rejects invalid timestamps, aggregate IDs and versions: %j', (extra) => {
+    expect(() => parsePostEvent(fields('PostCreated', extra))).toThrow(
+      'Invalid',
+    );
+  });
+  it.each(['', ' '.repeat(5), 'x'.repeat(2001)])(
+    'rejects invalid comment content before API processing',
+    (content) => {
+      expect(() =>
+        parsePostEvent(
+          fields('PostCommentCreated', {
+            comment: {
+              postId: 'post_1',
+              commentId: 'comment_1',
+              authorId: 1,
+              content,
+            },
+          }),
+        ),
+      ).toThrow('Invalid');
+    },
+  );
+  it('rejects nested payload and missing removal version without interpreting schemaVersion as a state version', () => {
+    expect(() =>
+      parsePostEvent(
+        fields('PostReactionRemoved', { payload: { reaction: {} } }),
+      ),
+    ).toThrow('Invalid');
+    expect(() =>
+      parsePostEvent(
+        fields('PostReactionCreated', {
+          reaction: {
+            postId: 'post_1',
+            userId: 1,
+            type: 'UNKNOWN',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        }),
+      ),
+    ).toThrow('Invalid');
+  });
   it('parses current PostCreated and PostCommentCreated payloads', () => {
     expect(
       parsePostEvent(fields('PostCreated', { post: { postId: 'post_1' } })),
@@ -115,7 +185,10 @@ describe('PostEventConsumer', () => {
       message: fields('PostCreated', { post: { postId: 'post_1' } }),
     });
     expect(redis.xAck).not.toHaveBeenCalled();
-    expect(redis.del).toHaveBeenCalled();
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining("'DEL'"),
+      expect.anything(),
+    );
   });
 
   it('keeps a processing duplicate pending until the claim can be recovered', async () => {
