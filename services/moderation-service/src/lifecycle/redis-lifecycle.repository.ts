@@ -26,7 +26,12 @@ export class RedisLifecycleRepository
   async create(projection: LifecycleProjection): Promise<boolean> {
     await this.connect();
     const result = await this.redis.eval(
-      "if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end redis.call('SET', KEYS[1], ARGV[1]); redis.call('SADD', KEYS[2], ARGV[2]); return 1",
+      `if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+       local p=cjson.decode(ARGV[1]); local t=redis.call('TYPE',KEYS[2]).ok
+       if t~='none' and t~='set' then return redis.error_reply('WRONGTYPE lifecycle index') end
+       redis.call('SET',KEYS[1],ARGV[1])
+       if p.state~='CLOSED' then redis.call('SADD',KEYS[2],ARGV[2]) end
+       return 1`,
       {
         keys: [key(projection.postId), INDEX],
         arguments: [JSON.stringify(projection), projection.postId],
@@ -58,9 +63,21 @@ export class RedisLifecycleRepository
   ): Promise<boolean> {
     await this.connect();
     const result = await this.redis.eval(
-      "local raw=redis.call('GET',KEYS[1]); if not raw then return 0 end; local current=cjson.decode(raw); if current.version~=tonumber(ARGV[1]) then return 0 end; local e=nil; if ARGV[3]~='' then e=cjson.decode(ARGV[3]); local t=redis.call('TYPE',KEYS[2]).ok; if t~='none' and t~='stream' then return redis.error_reply('WRONGTYPE moderation event stream') end end; redis.call('SET',KEYS[1],ARGV[2]); if e then redis.call('XADD',KEYS[2],'*','eventId',e.eventId,'eventType',e.eventType,'data',ARGV[3]); end; return 1",
+      `local raw=redis.call('GET',KEYS[1]); if not raw then return 0 end
+       local current=cjson.decode(raw); if current.version~=tonumber(ARGV[1]) then return 0 end
+       local p=cjson.decode(ARGV[2]); local e=nil
+       if ARGV[3]~='' then
+         e=cjson.decode(ARGV[3]); local t=redis.call('TYPE',KEYS[2]).ok
+         if t~='none' and t~='stream' then return redis.error_reply('WRONGTYPE moderation event stream') end
+       end
+       local t=redis.call('TYPE',KEYS[3]).ok
+       if t~='none' and t~='set' then return redis.error_reply('WRONGTYPE lifecycle index') end
+       redis.call('SET',KEYS[1],ARGV[2])
+       if p.state=='CLOSED' then redis.call('SREM',KEYS[3],p.postId) end
+       if e then redis.call('XADD',KEYS[2],'*','eventId',e.eventId,'eventType',e.eventType,'data',ARGV[3]) end
+       return 1`,
       {
-        keys: [key(next.postId), this.eventStream],
+        keys: [key(next.postId), this.eventStream, INDEX],
         arguments: [
           String(expectedVersion),
           JSON.stringify(next),

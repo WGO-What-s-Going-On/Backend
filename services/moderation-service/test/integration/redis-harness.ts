@@ -16,7 +16,10 @@ export const group = 'post-moderation';
 export const output = 'moderation:events';
 export const dead = 'moderation:post:dead';
 
-export async function redisHarness(provider: ModerationProvider) {
+export async function redisHarness(
+  provider: ModerationProvider,
+  clock = { now: () => new Date() },
+) {
   // Compose 전용 Redis의 빈 DB 15만 사용한다. 기존 데이터가 있으면 삭제하지 않고 실패한다.
   const url =
     process.env.MODERATION_TEST_REDIS_URL ?? 'redis://localhost:6383/15';
@@ -37,7 +40,11 @@ export async function redisHarness(provider: ModerationProvider) {
   const results = new RedisModerationResultRepository(config);
   const lifecycle = new LifecycleService(repository);
   const moderation = new CommentModerationService(provider, results);
-  const processor = new ModerationPostEventProcessor(moderation, lifecycle);
+  const processor = new ModerationPostEventProcessor(
+    moderation,
+    lifecycle,
+    clock,
+  );
   const connection = createClient({
     url,
     socket: { reconnectStrategy: false },
@@ -56,6 +63,7 @@ export async function redisHarness(provider: ModerationProvider) {
     id: string,
     at: string,
     content = 'A pleasant day.',
+    extra: Record<string, unknown> = {},
   ) {
     const eventId = `evt_${randomUUID()}`;
     keys.add(`moderation:dedup:${eventId}`);
@@ -113,6 +121,66 @@ export async function redisHarness(provider: ModerationProvider) {
       correlationId: `req_${randomUUID()}`,
       occurredAt: at,
       ...payload,
+      ...(type === 'PostReactionRemoved'
+        ? {
+            activityVersion: 2,
+            reaction: {
+              postId: id,
+              userId: 1,
+              type: 'ENDED',
+              createdAt: at,
+              removedAt: at,
+            },
+          }
+        : {}),
+      ...(type === 'PostCommentDeleted'
+        ? {
+            activityVersion: 2,
+            comment: {
+              postId: id,
+              commentId: 'comment_deleted',
+              authorId: 1,
+              deletedAt: at,
+            },
+            actor: { type: 'USER', userId: 1 },
+            reason: 'USER_REQUEST',
+          }
+        : {}),
+      ...(type === 'PostParticipantLeft'
+        ? {
+            activityVersion: 2,
+            participant: { postId: id, userId: 1, joinedAt: at, leftAt: at },
+          }
+        : {}),
+      ...(type === 'PostDeleted'
+        ? {
+            postVersion: 2,
+            post: {
+              postId: id,
+              authorId: 1,
+              category: 'GENERAL',
+              deletedAt: at,
+            },
+            actor: { type: 'USER', userId: 1 },
+            reason: 'USER_REQUEST',
+          }
+        : {}),
+      ...(type === 'PostExpired'
+        ? {
+            postVersion: 2,
+            post: {
+              postId: id,
+              authorId: 1,
+              category: 'GENERAL',
+              expiresAt: at,
+              expiredAt: at,
+            },
+          }
+        : {}),
+      ...(type !== 'PostCreated'
+        ? { postAuthorId: 1, postCategory: 'GENERAL' }
+        : { postVersion: 1 }),
+      ...extra,
     };
     return { eventId, eventType: type, data: JSON.stringify(envelope) };
   }

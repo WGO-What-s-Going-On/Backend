@@ -60,6 +60,7 @@ describe('Moderation production components with real Redis', () => {
       lastMeaningfulActivityAt: start,
       staleAt: null,
       version: 0,
+      reactionHistoryComplete: true,
     });
     const original = await h.repository.find(id);
     await h.redis.xAdd(stream, '*', {
@@ -135,7 +136,10 @@ describe('Moderation production components with real Redis', () => {
     await h.send(
       h.fields('PostCommentCreated', id, '2026-01-01T00:20:00.000Z'),
     );
-    expect(await h.repository.find(id)).toEqual(projection);
+    expect(await h.repository.find(id)).toMatchObject({
+      state: 'ACTIVE',
+      lastMeaningfulActivityAt: commentAt,
+    });
     expect(await events()).toEqual([]);
     await noPending();
   });
@@ -247,7 +251,9 @@ describe('Moderation production components with real Redis', () => {
 
   it('dead-letters poison events after exactly five real deliveries', async () => {
     await h.prepare();
-    const message = h.fields('PostCommentCreated', h.postId(), commentAt);
+    const id = h.postId();
+    await h.lifecycle.initialize(id, start);
+    const message = h.fields('PostCommentCreated', id, commentAt);
     moderate.mockRejectedValue(new Error('provider unavailable'));
     const entryId = await h.send(message);
     for (let attempt = 2; attempt <= 5; attempt++) {

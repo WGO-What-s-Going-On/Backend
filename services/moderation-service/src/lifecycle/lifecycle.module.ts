@@ -14,6 +14,6 @@ import { LifecycleScheduler } from './lifecycle.scheduler.js';
     { provide: CLOCK, useClass: SystemClock },
     LifecycleScheduler,
   ],
-  exports: [LifecycleService],
+  exports: [LifecycleService, CLOCK],
 })
 export class LifecycleModule {}

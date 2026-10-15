@@ -76,12 +76,27 @@ function setup(process = vi.fn().mockResolvedValue(undefined)) {
 describe('Post event contract', () => {
   it.each([
     { occurredAt: 'not-a-date', post: { postId: 'post_1' } },
+    { occurredAt: '0', post: { postId: 'post_1' } },
     { post: { postId: 'different' } },
     { activityVersion: 0, post: { postId: 'post_1' } },
   ])('rejects invalid timestamps, aggregate IDs and versions: %j', (extra) => {
     expect(() => parsePostEvent(fields('PostCreated', extra))).toThrow(
       'Invalid',
     );
+  });
+  it('rejects a reaction type array rather than coercing it to a meaningful activity', () => {
+    expect(() =>
+      parsePostEvent(
+        fields('PostReactionCreated', {
+          reaction: {
+            postId: 'post_1',
+            userId: 1,
+            type: ['ENDED'],
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        }),
+      ),
+    ).toThrow('Invalid');
   });
   it.each(['', ' '.repeat(5), 'x'.repeat(2001)])(
     'rejects invalid comment content before API processing',
