@@ -1,6 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 
-import { PUSH_SUBSCRIPTION_REPOSITORY, type PushSubscriptionRepository } from './push-subscription.repository.js';
+import {
+  PUSH_SUBSCRIPTION_REPOSITORY,
+  type PushSubscriptionRepository,
+} from './push-subscription.repository.js';
 import type { PushPlatform, PushSubscription } from './push-subscription.js';
 
 @Injectable()
@@ -10,10 +13,18 @@ export class PushSubscriptionService {
     private readonly repository: PushSubscriptionRepository,
   ) {}
 
-  async upsert(userId: string, token: string, platform: PushPlatform, now = new Date()): Promise<PushSubscription> {
+  async upsert(
+    userId: string,
+    token: string,
+    platform: PushPlatform,
+    now = new Date(),
+  ): Promise<PushSubscription> {
     if (!token.trim()) throw new Error('token is required');
-    if (!['android', 'ios', 'web'].includes(platform)) throw new Error('unsupported platform');
-    const existing = (await this.repository.list(userId)).find((item) => item.token === token);
+    if (!['android', 'ios', 'web'].includes(platform))
+      throw new Error('unsupported platform');
+    const existing = (await this.repository.list(userId)).find(
+      (item) => item.token === token,
+    );
     const timestamp = now.toISOString();
     return this.repository.upsert({
       userId,

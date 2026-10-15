@@ -72,15 +72,13 @@ describe('FirebasePushAdapter', () => {
     const repository = new MemorySubscriptions();
     const subscriptions = new PushSubscriptionService(repository);
     await subscriptions.upsert('1', 'bad', 'web');
-    const sendEachForMulticast = vi
-      .fn()
-      .mockResolvedValue({
-        successCount: 0,
-        failureCount: 1,
-        responses: [
-          { success: false, error: { code: 'messaging/invalid-argument' } },
-        ],
-      });
+    const sendEachForMulticast = vi.fn().mockResolvedValue({
+      successCount: 0,
+      failureCount: 1,
+      responses: [
+        { success: false, error: { code: 'messaging/invalid-argument' } },
+      ],
+    });
     const adapter = new FirebasePushAdapter(
       new ConfigService(),
       subscriptions,
@@ -95,13 +93,11 @@ describe('FirebasePushAdapter', () => {
     const subscriptions = new PushSubscriptionService(repository);
     await subscriptions.upsert('1', 'a', 'android');
     await subscriptions.upsert('1', 'b', 'ios');
-    const sendEachForMulticast = vi
-      .fn()
-      .mockResolvedValue({
-        successCount: 2,
-        failureCount: 0,
-        responses: [{ success: true }, { success: true }],
-      } satisfies BatchResponse);
+    const sendEachForMulticast = vi.fn().mockResolvedValue({
+      successCount: 2,
+      failureCount: 0,
+      responses: [{ success: true }, { success: true }],
+    } satisfies BatchResponse);
     const adapter = new FirebasePushAdapter(
       new ConfigService(),
       subscriptions,

@@ -1,6 +1,8 @@
 import type { PushSubscription } from './push-subscription.js';
 
-export const PUSH_SUBSCRIPTION_REPOSITORY = Symbol('PUSH_SUBSCRIPTION_REPOSITORY');
+export const PUSH_SUBSCRIPTION_REPOSITORY = Symbol(
+  'PUSH_SUBSCRIPTION_REPOSITORY',
+);
 
 export interface PushSubscriptionRepository {
   upsert(subscription: PushSubscription): Promise<PushSubscription>;

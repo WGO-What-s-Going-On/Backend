@@ -7,23 +7,49 @@ import type { PushSubscription } from '../src/push-subscription/push-subscriptio
 class MemorySubscriptions implements PushSubscriptionRepository {
   items: PushSubscription[] = [];
   async upsert(value: PushSubscription) {
-    this.items = this.items.filter((item) => item.userId !== value.userId || item.token !== value.token);
+    this.items = this.items.filter(
+      (item) => item.userId !== value.userId || item.token !== value.token,
+    );
     this.items.push(value);
     return value;
   }
-  async remove(userId: string, token: string) { this.items = this.items.filter((item) => item.userId !== userId || item.token !== token); }
-  async list(userId: string) { return this.items.filter((item) => item.userId === userId); }
-  async removeTokens(userId: string, tokens: string[]) { this.items = this.items.filter((item) => item.userId !== userId || !tokens.includes(item.token)); }
+  async remove(userId: string, token: string) {
+    this.items = this.items.filter(
+      (item) => item.userId !== userId || item.token !== token,
+    );
+  }
+  async list(userId: string) {
+    return this.items.filter((item) => item.userId === userId);
+  }
+  async removeTokens(userId: string, tokens: string[]) {
+    this.items = this.items.filter(
+      (item) => item.userId !== userId || !tokens.includes(item.token),
+    );
+  }
 }
 
 describe('PushSubscriptionService', () => {
   it('upserts and refreshes a token while preserving createdAt', async () => {
     const repository = new MemorySubscriptions();
     const service = new PushSubscriptionService(repository);
-    const first = await service.upsert('1', 'token', 'android', new Date('2026-01-01'));
-    const refreshed = await service.upsert('1', 'token', 'ios', new Date('2026-01-02'));
+    const first = await service.upsert(
+      '1',
+      'token',
+      'android',
+      new Date('2026-01-01'),
+    );
+    const refreshed = await service.upsert(
+      '1',
+      'token',
+      'ios',
+      new Date('2026-01-02'),
+    );
     expect(repository.items).toHaveLength(1);
-    expect(refreshed).toMatchObject({ platform: 'ios', createdAt: first.createdAt, lastSeenAt: new Date('2026-01-02').toISOString() });
+    expect(refreshed).toMatchObject({
+      platform: 'ios',
+      createdAt: first.createdAt,
+      lastSeenAt: new Date('2026-01-02').toISOString(),
+    });
   });
 
   it('deletes only the owners token', async () => {
