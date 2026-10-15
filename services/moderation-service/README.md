@@ -1,10 +1,8 @@
-# WGO Moderation Service
+﻿# WGO Moderation Service
 
-Post 이벤트를 소비해 댓글 콘텐츠를 검사하고 게시판 Lifecycle을 판단하는 NestJS 서비스입니다.
+Post 이벤트를 소비해 댓글을 검사하고 게시판 Lifecycle을 판단하는 NestJS 서비스입니다. Node.js 24 / pnpm 10을 사용합니다. 변경 범위는 이 서비스로 제한합니다.
 
 ## 실행
-
-Node.js 24와 pnpm 10을 사용합니다.
 
 ```bash
 cp .env.example .env
@@ -12,72 +10,85 @@ pnpm install
 pnpm dev
 ```
 
-기본 HTTP 주소는 `http://localhost:3005`이며 liveness endpoint는 `GET /health/live`입니다. `REDIS_URL`이 없으면 Post Stream consumer는 시작하지 않습니다.
+HTTP 기본값은 `http://localhost:3005`, liveness는 `GET /health/live`입니다. `REDIS_URL`이 없으면 Post Consumer는 시작하지 않습니다.
 
-## 구현된 기능
+## 입력 계약과 실제 처리
 
-- `post:events`의 `post-moderation` Consumer Group
-- `XREADGROUP`, `XAUTOCLAIM`, eventId dedup, graceful shutdown
-- schemaVersion 1, `post-service` producer와 Stream field/envelope 식별자 검증
-- malformed event와 5회 실패 poison event의 `moderation:post:dead` 처리
-- `PostCreated`로 Redis Lifecycle projection을 멱등 초기화
-- `PostCommentCreated.comment.content`를 OpenAI `omni-moderation-latest`로 검사
-- moderation 결과의 flagged, categories, category scores, model을 내부 타입으로 변환하고 30일간 멱등 저장
-- 댓글을 meaningful activity로 반영
-- `PostReactionCreated`, `PostParticipantJoined` 인식 후 Lifecycle 변경 없이 ACK
-- ACTIVE → STALE → CLOSED 및 STALE → ACTIVE 정책
-- 10분 주기 Lifecycle scan과 주입 가능한 Clock
-- projection CAS와 lifecycle event 발행을 하나의 Redis Lua 연산으로 처리
-- `moderation:events`에 `BOARD_STALE`, `BOARD_REACTIVATED`, `BOARD_CLOSED` 발행
+기준은 `origin/dev` `07769a2`, [Post 이벤트 계약](../post-service/contracts/post-events.md)과 실제 `post-event-envelope.ts`/Outbox producer입니다. Stream은 `post:events`, group은 `post-moderation`입니다.
 
-Lifecycle projection key는 `moderation:lifecycle:{postId}`이며 전체 scan용 post ID 집합은 `moderation:lifecycle:posts`입니다. Lifecycle event는 Post envelope와 같은 식별 필드를 사용하고 producer는 `moderation-service`입니다.
+```text
+XADD post:events * eventId <id> eventType <type> data <full JSON envelope>
+```
+
+`schemaVersion: 1`, `producer: post-service`, 식별자, UTC 시각, 양의 정수 버전/사용자 ID, aggregateId와 도메인 postId의 일치 및 처리에 필요한 payload를 검증합니다. `post`, `comment`, `reaction`, `participant`는 envelope 최상위에 있습니다. 과거 v1 생성의 추가 문맥/버전 누락은 허용하고 활동 버전은 1로 해석합니다. schemaVersion은 상태 버전으로 사용하지 않습니다.
+
+| 이벤트 | 실제 처리 |
+| --- | --- |
+| PostCreated | Lifecycle을 한 번 초기화. 기존 projection/tombstone 유지. 본문 AI 검사는 미연결 |
+| PostCommentCreated | 삭제/중복 버전 확인 → OpenAI → 결과 저장 → 댓글 상태와 meaningful activity CAS |
+| PostReactionCreated | CURIOUS / STILL_HAPPENING / HELPFUL은 meaningful activity. ENDED는 조기 종료 집계. LIKE는 ACK만 수행 |
+| PostParticipantJoined | 인식·ACK. meaningful activity나 알림 동의로 해석하지 않음 |
+| PostReactionRemoved | 관계별 activityVersion tombstone 갱신, ENDED 조건 재확인. 새로운 활동으로 처리하지 않음 |
+| PostCommentDeleted | 댓글 ID별 삭제 버전 기록. 이후 도착한 이전 생성 무시. 과거 활동 시각을 소급 취소하지 않음 |
+| PostDeleted | CLOSED + DELETED tombstone, postVersion 반영, scan 제외·반응/댓글 상태 정리 |
+| PostParticipantLeft | 인식·ACK. 활동 시각 변경 없음 |
+| PostExpired | CLOSED + EXPIRED tombstone, postVersion 반영, scan 제외·후속 부활 차단 |
+
+댓글/게시물 삭제의 USER 또는 MODERATION actor와 reason을 검증합니다. Post에서 이미 확정한 삭제·만료는 새 `BOARD_CLOSED` 판단으로 재발행하지 않습니다. 종료가 생성보다 먼저 도착해도 tombstone을 만듭니다. 생성보다 먼저 도착한 일반 활동은 projection을 추측해 만들지 않고 pending/retry 대상으로 둡니다.
 
 ## Lifecycle 정책
 
-- 생성 후 최초 1시간은 ACTIVE를 보장합니다.
-- 생성 후 1시간이 지났고 마지막 meaningful activity 후 30분이 지나면 STALE이 됩니다.
-- STALE 진입 후 10분 동안 댓글이 없으면 CLOSED가 됩니다.
-- STALE 상태에서 댓글이 생성되면 ACTIVE로 복귀합니다.
-- CLOSED는 terminal state입니다.
-- 현재 meaningful activity는 댓글뿐입니다. LIKE와 참여 이벤트는 사용하지 않습니다.
+일반 비활성 정책은 `now-createdAt >= 1시간` AND `now-lastMeaningfulActivityAt >= 30분`이면 STALE, 이후 의미 있는 활동 없이 10분이면 CLOSED입니다. 조기 ENDED 전이를 제외하면 최초 1시간 ACTIVE를 유지합니다. 기존 STALE projection에서 reason이 없으면 일반 비활성 정책을 적용합니다.
 
-Scheduler는 10분 polling이므로 전이 감지에는 최대 약 10분의 지연이 생길 수 있습니다.
+Meaningful activity는 새 댓글과 CURIOUS / STILL_HAPPENING / HELPFUL 생성입니다. 실제 이벤트 occurredAt을 사용하고 저장된 활동 시각을 과거로 되돌리지 않습니다. STALE 진입 시각 이후의 새 활동이면 ACTIVE로 복귀하고 staleAt/현재 스냅샷을 정리하며 `BOARD_REACTIVATED`를 한 번 발행합니다. 이전 시각에 발생하고 늦게 도착한 활동은 새 유예 중 활동으로 해석하지 않습니다. CLOSED는 terminal입니다.
+
+### ENDED 조기 종료 — 확정된 스냅샷 정책
+
+1. ACTIVE에서 현재 활성 공감의 createdAt이 `(now-10분, now]`인 고유 사용자를 집계합니다. 취소된 관계와 legacy LIKE는 제외합니다.
+2. ENDED 사용자가 5명 이상이고 전체 최근 공감 사용자 중 70% 이상이면 생성 후 1시간 이전에도 STALE로 전이합니다. 분모 0은 불충족이며 정수 교차 곱으로 70% 경계를 비교합니다.
+3. `staleReason: ENDED`, staleAt, `endedSnapshot`을 CAS로 저장합니다. 스냅샷에는 진입 시각, 고정 windowStart, 초기 분자/분모·비율, 임계값, 확실성, 사용자별 종류·관계 버전·생성 시각을 남깁니다.
+4. STALE의 10분 유예 동안 windowStart를 고정합니다. 기존 공감이 단순 시간 경과로 빠지지 않습니다. 이후 생성·취소·재등록은 최신 관계 상태에 반영하며 신규 ENDED도 집계에 포함하되 활동 시각이나 staleAt을 갱신하지 않습니다. 최초 스냅샷은 수정하지 않습니다.
+5. 취소·변경으로 조건이 무효화되면 ACTIVE로 복귀합니다. 새 의미 있는 활동도 ACTIVE로 복귀합니다. 10분 경계에서 조건이 무효이면 복귀 판단을 CLOSED보다 우선합니다.
+6. 조건이 유지되고 의미 있는 활동이 없으면 CLOSED로 전이하고 마지막 판단 집계를 `endedAssessment`에 저장합니다. 종료 전이는 CAS로 한 번만 발행합니다.
+
+공감은 `(postId, userId, reactionType)`별 최신 activityVersion과 활성 여부를 저장합니다. 제거 v2 후 생성 v1은 무시하며 생성 v3 재등록은 허용합니다. 다른 종류의 버전끼리는 비교하지 않습니다. 한 사용자에게 여러 종류가 활성으로 보이면 취소 이벤트가 아직 도착하지 않았을 수 있으므로 조기 종료를 보류하고 ENDED STALE은 ACTIVE로 되돌립니다. 새 긍정 공감은 보수적으로 meaningful activity로 반영합니다.
+
+새 PostCreated projection은 생성부터 이력을 추적합니다. 과거 구현의 projection은 공감 이력이 없으므로 첫 신규 공감 수신 후 10분간 조기 종료를 보류하고, 새 window가 확보된 이후부터 판단합니다. 운영 전환에서 정확한 전체 이력이 필요하면 원본 Stream의 충분한 보존·재생 또는 Post의 인가된 현재 공감 snapshot 계약이 필요합니다.
+
+Scheduler는 주입 가능한 Clock과 10분 polling을 사용하므로 시각 경계를 넘은 후 실제 전이 감지까지 약 10분 지연될 수 있습니다. 공감 수신 시에도 ENDED 조건을 즉시 확인합니다. 복귀 이후 일반 비활성 규칙은 독립적으로 계속 적용됩니다.
+
+## Redis 정합성과 복구
+
+- JSON projection `moderation:lifecycle:{postId}`에 관계 버전, 취소/삭제 tombstone, 스냅샷을 함께 보관합니다.
+- `moderation:lifecycle:posts`는 scan 집합입니다. CLOSED 전이 시 같은 Lua에서 제외합니다. 기존 CLOSED 행이 남아 있어도 terminal 판정으로 새 전이를 만들지 않습니다.
+- projection.version CAS와 `moderation:events` XADD를 하나의 Lua에서 처리합니다. `BOARD_STALE`, `BOARD_REACTIVATED`, `BOARD_CLOSED`의 기존 v1 envelope/payload 계약은 유지합니다. ENDED reason/근거는 내부 projection에 저장합니다.
+- Lua 런타임 오류는 앞선 write를 rollback하지 않습니다. 출력 Stream과 scan index의 TYPE을 쓰기 전에 검사해 WRONGTYPE에 의한 부분 commit을 방지합니다.
+- Consumer는 eventId별 30초 owner lease를 10초마다 갱신합니다. 완료·해제는 소유권을 Lua로 확인합니다. 만료 후 새 worker가 획득한 lease를 이전 worker가 변경하거나 ACK하지 않습니다. 완료 marker는 7일입니다.
+- 성공한 영속 반영 뒤 ACK, 일반 실패는 pending 유지, `XAUTOCLAIM` 기본 idle 30초입니다. busy 입력은 ACK/DLQ로 넘기지 않습니다. malformed 및 5회 실패 입력은 `moderation:post:dead`에 저장한 뒤 ACK합니다. DLQ 저장이 실패하면 pending이 남습니다.
+- 종료 시 진행 중인 처리·저장·ACK를 기다린 뒤 연결을 닫습니다. 아직 시작하지 않은 batch 입력은 pending으로 남겨 다음 worker가 복구합니다.
+
+Redis 저장이 유지되는 범위에서 수신한 관계 버전/중복 이벤트의 결과가 일관됩니다. 아직 도착하지 않은 이벤트를 알아내는 watermark/현재 상태 조회 계약은 없습니다. CLOSED 뒤 도착한 과거 취소가 이미 확정된 종료를 되돌린다는 보장은 하지 않습니다. 전역 event-time 완결성이 필요하면 [외부 계약 요청](contracts/integration-gaps.md)의 snapshot/watermark가 선행되어야 합니다.
+
+현재 구현은 기존 Redis repository를 확장합니다. root 아키텍처의 Moderation PostgreSQL 목표와는 차이가 있으며 DB 전환은 이번 변경에 포함하지 않습니다. 개발 Compose는 AOF/영속 volume을 설정하지 않습니다. 운영은 Redis의 내구성·복구 및 Stream replay 보존을 별도로 보장해야 합니다. Redis 데이터 전체 유실 후 원본 없이 정합성을 복구할 수 없습니다. tombstone/projection은 자동 TTL로 먼저 지우지 않으며 compaction은 replay 범위와 함께 정해야 합니다.
 
 ## OpenAI 처리
 
-공식 OpenAI SDK의 standalone Moderation endpoint와 `omni-moderation-latest`를 사용합니다. timeout은 10초, SDK retry는 최대 2회입니다. API 실패를 정상 결과로 저장하지 않으며, 처리 실패 이벤트는 ACK하지 않습니다.
+공식 SDK의 standalone Moderation endpoint와 `omni-moderation-latest`를 유지합니다. `flagged`, `categories`, `category_scores`, `model`을 매핑합니다. [공식 OpenAI Moderation 문서](https://developers.openai.com/api/docs/guides/moderation)에 따른 필드를 사용합니다. timeout 10초, SDK retry 최대 2회이며 API 실패/빈 결과를 정상 결정으로 저장하지 않습니다.
 
-댓글 moderation 결과는 `moderation:content:{eventId}`에 저장됩니다. downstream 콘텐츠 제재 event contract가 아직 없으므로 결과를 다른 서비스가 소비한다고 가정하지 않습니다.
+결과는 `moderation:content:{eventId}`에 30일간 NX 저장합니다. 댓글 생성의 관계 버전도 별도로 멱등 처리합니다. API 호출 전에 삭제된 댓글은 검사하지 않습니다. 호출 중 삭제되면 완료 결과는 감사 근거로 남지만 댓글 생성의 CAS에서 삭제 버전을 확인해 활동으로 반영하지 않습니다. 게시물 삭제/만료 중 API가 완료되는 경우도 부활하지 않습니다. flagged만으로 Post/댓글을 자동 삭제하지 않습니다.
 
-## 현재 blocker
-
-### 게시글 Moderation
-
-현재 `PostCreated`에는 게시판 `content`가 없습니다. 향후 payload에 `content`가 추가되어야 게시글 moderation을 연결할 수 있습니다. WGO 게시판에는 title이 없으며 title은 필요한 계약이 아닙니다.
-
-### Reaction Lifecycle과 조기 종료
-
-현재 Post reaction은 LIKE뿐입니다. 실제 공감 type과 reaction 생성·변경·취소 Event Contract가 확정된 후 조기 종료 정책을 구현해야 합니다. 이번 구현은 reaction 비율이나 종료 신호를 추측하지 않습니다.
-
-### Downstream 적용
-
-- Post Service가 `moderation:events`의 Lifecycle event를 소비해 실제 Post 상태를 변경하는 계약과 consumer가 필요합니다.
-- Notification Service가 Lifecycle event를 소비하는 계약과 consumer가 필요합니다.
-- flagged 콘텐츠를 숨김·삭제·검토 대상으로 전달할 downstream Content Moderation Event Contract가 필요합니다.
-
-Moderation Service는 Post DB를 직접 수정하거나 Notification Service를 직접 호출하지 않습니다.
+게시글 본문, 콘텐츠 제재 이벤트, Post 실제 상태 적용, Notification 종료 알림은 현재 권한·계약이 부족하여 연결하지 않습니다. 조사 근거와 필요한 계약은 [integration-gaps.md](contracts/integration-gaps.md)에 있습니다.
 
 ## 환경변수
 
 | 이름 | 용도 |
 | --- | --- |
-| `NODE_ENV` | 실행 환경 |
-| `PORT` | HTTP 포트, 기본값 `3005` |
-| `REDIS_URL` | Post Stream, projection, processing state와 output stream에 사용할 Redis |
-| `POST_EVENT_STREAM` | 입력 Stream, 기본값 `post:events` |
-| `MODERATION_EVENT_STREAM` | Lifecycle 출력 Stream, 기본값 `moderation:events` |
-| `MODERATION_CONSUMER_GROUP` | Consumer Group, 기본값 `post-moderation` |
-| `OPENAI_API_KEY` | OpenAI API key |
+| NODE_ENV / PORT | 환경 / HTTP 포트 (기본 3005) |
+| REDIS_URL | 입력 Stream, projection, dedup, 결과·출력 Stream |
+| POST_EVENT_STREAM | 기본 post:events |
+| MODERATION_EVENT_STREAM | 기본 moderation:events |
+| MODERATION_CONSUMER_GROUP | 기본 post-moderation |
+| OPENAI_API_KEY | OpenAI credential |
 
 ## 검증
 
@@ -85,28 +96,28 @@ Moderation Service는 Post DB를 직접 수정하거나 Notification Service를 
 pnpm test
 pnpm typecheck
 pnpm build
-```
-
-단위 테스트는 실제 OpenAI credential 없이 SDK client와 Redis repository port를 대역으로 실행합니다.
-
-### 실제 Redis 통합 검증
-
-```bash
 docker compose --profile redis up -d
-docker compose exec -T redis redis-cli PING
 pnpm test:integration
 ```
 
-Compose 전용 Redis(`localhost:6383`)의 DB 15를 기본으로 사용합니다. `MODERATION_TEST_REDIS_URL`로 별도의 빈 테스트 DB를 지정할 수 있습니다. 기존 key가 있으면 데이터를 보존하고 테스트를 실패시킵니다. 테스트가 만든 key만 정리하며 FLUSHDB/FLUSHALL은 사용하지 않습니다. 같은 테스트 DB를 사용하는 integration과 smoke 명령은 순서대로 실행하세요.
+전용 Redis `localhost:6383`의 빈 DB 15를 사용합니다. `MODERATION_TEST_REDIS_URL`로 다른 빈 테스트 DB를 지정할 수 있습니다. 기존 key가 있으면 보존하고 실패하며 테스트 소유 key만 정리합니다. FLUSHDB/FLUSHALL은 사용하지 않습니다. integration/smoke/재시작 검증은 같은 DB에서 동시에 실행하지 않습니다. unit의 SDK 대역과 integration의 provider 대역은 실제 모델 정확도 검증과 구분합니다.
 
-`dev` Post Service의 `application/commands.ts` payload와 `infrastructure/outbox.worker.ts` envelope/Stream fields를 사용합니다. 실제 consumer, result repository, Lifecycle Lua CAS, scheduler와 출력 Stream을 검증하며 OpenAI만 대역을 사용합니다. Pending recovery는 Redis XCLAIM의 IDLE 옵션으로 PEL 나이를 준비한 뒤 production XAUTOCLAIM을 실행하므로 production retry/idle 기본값을 변경하지 않습니다.
+실제 wire → Consumer Group/XREADGROUP → ACK/Pending/XAUTOCLAIM/DLQ, Lua CAS 경합, 시간 경계, 고정 스냅샷, 중복·역순·재등록, 삭제와 검사 경합, 소유권 상실 및 graceful shutdown을 검증합니다. 테스트 Clock으로 시간을 이동하며 실제 10분을 기다리지 않습니다. XCLAIM IDLE로 PEL 나이를 조절하고 production idle 기본값은 유지합니다.
 
-### 실제 OpenAI smoke 검증
+### 전용 Redis 실제 재시작 검증 (선택 실행)
+
+다른 DB까지 비어 있는 전용 로컬 Compose Redis에서만 실행합니다. 이 테스트만 컨테이너를 재시작합니다.
+
+```bash
+MODERATION_REDIS_RESTART_TEST=1 pnpm test:integration redis-restart
+```
+
+PowerShell에서는 `$env:MODERATION_REDIS_RESTART_TEST='1'`을 설정하고 실행 후 제거합니다. 고정 주소 `redis://localhost:6383/15`와 다른 DB의 key 부재를 검사한 뒤 SAVE → 해당 Compose Redis restart → snapshot/dedup/PEL 복구 → CLOSED 단일 발행을 확인합니다. 정리 후 빈 상태도 SAVE합니다. checkpoint 뒤의 정상 재시작 검증이며 crash/AOF, 컨테이너 재생성이나 운영 장애 내구성 검증을 대신하지 않습니다. 평소 통합 실행에서는 skip합니다.
+
+### 실제 OpenAI smoke
 
 ```bash
 pnpm test:openai-smoke
 ```
 
-`OPENAI_API_KEY`가 현재 프로세스 환경에 있을 때만 실행합니다. Key가 없으면 `OpenAI smoke test skipped: OPENAI_API_KEY unavailable`을 출력하고 건너뜁니다. `.env`를 자동으로 읽거나 key를 찾지 않습니다.
-
-Production adapter의 `omni-moderation-latest`로 안전한 문장과 짧은 위협 문장을 각 1회 요청하여 flagged/categories/category scores/model을 확인합니다. 두 요청이 성공하면 실제 Redis 댓글 처리→OpenAI→결과 저장→Lifecycle activity→ACK를 1회 검증합니다. 실제 분류 결과의 기대값은 smoke 확인용이며 모델 정확도 평가가 아닙니다. SDK 예외 상세와 credential은 출력하지 않습니다.
+현재 프로세스의 `OPENAI_API_KEY`가 있을 때만 실행하고 없으면 skip합니다. `.env`를 자동 검색하지 않습니다. 안전한 문장과 위협 문장을 각각 한 번 검사하고, 실제 Redis 댓글 → OpenAI → 결과 → 활동 → ACK 경로를 한 번 검사하므로 정상 실행은 API 요청 3회입니다. categories/scores/model 파싱을 확인하며 광범위한 분류 정확도 평가는 아닙니다. key와 SDK 오류 상세는 출력하지 않습니다.
