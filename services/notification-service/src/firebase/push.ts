@@ -5,6 +5,7 @@ export interface PushMessage {
   data?: Record<string, string>;
   targetId?: string | null;
   actionPath?: string | null;
+  tokens?: string[];
 }
 
 export interface PushResult {
@@ -12,6 +13,8 @@ export interface PushResult {
   succeeded: number;
   failed: number;
   invalidTokens: string[];
+  retryTokens?: string[];
+  permanentTokens?: string[];
 }
 
 export const PUSH_SENDER = Symbol('PUSH_SENDER');
