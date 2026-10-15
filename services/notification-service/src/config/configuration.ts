@@ -25,6 +25,7 @@ export function configuration() {
       endpoint: process.env.DYNAMODB_ENDPOINT,
       notificationsTable: process.env.DYNAMODB_NOTIFICATIONS_TABLE,
       pushSubscriptionsTable: process.env.DYNAMODB_PUSH_SUBSCRIPTIONS_TABLE,
+      eventStateTable: process.env.DYNAMODB_EVENT_STATE_TABLE,
     },
     firebase: {
       projectId: process.env.FIREBASE_PROJECT_ID,

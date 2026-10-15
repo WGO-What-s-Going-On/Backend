@@ -9,3 +9,9 @@ services:
       interval: 2s
       timeout: 2s
       retries: 10
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    profiles: ['dynamodb']
+    command: '-jar DynamoDBLocal.jar -inMemory -sharedDb'
+    ports:
+      - '8002:8000'
