@@ -44,6 +44,24 @@ export function configuration() {
         'OUTBOX_REDIS_TIMEOUT_MS',
       ),
     },
+    rewards: {
+      policy: process.env.USER_REWARD_POLICY_JSON,
+      pollIntervalMs: positiveInteger(
+        process.env.REWARDS_POLL_INTERVAL_MS,
+        1000,
+        'REWARDS_POLL_INTERVAL_MS',
+      ),
+      pendingIdleMs: positiveInteger(
+        process.env.REWARDS_PENDING_IDLE_MS,
+        30000,
+        'REWARDS_PENDING_IDLE_MS',
+      ),
+      maxAttempts: positiveInteger(
+        process.env.REWARDS_MAX_ATTEMPTS,
+        5,
+        'REWARDS_MAX_ATTEMPTS',
+      ),
+    },
     withdrawal: {
       pollIntervalMs: positiveInteger(
         process.env.WITHDRAWAL_POLL_INTERVAL_MS,

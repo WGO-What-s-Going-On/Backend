@@ -11,6 +11,7 @@ import { UsersModule } from './users/users.module.js';
 import { OutboxModule } from './outbox/outbox.module.js';
 import { UserGrpcModule } from './grpc/user-grpc.module.js';
 import { WithdrawalScheduler } from './withdrawal/withdrawal.scheduler.js';
+import { RewardsModule } from './rewards/rewards.module.js';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { WithdrawalScheduler } from './withdrawal/withdrawal.scheduler.js';
     UsersModule,
     OutboxModule,
     UserGrpcModule,
+    RewardsModule,
   ],
   providers: [WithdrawalScheduler],
 })
