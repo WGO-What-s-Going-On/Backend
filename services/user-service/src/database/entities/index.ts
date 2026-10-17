@@ -6,6 +6,11 @@ import { UserBadgeEntity } from './user-badge.entity.js';
 import { UserBlockEntity } from './user-block.entity.js';
 import { UserTermConsentEntity } from './user-term-consent.entity.js';
 import { UserEntity } from './user.entity.js';
+import {
+  UserActivityEntity,
+  UserGrowthEntity,
+  CreditLedgerEntity,
+} from './reward.entity.js';
 
 export const USER_SERVICE_ENTITIES = [
   UserEntity,
@@ -16,9 +21,15 @@ export const USER_SERVICE_ENTITIES = [
   UserBadgeEntity,
   UserBlockEntity,
   OutboxEventEntity,
+  UserActivityEntity,
+  UserGrowthEntity,
+  CreditLedgerEntity,
 ];
 
 export {
+  UserActivityEntity,
+  UserGrowthEntity,
+  CreditLedgerEntity,
   BadgeEntity,
   OAuthAccountEntity,
   OutboxEventEntity,

@@ -258,11 +258,11 @@ snake_case proto 필드 방식을 사용한다. JS에서는 기본 camelCase 변
 canonical 10진수 문자열로 처리한다. DB의 안전 정수 상한 덕분에 현재 Map/Post의 int64 및
 JavaScript number 경로에서도 정밀도 손실 없이 표현할 수 있다.
 
-| RPC | 동작 |
-| --- | --- |
-| GetUserProfile | user_id, nickname, optional profile_image_key, status 반환. 없는 사용자·WITHDRAWN은 NOT_FOUND, 온보딩 미완료는 FAILED_PRECONDITION |
+| RPC                  | 동작                                                                                                                                                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GetUserProfile       | user_id, nickname, optional profile_image_key, status 반환. 없는 사용자·WITHDRAWN은 NOT_FOUND, 온보딩 미완료는 FAILED_PRECONDITION                                                                                    |
 | BatchGetUserProfiles | user_ids 1~100개(중복 제거 전). 유효한 정수 ID를 canonical 10진수 문자열로 검증하고 중복 제거. profiles와 unavailable_user_ids를 각각 최초 요청 순서로 반환. 없는 사용자·온보딩 미완료·WITHDRAWN은 unavailable로 분류 |
-| GetUserStatus | PostgreSQL에서 user_id, UserStatus enum, optional google.protobuf.Timestamp suspended_until 조회. 온보딩 여부와 무관하게 모든 상태 제공. 없는 사용자는 NOT_FOUND |
+| GetUserStatus        | PostgreSQL에서 user_id, UserStatus enum, optional google.protobuf.Timestamp suspended_until 조회. 온보딩 여부와 무관하게 모든 상태 제공. 없는 사용자는 NOT_FOUND                                                      |
 
 profile은 온보딩 완료된 ACTIVE/SUSPENDED/WITHDRAWAL_PENDING만 제공하며, 임시 닉네임과
 최종 탈퇴 사용자의 기존 표시 정보를 내부 소비자에게 노출하지 않는다. 이 조회 정책은 DB 삭제를 의미하지 않는다.
@@ -300,7 +300,7 @@ ws-gateway는 GetUserStatus만 호출할 수 있으며 인증된 비허용 호�
 
 ### Implementation status and remaining integration
 
-REST 10개(auth kakao/refresh/logout, users/me GET/PATCH, nickname availability, terms,
+기존 REST(auth kakao/refresh/logout, users/me GET/PATCH, nickname availability, terms,
 term-consents, badges, withdrawal), 인증·세션 rotation/복구, Outbox Worker, 최종 탈퇴 Scheduler,
 내부 RPC 3개가 구현되어 있다. SUSPENDED는 상태 조회·기존 로그인/refresh 거부만 지원하며
 제재 부여/해제·Moderation 처리는 구현하지 않았다.
@@ -365,11 +365,28 @@ eventId로 재발행된다. **At-least-once** 방식이므로 소비자는 event
 Redis timeout으로 결과가 불명확한 경우에도 중복은 가능하다.
 
 Redis가 수락한 이벤트의 장애 후 보존은 Redis persistence/replication 설정에 달려 있다.
-이번 구현에는 trim/보존 기간, Outbox 정리, retry 상한, DLQ, Consumer를 추가하지 않았다.
+Outbox 발행 경로에는 trim/보존 기간, Outbox 정리, retry 상한, DLQ를 추가하지 않았다.
 운영에서는 미발행 건수·최장 대기 시간·반복 실패·DB lock 대기를 감시하고, 잘못된 envelope를
 수동 점검해야 한다. PENDING 조회 인덱스 및 claim lease는 규모가 커질 때 별도 검토한다.
 
-## Verification
+## Activity rewards
+
+Post의 9종 이벤트를 `post-user-rewards` group으로 소비하여 활동 상태를 PostgreSQL에 기록한다.
+활동 기록과 보상 판정을 분리하며 `USER_REWARD_POLICY_JSON`이 비어 있으면 지급은 기본 비활성이다.
+글/댓글 작성·단순 참여·공감을 누르는 행위에는 지급하지 않는다. 자기 공감도 제외한다.
+운영 보상 수치·레벨·칭호 seed는 확정하지 않았다.
+
+신규 조회 API는 `GET /api/v1/users/me/credits`, `/growth`, `/credits/history`이며 기존
+`/badges`를 재사용한다. 기존과 동일한 trusted Gateway 인증 경계가 필요하다.
+Migration `1792190000000-AddActivityRewards` 적용 후 앱을 시작한다. 기존 DB를 초기화하지 않는다.
+
+- [이벤트·정책·DB·REST·복구 계약](REWARDS_CONTRACT.md)
+- [서비스 전체 감사 및 최종 완성까지의 잔여 작업](USER_SERVICE_COMPLETION_REPORT.md)
+
+댓글 공감·투표 결과는 내부 fixture 입력 인터페이스만 제공하며 아직 실제 이벤트로 소비하지 않는다.
+성장 이벤트 4종은 기존 Outbox에서 발행한다. Notification 자동 알림은 아직 연결되지 않았다.
+
+## Verification commands
 
 ```bash
 pnpm typecheck

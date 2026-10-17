@@ -10,6 +10,7 @@ import { configuration } from '../config/configuration.js';
 import { USER_SERVICE_ENTITIES } from './entities/index.js';
 import { InitialUserServiceSchema1789990707351 } from './migrations/1789990707351-InitialUserServiceSchema.js';
 import { AddTermsCodeEffectiveAtIndex1789993249262 } from './migrations/1789993249262-AddTermsCodeEffectiveAtIndex.js';
+import { AddActivityRewards1792190000000 } from './migrations/1792190000000-AddActivityRewards.js';
 
 if (existsSync('.env')) {
   loadEnvFile('.env');
@@ -30,6 +31,7 @@ export default new DataSource({
     AddPrivateRealName1793200000000,
     InitialUserServiceSchema1789990707351,
     AddTermsCodeEffectiveAtIndex1789993249262,
+    AddActivityRewards1792190000000,
   ],
   synchronize: false,
 });
