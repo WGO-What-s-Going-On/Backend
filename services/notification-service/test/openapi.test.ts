@@ -18,7 +18,7 @@ describe('Notification OpenAPI contract', () => {
   afterAll(async () => {
     await app.close();
   });
-  it('documents only implemented health, without inventing public notification APIs', async () => {
+  it('documents health and all implemented notification HTTP operations', async () => {
     await request(app.getHttpServer())
       .get('/docs')
       .expect(200)
@@ -26,8 +26,22 @@ describe('Notification OpenAPI contract', () => {
     const { body: doc } = await request(app.getHttpServer())
       .get('/docs/openapi.json')
       .expect(200);
-    expect(Object.keys(doc.paths)).toEqual(['/health/live']);
-    expect(Object.keys(doc.paths['/health/live'])).toEqual(['get']);
+    const operations = {
+      '/health/live': ['get'],
+      '/api/v1/notifications': ['get'],
+      '/api/v1/notifications/unread-count': ['get'],
+      '/api/v1/notifications/{notificationId}/read': ['patch'],
+      '/api/v1/notifications/push-subscriptions': ['delete', 'put'],
+    };
+    expect(Object.keys(doc.paths).sort()).toEqual(
+      Object.keys(operations).sort(),
+    );
+    for (const [path, methods] of Object.entries(operations)) {
+      expect(Object.keys(doc.paths[path]).sort()).toEqual(methods);
+      for (const method of methods) {
+        expect(doc.paths[path][method].responses['200']).toBeDefined();
+      }
+    }
     expect(
       doc.paths['/health/live'].get.responses['200'].content['application/json']
         .schema.properties.service.enum,
@@ -37,6 +51,10 @@ describe('Notification OpenAPI contract', () => {
       .get('/health/live')
       .expect(200)
       .expect({ service: 'notification-service', status: 'ok' });
-    await request(app.getHttpServer()).get('/api/v1/notifications').expect(404);
+    // Missing local user context must fail validation before accessing storage.
+    const { body: error } = await request(app.getHttpServer())
+      .get('/api/v1/notifications')
+      .expect(400);
+    expect(error.message).toBe('positive decimal x-user-id is required');
   });
 });

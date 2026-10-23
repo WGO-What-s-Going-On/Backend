@@ -97,9 +97,10 @@ User·Post·Map·Notification이 각각 `/docs/openapi.json`을 제공해야 한
 `MAP_SERVICE_URL`, `NOTIFICATION_SERVICE_URL`을 재사용한다. 필요한 MongoDB,
 Cassandra, Redis 등은 해당 서비스 README를 따른다. Gateway의 기본 rate limit은
 Redis도 필요하며, 로컬에서 비활성화하려면 기존 `RATE_LIMIT_ENABLED=false`를 사용한다.
-Moderation은 아직 OpenAPI 수집 미지원이다. Notification은 현재 health만 구현되어 있어
-문서는 수집·검증하지만 공개 operation은 포함하지 않고 `x-services-without-public-operations`로
-구분한다. Notification 수집 실패도 전체 갱신 실패이며 기존 파일을 보존한다.
+Moderation은 아직 OpenAPI 수집 미지원이다. Notification의 알림 조회·읽음 처리·푸시 구독
+operation은 포함하고 health는 제외한다. 구버전의 health 전용 문서도 수집할 수 있으며,
+공개 operation이 없을 때만 `x-services-without-public-operations`로 구분한다.
+Notification 수집 실패도 전체 갱신 실패이며 기존 파일을 보존한다.
 User의 `/api/v1/terms`는 서비스 문서에만 포함하며 현재 Gateway 라우팅에 없으므로 병합에서 제외한다.
 새 문서 제공 서비스가 생기면 `src/openapi.ts`의 대상 목록과 테스트를 갱신한다.
 

@@ -162,7 +162,7 @@ pnpm dev
 JSON은 `/docs/openapi.json`이다. 계약·설정 변경 후 생성 명령을 다시 실행한다.
 Gateway 기본 IP rate limit에는 Redis도 필요하다. Post·Map의 저장소 실행 절차는
 각 서비스 README를 따른다. User도 PostgreSQL·Redis와 인증 설정이 필요하다.
-Notification은 현재 health만 제공하므로 공개 operation 없이 수집·검증하며,
+Notification의 알림 조회·읽음 처리·푸시 구독 API도 수집·검증하며,
 Moderation은 문서 수집 미지원이다. `/api/v1/terms`는 현재 Gateway 라우팅에 없어 제외한다.
 수집·검증 실패 시 명령은 실패하고 기존 생성 파일을 유지한다. 서비스 문서 URL과
 로그의 실패 이유를 확인한 뒤 재실행한다. 파일이 없으면 JSON만 503을 반환하고

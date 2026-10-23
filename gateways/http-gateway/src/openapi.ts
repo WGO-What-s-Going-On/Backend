@@ -11,7 +11,7 @@ export const documentedServices = [
   'notification',
 ] as const;
 export const undocumentedServices = ['moderation'] as const;
-// Notification currently owns a valid HTTP contract with health only, not public APIs.
+// Accept older health-only Notification contracts during independent service rollouts.
 const servicesWithoutPublicApis: readonly ServiceName[] = ['notification'];
 // Match @fastify/http-proxy default methods; TRACE is not exposed.
 const methods = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch'];

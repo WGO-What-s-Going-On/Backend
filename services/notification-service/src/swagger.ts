@@ -5,7 +5,7 @@ export function configureSwagger(app: INestApplication): void {
   const config = new DocumentBuilder()
     .setTitle('WGO Notification Service HTTP API')
     .setDescription(
-      'Current implementation provides only GET /health/live. Notification APIs, subscriptions and delivery are not implemented. The Gateway excludes this health endpoint and reports no public operations for this service.',
+      'Provides health, notification listing, unread count, mark-read and push subscription APIs. Local/test requests use X-User-Id directly; production notification requests are blocked until authentication is integrated. The Gateway excludes health and includes routed notification operations.',
     )
     .setVersion('1.0.0')
     .build();
