@@ -19,6 +19,8 @@ import {
   Post,
   Put,
   Query,
+  Req,
+  UnauthorizedException,
   UseFilters,
 } from '@nestjs/common';
 import {
@@ -69,6 +71,7 @@ import {
 } from './presentation/post-query.input.js';
 import {
   internalServiceIdentity,
+  verifiedWsUser,
   serviceIdentity,
 } from './presentation/service-auth.js';
 import {
@@ -586,6 +589,7 @@ export class InternalPostController {
   constructor(
     private readonly readPosts: ReadPosts,
     private readonly createComment: CreateComment,
+    private readonly joinPost: JoinPost,
   ) {}
 
   @Post('batch-get')
@@ -625,7 +629,7 @@ export class InternalPostController {
   @Get(':postId/status')
   @ApiOperation({
     summary: '게시물 상태 조회',
-    description: 'WS Gateway가 ACTIVE 여부를 확인할 때 사용합니다.',
+    description: '게시물 상태 정보입니다. 참여 허가를 의미하지 않습니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiBearerAuth('service-jwt')
@@ -698,26 +702,80 @@ export class InternalPostController {
     );
   }
 
+  @Post(':postId/participants')
+  @ApiOperation({
+    summary: 'WS 게시물 참여',
+    description:
+      'WS Gateway ES256 서비스 인증과 검증된 사용자 문맥이 필요합니다. HTTP 참여와 같은 위치·게시물 검증을 수행합니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiBearerAuth('service-jwt')
+  @ApiHeader({
+    name: 'X-User-Id',
+    required: true,
+    description:
+      'ES256 인증된 WS Gateway가 검증한 사용자 ID. 외부 클라이언트 입력이 아님.',
+    schema: { type: 'string', pattern: '^[1-9][0-9]*$' },
+  })
+  @ApiCreatedResponse({
+    description: '참여 정보. 중복 참여는 카운터와 이벤트를 추가하지 않음.',
+  })
+  @ApiUnauthorizedResponse({
+    description: '서비스 인증 또는 사용자 문맥이 유효하지 않음',
+  })
+  @ApiForbiddenResponse({
+    description: '위치 없음·만료·반경 밖 또는 비활성 게시물',
+  })
+  @ApiServiceUnavailableResponse({
+    description: '위치 인가 또는 인증 설정 불가',
+  })
+  participate(
+    @Param('postId') id: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-user-id') userId: string | undefined,
+    @Req() request: { rawHeaders: string[] },
+  ) {
+    requireSingleAuthorization(request.rawHeaders);
+    return this.joinPost.execute(
+      postId(id),
+      verifiedWsUser(authorization, userId),
+    );
+  }
+
   @Post(':postId/comments')
   @ApiOperation({
     summary: '내부 댓글 작성',
     description:
-      '서비스 JWT의 userId를 작성자로 사용합니다. 같은 사용자·게시물·mutationId 재요청은 기존 댓글을 반환합니다.',
+      '검증된 WS 사용자 문맥을 작성자로 사용하며 참여·최신 위치를 확인합니다. 같은 사용자·게시물·mutationId 재요청은 기존 댓글을 반환합니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiBearerAuth('service-jwt')
+  @ApiHeader({
+    name: 'X-User-Id',
+    required: false,
+    description:
+      'ES256 서비스 JWT에는 필수인 검증된 사용자 문맥. 기존 HS256 호출은 토큰 userId 사용.',
+    schema: { type: 'string', pattern: '^[1-9][0-9]*$' },
+  })
   @ApiBody({ type: InternalCreateCommentBody })
   @ApiCreatedResponse({ type: CommentResponse })
   @ApiUnauthorizedResponse({ description: '서비스 JWT가 없거나 유효하지 않음' })
   @ApiNotFoundResponse({ description: '게시물이 없음' })
-  @ApiForbiddenResponse({ description: '게시물이 비활성 상태' })
-  @ApiServiceUnavailableResponse({ description: '서비스 JWT 설정이 없음' })
+  @ApiForbiddenResponse({
+    description: '게시물 비활성·미참여 또는 최신 위치 조건 미충족',
+  })
+  @ApiServiceUnavailableResponse({
+    description: '서비스 인증 설정 또는 위치 인가 불가',
+  })
   comment(
     @Param('postId') id: string,
     @Headers('authorization') authorization: string | undefined,
+    @Headers('x-user-id') userId: string | undefined,
     @Body() body: unknown,
+    @Req() request: { rawHeaders: string[] },
   ) {
-    const authorId = serviceIdentity(authorization);
+    requireSingleAuthorization(request.rawHeaders);
+    const authorId = serviceIdentity(authorization, userId);
     if (authorId === null) throw new BadRequestException('userId required');
     if (!body || typeof body !== 'object' || Array.isArray(body))
       throw new BadRequestException('JSON object required');
@@ -734,4 +792,15 @@ export class InternalPostController {
       input.mutationId,
     );
   }
+}
+
+function requireSingleAuthorization(rawHeaders: string[]): void {
+  // Node가 중복 Authorization 중 하나를 버리기 전에 원래 필드 수를 확인한다.
+  if (
+    rawHeaders.filter(
+      (value, index) =>
+        index % 2 === 0 && value.toLowerCase() === 'authorization',
+    ).length !== 1
+  )
+    throw new UnauthorizedException('Exactly one service token required');
 }

@@ -74,6 +74,7 @@ describe('OpenAPI document', () => {
         '/internal/v1/posts/batch-get',
         '/internal/v1/posts/{postId}',
         '/internal/v1/posts/{postId}/comments',
+        '/internal/v1/posts/{postId}/participants',
         '/internal/v1/posts/{postId}/meta',
         '/internal/v1/posts/{postId}/status',
       ].sort(),

@@ -1,80 +1,68 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { changedFiles, selectChanges, services } from './ci-lib.mjs';
 
-const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const formatExtensions =
   /\.(?:[cm]?js|[cm]?ts|jsx|tsx|json|jsonc|ya?ml|css|scss|html)$/i;
-const globalPaths =
-  /^(?:\.github\/workflows\/|scripts\/ci\.mjs$|package(?:-lock)?\.json$|pnpm-(?:lock|workspace)\.yaml$|\.npmrc$|\.prettier(?:rc\.json|ignore)$|\.gitignore$|shared\/|packages\/)/;
-
-function changedFiles(base) {
-  if (!base) throw new Error('A base commit SHA is required');
-  const from = /^0+$/.test(base) ? emptyTree : base;
-  return execFileSync('git', ['diff', '--name-only', '-z', from, 'HEAD'], {
-    encoding: 'utf8',
-  })
-    .split('\0')
-    .filter(Boolean);
+const [command, ...args] = process.argv.slice(2);
+const [base, head = 'HEAD'] = args.filter((argument) => argument !== '--pr');
+let files = [];
+let all = !base;
+if (base) {
+  try {
+    files = changedFiles(base, head, { pullRequest: args.includes('--pr') });
+  } catch {
+    // Deleted force-push history must broaden validation rather than silently skip it.
+    console.warn(
+      'Comparison commit unavailable; validating the entire repository.',
+    );
+    all = true;
+  }
 }
 
-function services() {
-  return ['gateways', 'services'].flatMap((group) => {
-    if (!existsSync(group)) return [];
-    return readdirSync(group, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => ({ name: entry.name, path: join(group, entry.name) }))
-      .filter((service) => existsSync(join(service.path, 'package.json')));
-  });
+function run(binary, arguments_) {
+  const result = spawnSync(binary, arguments_, { stdio: 'inherit' });
+  if (result.error) throw result.error;
+  process.exitCode = result.status ?? 1;
 }
-
-const [command, base] = process.argv.slice(2);
-const files = command === 'detect' && !base ? [] : changedFiles(base);
 
 if (command === 'detect') {
-  const changedServices = files
-    .map((file) => file.match(/^(gateways|services)\/([^/]+)\//))
-    .filter(Boolean)
-    .map((match) => `${match[1]}/${match[2]}`);
-  for (const path of new Set(changedServices)) {
-    if (existsSync(path) && !existsSync(join(path, 'package.json'))) {
-      throw new Error(`${path} needs a package.json to run Vitest in CI`);
+  for (const group of ['gateways', 'services']) {
+    for (const entry of readdirSync(group, { withFileTypes: true })) {
+      const path = join(group, entry.name);
+      if (
+        entry.isDirectory() &&
+        existsSync(join(path, 'package.json')) &&
+        !services.some((service) => service.path === path)
+      )
+        throw new Error(
+          `${path} must be registered in scripts/ci-services.json`,
+        );
     }
   }
-  const all = !base || files.some((file) => globalPaths.test(file));
-  const selected = services().filter(
-    (service) =>
-      all || files.some((file) => file.startsWith(`${service.path}/`)),
-  );
-  const output = `matrix=${JSON.stringify({ include: selected })}\nhas_services=${selected.length > 0}\n`;
+  const output =
+    Object.entries(selectChanges(files, { all }))
+      .map(
+        ([name, value]) =>
+          `${name}=${typeof value === 'object' ? JSON.stringify(value) : value}`,
+      )
+      .join('\n') + '\n';
   if (process.env.GITHUB_OUTPUT)
     appendFileSync(process.env.GITHUB_OUTPUT, output);
   else process.stdout.write(output);
 } else if (command === 'format') {
-  if (files.some((file) => /^\.prettier(?:rc\.json|ignore)$/.test(file))) {
-    const result = spawnSync('npm', ['run', 'format:check'], {
-      stdio: 'inherit',
-    });
-    if (result.error) throw result.error;
-    process.exitCode = result.status ?? 1;
-  } else {
+  if (all || files.some((file) => /^\.prettier(?:rc\.json|ignore)$/.test(file)))
+    run('npm', ['run', 'format:check']);
+  else {
     const selected = files.filter(
       (file) => existsSync(file) && formatExtensions.test(file),
     );
-    if (selected.length === 0) {
-      console.log('No changed files supported by Prettier.');
-    } else {
-      const result = spawnSync(
-        'node_modules/.bin/prettier',
-        ['--check', ...selected],
-        {
-          stdio: 'inherit',
-        },
-      );
-      if (result.error) throw result.error;
-      process.exitCode = result.status ?? 1;
-    }
+    if (selected.length)
+      run('node_modules/.bin/prettier', ['--check', ...selected]);
+    else console.log('No changed files supported by Prettier.');
   }
-} else {
-  throw new Error('Usage: node scripts/ci.mjs detect|format <base-sha>');
-}
+} else
+  throw new Error(
+    'Usage: node scripts/ci.mjs detect|format [base-sha] [head-sha] [--pr]',
+  );

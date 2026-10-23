@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 
 import { buildApp } from '../src/app.js';
@@ -6,11 +6,13 @@ import { loadConfig, type AppConfig } from '../src/config.js';
 import type { Authenticator } from '../src/realtime/authentication.js';
 import type { BoardAccessAuthorizer } from '../src/realtime/board-access.js';
 import type { PostClient } from '../src/realtime/post-client.js';
+import { SubscriptionManager } from '../src/realtime/subscription-manager.js';
 
 const apps: Array<{ close(): Promise<void> }> = [];
 const sockets: WebSocket[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const socket of sockets.splice(0)) socket.terminate();
   await Promise.all(apps.splice(0).map((app) => app.close()));
 });
@@ -243,5 +245,91 @@ describe('realtime gateway', () => {
       type: 'command.error',
       code: 'WS_INVALID_JSON',
     });
+  });
+  it('checks room capacity before recording another domain participation', async () => {
+    const canJoin = vi.fn(async () => true);
+    const config = testConfig();
+    config.websocket.maxRoomsPerSocket = 1;
+    const app = await buildApp({
+      config,
+      logger: false,
+      authenticator,
+      boardAccessAuthorizer: { canJoin },
+    });
+    apps.push(app);
+    await app.ready();
+    const socket = await app.injectWS('/ws/v1');
+    sockets.push(socket);
+    const sendJoin = async (boardId: string) => {
+      const reply = nextMessage(socket);
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          type: 'board.join',
+          requestId: boardId,
+          payload: { boardId },
+        }),
+      );
+      return reply;
+    };
+    expect(await sendJoin('one')).toMatchObject({ type: 'command.ack' });
+    expect(await sendJoin('two')).toMatchObject({
+      code: 'WS_ROOM_LIMIT_REACHED',
+    });
+    expect(canJoin).toHaveBeenCalledTimes(1);
+    expect(await sendJoin('one')).toMatchObject({ type: 'command.ack' });
+    expect(canJoin).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not register a closed socket after asynchronous authorization completes', async () => {
+    const join = vi.spyOn(SubscriptionManager.prototype, 'join');
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const app = await buildApp({
+      config: testConfig(),
+      logger: false,
+      authenticator,
+      boardAccessAuthorizer: {
+        canJoin: async () => {
+          entered();
+          await pending;
+          return true;
+        },
+      },
+    });
+    apps.push(app);
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const socket = new WebSocket(`${address.replace('http:', 'ws:')}/ws/v1`);
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve());
+      socket.once('error', reject);
+    });
+    sockets.push(socket);
+    socket.send(
+      JSON.stringify({
+        version: 1,
+        type: 'board.join',
+        requestId: 'closing',
+        payload: { boardId: 'one' },
+      }),
+    );
+    await ready;
+    const closed = new Promise<void>((resolve) =>
+      socket.once('close', () => resolve()),
+    );
+    socket.close();
+    await closed;
+    release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(join).not.toHaveBeenCalled();
+    await vi.waitFor(async () =>
+      expect((await app.inject('/health/ready')).json().connections).toBe(0),
+    );
   });
 });

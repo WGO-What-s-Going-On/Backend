@@ -2,7 +2,7 @@
 
 ## 2026-09-26 게시판 실시간 기능
 
-- Post Service ACTIVE 상태로 room 참여를 승인한다. `boardId=postId`다.
+- Post의 내부 참여 API로 최신 위치·반경·ACTIVE 상태와 영속 참여를 확인한 뒤 room에 가입한다. `boardId=postId`다.
 - `post.get`, `comment.list`, `comment.create`와 `requestId` 결과 응답을 제공한다.
 - 운영 사용자 토큰은 issuer·audience·JWKS 필수 설정으로 검증한다.
 - 별도 단기 서비스 JWT로 Post Service 내부 조회·댓글 작성을 인증한다.
@@ -46,8 +46,7 @@
 
 ### Board authorization
 
-현재 `BoardAccessAuthorizer`는 Post Service의 ACTIVE 상태를 확인한다. Map
-Service의 위치 기반 참여 제한 계약은 아직 없다.
+`BoardAccessAuthorizer`는 Post의 ES256 인증 내부 참여 API를 호출한다. Post의 기존 JoinPost가 Map gRPC로 저장된 최신 위치와 반경을 검증한다. 새 댓글에도 Post가 활성 참여와 최신 위치를 검증한다.
 
 다음 작업은 Map Service 계약을 확정하고 timeout/deadline이 있는 adapter를
 연결하는 것이다.
@@ -81,7 +80,7 @@ group은 이벤트를 한 번 처리하고 Redis Pub/Sub으로 각 Gateway insta
 
 ## 다음 마일스톤
 
-1. Map Service 위치 기반 참여 허가 계약 확정과 adapter 구현
+1. 운영 사용자 JWT 발급·검증 알고리즘 통일 및 배포 환경 키 주입
 2. handshake/message rate limit, backpressure, graceful draining
 3. 운영 알림과 지연 분포 모니터링
 

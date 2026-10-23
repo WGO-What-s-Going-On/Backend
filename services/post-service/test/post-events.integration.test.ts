@@ -289,6 +289,11 @@ suite('post activity event contracts', () => {
 
   it('keeps comment reactions independent across users and never emits a comment reaction event', async () => {
     const id = await create();
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${id}/participants`)
+      .set(actor)
+      .send({})
+      .expect(201);
     const comment = await request(app.getHttpServer())
       .post(`/api/v1/posts/${id}/comments`)
       .set(actor)
@@ -382,6 +387,11 @@ suite('post activity event contracts', () => {
 
   it('rejects a second comment reaction and permits a new choice after cancellation', async () => {
     const id = await create();
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${id}/participants`)
+      .set(actor)
+      .send({})
+      .expect(201);
     const commentId = (
       await request(app.getHttpServer())
         .post(`/api/v1/posts/${id}/comments`)
@@ -439,6 +449,11 @@ suite('post activity event contracts', () => {
 
   it('accepts only one of two concurrent reaction types for each target', async () => {
     const id = await create();
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${id}/participants`)
+      .set(actor)
+      .send({})
+      .expect(201);
     const postPath = `/api/v1/posts/${id}/reactions`;
     const postResponses = await Promise.all(
       ['CURIOUS', 'HELPFUL'].map((type) =>
@@ -492,6 +507,11 @@ suite('post activity event contracts', () => {
 
   it('counts concurrent duplicate comment reactions once', async () => {
     const id = await create();
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${id}/participants`)
+      .set(actor)
+      .send({})
+      .expect(201);
     const commentId = (
       await request(app.getHttpServer())
         .post(`/api/v1/posts/${id}/comments`)
@@ -522,11 +542,16 @@ suite('post activity event contracts', () => {
         .model('CommentReaction')
         .countDocuments({ commentId, type: 'HELPFUL' }),
     ).toBe(1);
-    expect(await outbox.countDocuments({ aggregateId: id })).toBe(2);
+    expect(await outbox.countDocuments({ aggregateId: id })).toBe(3);
   });
 
   it('authorizes comment deletion and emits no second event on retry', async () => {
     const id = await create();
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${id}/participants`)
+      .set(other)
+      .send({})
+      .expect(201);
     const result = await request(app.getHttpServer())
       .post(`/api/v1/posts/${id}/comments`)
       .set(other)
@@ -602,6 +627,11 @@ suite('post activity event contracts', () => {
 
   it('deletes once, enforces ownership and rejects later new activities', async () => {
     const id = await create();
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${id}/participants`)
+      .set(actor)
+      .send({})
+      .expect(201);
     const path = `/api/v1/posts/${id}`;
     await request(app.getHttpServer()).delete(path).set(other).expect(403);
     await Promise.all([
@@ -645,6 +675,12 @@ suite('post activity event contracts', () => {
     'rejects a %s using an ACTIVE snapshot after deletion commits',
     async (kind) => {
       const id = await create();
+      if (kind === 'comment' || kind === 'commentReaction')
+        await request(app.getHttpServer())
+          .post(`/api/v1/posts/${id}/participants`)
+          .set(kind === 'comment' ? other : actor)
+          .send({})
+          .expect(201);
       const commentId =
         kind === 'commentReaction'
           ? ((
@@ -684,7 +720,10 @@ suite('post activity event contracts', () => {
       const partition = new HashPartitionStrategy();
       const work =
         kind === 'comment'
-          ? new CreateComment(uow, store, partition).execute(id, 'late', 456)
+          ? new CreateComment(uow, store, partition, {
+              assertCanCreate: async () => {},
+              assertCanJoin: async () => {},
+            }).execute(id, 'late', 456)
           : kind === 'reaction'
             ? new CreateReaction(uow, store, partition).execute(
                 id,
@@ -722,6 +761,7 @@ suite('post activity event contracts', () => {
             $nin: [
               'PostCreated',
               'PostDeleted',
+              'PostParticipantJoined',
               ...(commentId ? ['PostCommentCreated'] : []),
             ],
           },

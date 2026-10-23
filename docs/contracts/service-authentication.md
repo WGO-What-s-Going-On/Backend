@@ -99,10 +99,11 @@ HTTP 경로를 구현한다. 기존 gRPC 메서드는 소비자가 없음을 확
 
 | 수신 서비스 | HTTP 작업                                   | 목표 허용 호출자 | 현재                                                                     |
 | ----------- | ------------------------------------------- | ---------------- | ------------------------------------------------------------------------ |
-| Post        | `GET /internal/v1/posts/{postId}/status`    | `ws-gateway`     | WS→Post HS256 서비스 JWT 사용                                            |
-| Post        | `GET /internal/v1/posts/{postId}`           | `ws-gateway`     | WS→Post HS256 서비스 JWT 사용                                            |
-| Post        | `GET /internal/v1/posts/{postId}/comments`  | `ws-gateway`     | WS→Post HS256 서비스 JWT 사용                                            |
-| Post        | `POST /internal/v1/posts/{postId}/comments` | `ws-gateway`     | WS→Post HS256 서비스 JWT의 `userId` 사용; 내부 사용자 문맥으로 전환 필요 |
+| Post        | `GET /internal/v1/posts/{postId}/status`    | `ws-gateway`     | ES256 지원, 기존 HS256은 전환 호환                                            |
+| Post        | `GET /internal/v1/posts/{postId}`           | `ws-gateway`     | ES256 지원, 기존 HS256은 전환 호환                                            |
+| Post        | `GET /internal/v1/posts/{postId}/comments`  | `ws-gateway`     | ES256 지원, 기존 HS256은 전환 호환                                            |
+| Post        | `POST /internal/v1/posts/{postId}/comments` | `ws-gateway`     | ES256 서비스 인증 후 내부 사용자 문맥 사용; 기존 HS256 userId는 전환 호환 |
+| Post        | `POST /internal/v1/posts/{postId}/participants` | `ws-gateway` | ES256 전용; 검증된 사용자 문맥, Map 위치 인가와 영속 참여 저장 |
 | Map         | `GET /internal/v1/posts/nearby`             | `http-gateway`   | Map 수신 HS256 검증 구현; Gateway 호출 미연결                            |
 | User        | `GET /internal/v1/users/{userId}/status`    | `ws-gateway`     | 제안 경로; HTTP 계약·구현 없음                                           |
 
@@ -197,3 +198,18 @@ HTTP Gateway→User REST는 이 표의 User 경로에 서비스 ES256 인증과 
 - 배포 시 사설 접근·TLS를 구성하고 외부 User 진입을 제한한 상태에서 Guard와 Gateway를
   함께 전환한다. 키 교체는 신·구 공개키 등록 → Gateway 서명 키 교체 → 기존 Task 종료와
   최대 토큰 수명 경과 후 구 공개키 제거 순서로 진행한다.
+
+## WS Gateway → Post 참여 적용 상태
+
+`POST /internal/v1/posts/{postId}/participants`는 `ws-gateway`만 허용한다.
+서비스 ES256 JWT 검증 후 `x-user-id`를 사용자 문맥으로 사용하며, 기존 HTTP 참여와
+같은 `JoinPost` → Map `CheckPostParticipation` 경로를 실행한다.
+`WS_SERVICE_PRIVATE_JWK`는 Gateway 개인키, `POST_WS_TRUSTED_JWKS`는 Post 수신 공개키 set이다.
+키에는 `kid`, `alg=ES256`이 필요하며 수신 공개키에 `iss=wgo-ws-gateway`를 등록한다.
+새 참여 경로는 HS256을 허용하지 않는다. 기존 WS 조회·댓글 경로는 ES256을 지원하며
+기존 HS256 서비스 토큰은 전환 기간에만 유지한다. 사용자 Access JWT 정책은 별개다.
+
+Post의 새 댓글 쓰기는 HTTP·WS 모두 활성 참여 및 최신 위치를 확인한다.
+성공한 mutation 재시도에는 기존 결과를 반환하며 새 쓰기·이벤트를 만들지 않는다.
+Room leave 또는 소켓 종료는 도메인 탈퇴를 의미하지 않는다. 재연결 join은 위치를
+다시 확인하되 이미 활성인 참여자의 수·이벤트를 추가하지 않는다.
