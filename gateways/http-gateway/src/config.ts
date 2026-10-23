@@ -6,7 +6,8 @@ export type ServiceName =
   | 'moderation';
 
 export interface AppConfig {
-  nodeEnv: 'development' | 'test';
+  nodeEnv: 'development' | 'test' | 'production';
+  docs: { enabled: boolean; file: string; timeoutMs: number };
   host: string;
   port: number;
   logLevel: string;
@@ -68,14 +69,21 @@ function url(name: string, fallback: string): string {
 
 export function loadConfig(): AppConfig {
   const nodeEnv = process.env.NODE_ENV ?? 'development';
-  if (nodeEnv !== 'development' && nodeEnv !== 'test') {
-    throw new Error(
-      'NODE_ENV must be development or test for the local gateway setup',
-    );
+  if (
+    nodeEnv !== 'development' &&
+    nodeEnv !== 'test' &&
+    nodeEnv !== 'production'
+  ) {
+    throw new Error('NODE_ENV must be development, test or production');
   }
 
   return {
     nodeEnv,
+    docs: {
+      enabled: nodeEnv !== 'production' && boolean('DOCS_ENABLED', false),
+      file: process.env.DOCS_FILE ?? 'generated/openapi.json',
+      timeoutMs: integer('DOCS_FETCH_TIMEOUT_MS', 5000, 1),
+    },
     host: process.env.HOST ?? '127.0.0.1',
     port: integer('PORT', 8080, 1),
     logLevel: process.env.LOG_LEVEL ?? 'debug',

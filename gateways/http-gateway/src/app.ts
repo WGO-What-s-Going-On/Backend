@@ -9,6 +9,7 @@ import { Redis } from 'ioredis';
 
 import { loadConfig, type AppConfig } from './config.js';
 import { proxyRoutes } from './routes.js';
+import { registerDocs } from './docs.js';
 
 const locationWindowScript = `
 local key = KEYS[1]
@@ -181,6 +182,8 @@ export async function buildApp(
       });
     },
   );
+
+  await registerDocs(app, config);
 
   for (const route of proxyRoutes) {
     await app.register(httpProxy, {

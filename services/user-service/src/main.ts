@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 
 import { AppModule } from './app.module.js';
+import { configureSwagger } from './swagger.js';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
@@ -11,6 +12,7 @@ async function bootstrap(): Promise<void> {
   const config = app.get(ConfigService);
   const port = config.getOrThrow<number>('app.port');
 
+  configureSwagger(app);
   await app.listen(port);
 }
 

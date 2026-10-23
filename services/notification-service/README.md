@@ -60,3 +60,18 @@ pnpm build
 - Realtime Gateway 연동
 
 이벤트 형태와 수신자 판단은 후속 PR에서 확정합니다.
+
+
+## HTTP OpenAPI / Swagger
+
+`http://localhost:3004/docs`에서 Swagger UI,
+`http://localhost:3004/docs/openapi.json`에서 OpenAPI 3.0 문서를 제공한다.
+Post와 같은 Nest Swagger 방식으로 첫 요청 때 생성하며 현재 구현된
+`GET /health/live`만 포함한다. 알림 조회·읽음·구독·전송 API는 아직 구현되지 않아 생성하지 않는다.
+
+Gateway의 `pnpm docs:generate`는 기존 `NOTIFICATION_SERVICE_URL`의 문서를
+수집·검증한다. health는 공개 API가 아니므로 통합 paths에서는 제외하고
+`x-services-without-public-operations: ["notification"]`로 구분한다.
+문서 수집 실패는 전체 갱신 실패이며 기존 파일을 보존한다.
+Gateway `/docs`의 안내에서도 현재 공개 HTTP operation이 없음을 표시한다.
+Notification은 외부 저장소 없이 실행 가능하며 검증은 `pnpm test`를 사용한다.
