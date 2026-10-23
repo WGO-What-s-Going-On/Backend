@@ -379,3 +379,26 @@ pnpm build
 ```bash
 docker build -t wgo-user-service .
 ```
+
+
+## HTTP OpenAPI / Swagger
+
+서비스 실행 후 `http://localhost:3001/docs`에서 Swagger UI,
+`http://localhost:3001/docs/openapi.json`에서 OpenAPI 3.0 문서를 제공한다.
+Post와 같은 Nest Swagger 방식으로 첫 문서 요청 때 생성한다.
+실제 컨트롤러의 REST 10개와 health만 기록하며 내부 gRPC는 포함하지 않는다.
+문서 모델은 `src/http.openapi.ts`에 있으며 응답 인터페이스를 구현해 필드 누락을 검사한다.
+
+HTTP Gateway의 `pnpm docs:generate`가 `USER_SERVICE_URL`에서 이 문서를 수집한다.
+Gateway의 `/docs`에는 기존 auth/users prefix의 공개 operation 9개만 포함한다.
+`GET /api/v1/terms`는 현재 Gateway에 라우팅되어 있지 않아 서비스 문서에만 남는다.
+Gateway 문서를 갱신하려면 User·Post·Map·Notification 문서 endpoint를 모두 실행해야 한다.
+User 앱의 실제 실행에는 기존 PostgreSQL·Redis·Kakao·JWT 설정이 필요하다.
+`pnpm test test/openapi.test.ts`는 외부 저장소 없이 컨트롤러와 문서 계약을 검증한다.
+
+현재 Gateway와 User REST에는 사용자 Bearer JWT 검증이 연결되어 있지 않다.
+프로필·동의·배지·탈퇴는 `X-User-Id`를 직접 읽고, 로그아웃은 `X-Session-Id`도 읽는다.
+로컬 테스트에서는 양의 canonical 10진수 사용자 ID(최대 9007199254740991)를 전달한다.
+로그아웃 session ID는 발급된 refreshToken의 점 앞 UUID이며 해당 사용자 세션이어야 한다.
+이를 구현된 Bearer 인증이나 내부 서비스 JWT 입력으로 표시하지 않는다.
+로그인은 201, refresh는 200, 로그아웃은 본문 없는 204이며 기존 응답·오류 동작을 유지한다.

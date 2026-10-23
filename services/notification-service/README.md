@@ -152,4 +152,19 @@ pnpm build
 
 통합 검증은 실제 Redis, 실제 DynamoDB Local, mock FCM을 사용합니다. `NOTIFICATION_TEST_REDIS_URL` 기본값은 전용 Redis DB 15이며 비어 있지 않으면 기존 데이터를 보존하고 실패합니다. `NOTIFICATION_TEST_DYNAMODB_ENDPOINT` 기본값은 localhost:8002이며 loopback만 허용합니다. 테스트마다 UUID 테이블을 생성·삭제하고 자신이 만든 Redis key만 지웁니다. FLUSHALL/FLUSHDB는 사용하지 않습니다. 같은 DB를 사용하는 테스트 명령은 동시에 실행하지 않습니다.
 
-시험용 idle/block 값만 줄이며 production 기본값은 변경하지 않습니다. CAS 경쟁은 barrier로 같은 revision을 읽도록 고정합니다. Clock 인자로 과거/미래 window를 검증하여 실제 2분을 기다리지 않습니다. 실제 Post Service, 운영 AWS 및 실제 Firebase 디바이스는 사용하지 않습니다.
+이벤트 형태와 수신자 판단은 후속 PR에서 확정합니다.
+
+
+## HTTP OpenAPI / Swagger
+
+`http://localhost:3004/docs`에서 Swagger UI,
+`http://localhost:3004/docs/openapi.json`에서 OpenAPI 3.0 문서를 제공한다.
+Post와 같은 Nest Swagger 방식으로 첫 요청 때 생성하며 현재 구현된
+`GET /health/live`, 알림 목록·미읽음 개수 조회, 읽음 처리, 푸시 구독 등록·삭제 경로를 포함한다.
+로컬·테스트에서는 `X-User-Id`를 사용하며, 운영 알림 API는 인증 연동 전까지 차단된다.
+
+Gateway의 `pnpm docs:generate`는 기존 `NOTIFICATION_SERVICE_URL`의 문서를
+수집·검증한다. health는 통합 paths에서 제외하고 라우팅되는 알림 API를 포함한다.
+문서 수집 실패는 전체 갱신 실패이며 기존 파일을 보존한다.
+문서 계약 테스트는 외부 저장소 없이 `pnpm test test/openapi.test.ts`로 실행한다.
+실제 알림 처리에 필요한 DynamoDB·Redis·FCM 설정은 위 실행 절차를 따른다.

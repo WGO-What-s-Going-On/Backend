@@ -5,3 +5,6 @@
 **/coverage/
 **/.vitest/
 
+
+# Locally collected Gateway OpenAPI artifact
+gateways/http-gateway/generated/

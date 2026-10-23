@@ -143,3 +143,29 @@ npm ci
 npm run format
 npm run format:check
 ```
+
+
+## HTTP Gateway 통합 API 문서 (로컬·dev)
+
+`gateways/http-gateway/.env`에서 `NODE_ENV=development`, `DOCS_ENABLED=true`를
+설정하고 User·Post·Map·Notification을 실행한 뒤 아래 명령으로 공개 API 문서를 생성한다.
+기존 각 서비스 URL 설정의 `/docs/openapi.json`에서 수집한다.
+
+```bash
+cd gateways/http-gateway
+pnpm install
+pnpm docs:generate
+pnpm dev
+```
+
+접속 주소는 `http://localhost:8080/docs`이며 Try it out은 Gateway를 통한다.
+JSON은 `/docs/openapi.json`이다. 계약·설정 변경 후 생성 명령을 다시 실행한다.
+Gateway 기본 IP rate limit에는 Redis도 필요하다. Post·Map의 저장소 실행 절차는
+각 서비스 README를 따른다. User도 PostgreSQL·Redis와 인증 설정이 필요하다.
+Notification의 알림 조회·읽음 처리·푸시 구독 API도 수집·검증하며,
+Moderation은 문서 수집 미지원이다. `/api/v1/terms`는 현재 Gateway 라우팅에 없어 제외한다.
+수집·검증 실패 시 명령은 실패하고 기존 생성 파일을 유지한다. 서비스 문서 URL과
+로그의 실패 이유를 확인한 뒤 재실행한다. 파일이 없으면 JSON만 503을 반환하고
+일반 API는 계속 동작한다. production에서는 활성화 설정과 관계없이 문서·자산을
+노출하지 않는다. 활성화·인증 계약·컨테이너 설정·제한 사항은
+[HTTP Gateway README](gateways/http-gateway/README.md#통합-공개-openapi--swagger-로컬dev-전용)를 참고한다.
