@@ -54,58 +54,9 @@ function sameOrNewer(previous) {
       'Refusing an older/divergent release; use an explicit recovery procedure',
     );
 }
-async function verifyCi() {
-  const event = JSON.parse(
-    readFileSync(required(env, 'GITHUB_EVENT_PATH'), 'utf8'),
-  );
-  const branch = required(env, 'CD_BRANCH');
-  if (branch !== event.repository.default_branch)
-    throw new Error('CD_BRANCH must be the repository default branch');
-  const repo = required(env, 'GITHUB_REPOSITORY');
-  if (event.workflow_run) {
-    const run = event.workflow_run;
-    if (
-      run.event !== 'push' ||
-      run.conclusion !== 'success' ||
-      run.head_sha !== sha ||
-      run.head_branch !== branch ||
-      run.head_repository?.full_name !== repo
-    )
-      throw new Error(
-        'CD only accepts successful same-repository push CI on CD_BRANCH',
-      );
-  } else {
-    if (env.GITHUB_REF !== `refs/heads/${branch}`)
-      throw new Error('Manual deployment must run on CD_BRANCH');
-    const response = await fetch(
-      `https://api.github.com/repos/${repo}/actions/workflows/ci.yml/runs?head_sha=${sha}&event=push&status=success&per_page=100`,
-      {
-        headers: {
-          Authorization: `Bearer ${required(env, 'GH_TOKEN')}`,
-          Accept: 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
-      },
-    );
-    if (!response.ok) throw new Error('Unable to verify CI');
-    const data = await response.json();
-    if (
-      !data.workflow_runs?.some(
-        (run) =>
-          run.head_sha === sha &&
-          run.head_branch === branch &&
-          run.head_repository?.full_name === repo &&
-          run.conclusion === 'success',
-      )
-    )
-      throw new Error('Successful push CI for this exact SHA is required');
-  }
-  console.log('Verified trusted CI release source.');
-}
-
 async function deploy() {
   if (!['staging', 'production'].includes(mode))
-    throw new Error('Usage: node scripts/cd.mjs verify|staging|production');
+    throw new Error('Usage: node scripts/cd.mjs staging|production');
   const account = required(env, 'AWS_ACCOUNT_ID');
   if (
     !/^\d{12}$/.test(account) ||
@@ -440,8 +391,7 @@ async function deploy() {
     writeFileSync('release.json', JSON.stringify(release), { mode: 0o600 });
 }
 try {
-  if (mode === 'verify') await verifyCi();
-  else await deploy();
+  await deploy();
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

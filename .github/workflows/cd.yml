@@ -1,16 +1,10 @@
 name: CD
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-  workflow_dispatch:
-    inputs:
-      force_services:
-        description: 'Secret/task configuration rotation: comma-separated service names, all, or empty'
-        required: false
-        default: ''
-        type: string
+  # Use base-repository credentials only AFTER a reviewed PR has actually merged.
+  pull_request_target:
+    types: [closed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -23,51 +17,24 @@ concurrency:
 
 jobs:
   verify:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == github.event.repository.default_branch &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
     steps:
-      # This must precede checkout: never execute a candidate branch's validator with deployment trust.
+      # No PR head checkout: only the immutable commit already merged into main is trusted.
       - name: Reject untrusted release source before checkout
         env:
-          CD_BRANCH: ${{ secrets.CD_BRANCH }}
-          CD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          CD_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs';
           const e = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
-          const branch = process.env.CD_BRANCH;
-          const sha = process.env.CD_SHA;
-          if (branch !== e.repository.default_branch) throw new Error('CD_BRANCH must be the repository default branch');
-          if (!branch || !/^[a-f0-9]{40}$/.test(sha ?? '')) throw new Error('Missing trusted release configuration');
-          if (e.workflow_run) {
-            const r = e.workflow_run;
-            if (r.event !== 'push' || r.conclusion !== 'success' || r.head_branch !== branch || r.head_sha !== sha || r.head_repository?.full_name !== process.env.GITHUB_REPOSITORY) throw new Error('Untrusted release source');
-          } else if (process.env.GITHUB_REF !== `refs/heads/${branch}`) {
-            throw new Error('Manual release must use CD_BRANCH');
-          }
+          const pr = e.pull_request;
+          if (process.env.GITHUB_EVENT_NAME !== 'pull_request_target' || e.action !== 'closed' ||
+              pr?.merged !== true || pr.base?.ref !== 'main' ||
+              pr.base?.repo?.full_name !== process.env.GITHUB_REPOSITORY ||
+              !/^[a-f0-9]{40}$/.test(pr.merge_commit_sha ?? '') ||
+              pr.merge_commit_sha !== process.env.CD_SHA) throw new Error('Only a merged PR into main can deploy');
           JS
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Verify trusted branch and exact successful CI commit
-        env:
-          CD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-          CD_BRANCH: ${{ secrets.CD_BRANCH }}
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/cd.mjs verify
 
   staging:
     needs: verify
@@ -77,8 +44,8 @@ jobs:
       contents: read
       id-token: write
     env:
-      CD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-      CD_FORCE_SERVICES: ${{ inputs.force_services || '' }}
+      CD_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      CD_FORCE_SERVICES: ${{ secrets.CD_FORCE_SERVICES }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
       ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
@@ -90,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -113,7 +80,7 @@ jobs:
       - name: Save tested immutable release (no task definitions or secret values)
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ github.event.workflow_run.head_sha || github.sha }}
+          name: release-${{ github.event.pull_request.merge_commit_sha }}
           path: release.json
           if-no-files-found: error
           overwrite: true
@@ -131,8 +98,8 @@ jobs:
       contents: read
       id-token: write
     env:
-      CD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-      CD_FORCE_SERVICES: ${{ inputs.force_services || '' }}
+      CD_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      CD_FORCE_SERVICES: ${{ secrets.CD_FORCE_SERVICES }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
       ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
@@ -144,7 +111,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -152,7 +119,7 @@ jobs:
           node-version: 24
       - uses: actions/download-artifact@v4
         with:
-          name: release-${{ github.event.workflow_run.head_sha || github.sha }}
+          name: release-${{ github.event.pull_request.merge_commit_sha }}
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}

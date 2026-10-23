@@ -11,7 +11,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, test } from 'node:test';
-import { successfulBase } from './ci-base.mjs';
 import { changedFiles, selectChanges, services } from './ci-lib.mjs';
 
 const temporary = [];
@@ -190,33 +189,6 @@ test('Post HTTP controller changes validate WS and location contracts', () => {
   assert.deepEqual(names(selected.deploy_matrix), ['post-service']);
 });
 
-test('push baseline uses an ancestral successful run rather than the previous failed commit', () => {
-  const first = 'a'.repeat(40),
-    failed = 'b'.repeat(40),
-    unrelated = 'c'.repeat(40);
-  const run = (head_sha, conclusion = 'success', head_branch = 'main') => ({
-    head_sha,
-    conclusion,
-    head_branch,
-    event: 'push',
-  });
-  assert.equal(
-    successfulBase([run(failed, 'failure'), run(unrelated), run(first)], {
-      branch: 'main',
-      head: 'HEAD',
-      isAncestor: (sha) => sha === first,
-    }),
-    first,
-  );
-  assert.equal(
-    successfulBase([run(first, 'success', 'other')], {
-      branch: 'main',
-      head: 'HEAD',
-      isAncestor: () => true,
-    }),
-    '',
-  );
-});
 test('WS source and Map participation policy run the cross-service regression', () => {
   for (const file of [
     'gateways/ws-gateway/src/app.ts',

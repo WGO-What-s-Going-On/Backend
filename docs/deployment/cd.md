@@ -8,24 +8,27 @@
 전체 Secret 이름·형식·환경별 범위는 루트 [`.env.cd.example`](../../.env.cd.example)에 있다.
 실제 값을 채운 파일을 커밋하지 말고 GitHub Secrets에 직접 등록한다.
 
-- Repository Secret: `CD_BRANCH`. 이 workflow_run 구현은 저장소 **default branch와 같은 값만 허용**한다.
-  workflow_run의 GitHub Environment ref가 default branch이므로 소스 브랜치와 배포 보호 규칙을 일치시킨다.
 - `staging`, `production` Environment Secrets: `AWS_REGION`, `AWS_ACCOUNT_ID`, `AWS_ROLE_ARN`,
   `ECR_REGISTRY`, `ECS_CLUSTER`, `CD_IMAGE_PLATFORM`, `CD_STATE_PREFIX`, `CD_SERVICES_JSON`,
   `CD_RUNTIME_SECRETS_JSON`.
-- 두 Environment 모두 배포 브랜치를 `CD_BRANCH`로 제한한다. `production`에는 required reviewers를
+- 두 Environment 모두 배포 브랜치를 `main`으로 제한한다. `production`에는 required reviewers를
   설정한다. YAML의 `environment: production` 자체는 승인자를 생성하지 않는다.
 - 배포 대상 서비스 이름 집합과 ECR registry/region/repository 이름은 두 환경에서 같아야 한다.
   Production은 staging에서 만든 동일 digest를 pull한다. 다른 AWS 계정이면 ECR repository policy와
   task execution role의 cross-account pull 권한을 구성한다.
-- Secret/task definition만 바꿀 때는 `CD` workflow_dispatch의 `force_services`에 서비스 이름 목록
-  또는 `all`을 입력한다. 코드 변경이 없으면 자동 감지가 Secret 변경을 알 수 없다.
+- main Ruleset/branch protection에서 PR 병합과 `ci` 체크 성공을 필수로 지정하고 최신 main 반영을 요구한다.
+  이 설정은 저장소 코드가 자동으로 생성하지 않는다. CD에서 push CI 성공을 재조회하지 않는다.
+- Secret/task definition만 바꿀 때는 선택적으로 `CD_FORCE_SERVICES` Secret에 서비스 이름 목록 또는
+  `all`을 설정하고 main으로 변경 안내 PR을 병합한다. staging/production에 같은 값을 적용하고
+  배포 성공 후 비운다. 수동 신규 실행은 없으며 실패한 기존 실행은 GitHub에서 재실행할 수 있다.
 
 ## 파이프라인 흐름
 
-1. `CI`의 **같은 저장소·허용 브랜치 push 성공**만 자동 배포로 연결한다. PR/fork CI는 배포하지 않는다.
-   후보 커밋을 checkout하기 전에 신뢰된 workflow 본문에서 이벤트·브랜치를 검증한다.
-   수동 실행도 허용 브랜치와 해당 SHA의 성공한 push CI를 확인한다.
+1. `pull_request_target`의 `closed` 이벤트 중 **main으로 실제 병합된 PR만** 배포한다.
+   단순 PR 닫기, main 직접 push, PR 생성/업데이트, 수동 신규 실행은 배포하지 않는다.
+   checkout 전에 이벤트·merged 상태·대상 저장소·main·병합 SHA를 검사한다. fork에서 온 PR도
+   병합 이후에만 처리하며 PR head는 checkout하지 않는다. merge/squash/rebase 방식 모두 이벤트의
+   `merge_commit_sha`로 고정한 병합 결과를 배포한다. CI는 PR 단계에서만 실행한다.
 2. staging에서 서비스별 SSM 마지막 성공 SHA와 현재 SHA의 런타임 변경을 비교한다.
    테스트·문서만 변경되면 이미지를 다시 만들지 않는다. 누락된 state는 최초 배포로 간주한다.
    권한/네트워크 오류를 state 없음으로 처리하지 않는다. 삭제되거나 유효하지 않은 과거 Git SHA는
@@ -94,3 +97,5 @@ SSM 권한 오류, production 미반영 배포 따라잡기와 강제 Secret 회
 참고: [GitHub AWS OIDC](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws),
 [AWS ECS update-service](https://docs.aws.amazon.com/cli/latest/reference/ecs/update-service.html),
 [ECS 배포 circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html).
+
+트리거 기준: [GitHub의 PR 병합 이벤트](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#running-your-pull_request_target-workflow-when-a-pull-request-merges).

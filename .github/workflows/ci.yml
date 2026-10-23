@@ -2,12 +2,10 @@ name: CI
 
 on:
   pull_request:
-  push:
-  workflow_dispatch:
+/    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -23,7 +21,6 @@ jobs:
       has_deploy: ${{ steps.changes.outputs.has_deploy }}
       integration_user_gateway: ${{ steps.changes.outputs.integration_user_gateway }}
       integration_ws_post: ${{ steps.changes.outputs.integration_ws_post }}
-      comparison_base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || steps.baseline.outputs.base }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,26 +28,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Find last successful push CI on this branch
-        if: github.event_name == 'push'
-        id: baseline
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/ci-base.mjs
       - name: Find changed services and affected contracts
         id: changes
         env:
-          EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PUSH_BASE_SHA: ${{ steps.baseline.outputs.base }}
-        run: |
-          if [ "$EVENT_NAME" = pull_request ]; then
-            node scripts/ci.mjs detect "$PR_BASE_SHA" HEAD --pr
-          elif [ "$EVENT_NAME" = push ]; then
-            node scripts/ci.mjs detect "$PUSH_BASE_SHA"
-          else
-            node scripts/ci.mjs detect
-          fi
+        run: node scripts/ci.mjs detect "$PR_BASE_SHA" HEAD --pr
 
   pipeline:
     runs-on: ubuntu-latest
@@ -78,17 +60,8 @@ jobs:
       - run: npm ci
       - name: Check changed files with Prettier
         env:
-          EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PUSH_BASE_SHA: ${{ needs.detect.outputs.comparison_base }}
-        run: |
-          if [ "$EVENT_NAME" = pull_request ]; then
-            node scripts/ci.mjs format "$PR_BASE_SHA" HEAD --pr
-          elif [ "$EVENT_NAME" = push ]; then
-            node scripts/ci.mjs format "$PUSH_BASE_SHA"
-          else
-            node scripts/ci.mjs format
-          fi
+        run: node scripts/ci.mjs format "$PR_BASE_SHA" HEAD --pr
 
   test:
     needs: detect

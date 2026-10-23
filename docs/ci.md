@@ -5,9 +5,8 @@
 
 ## 비교 기준과 실행 범위
 
-- PR: base와 검사할 HEAD의 merge-base부터 비교한다. base 브랜치에만 추가된 변경은 포함하지 않는다.
-- Push: 같은 브랜치의 **마지막 성공한 CI push 커밋 중 HEAD의 조상**을 기준으로 한다. 이전 커밋 CI가 실패했다면 그 변경도 다음 push에서 다시 검사한다. 단순히 `github.event.before`만 사용하지 않는다.
-- 성공 이력·Git 객체·GitHub API를 사용할 수 없는 경우, 수동 실행, 첫 실행: 전체 검증으로 보수적으로 전환한다.
+- PR 생성(`opened`)·추가 커밋(`synchronize`)·재오픈(`reopened`) 때만 실행한다. 일반 push, PR 닫기, 수동 실행은 트리거하지 않는다.
+- PR base와 검사할 HEAD의 merge-base부터 비교한다. base 브랜치에만 추가된 변경은 포함하지 않는다.
 - 삭제와 서비스 간 파일 이동은 이전·새 경로를 모두 검사한다.
 - 문서만 변경하면 서비스 작업을 생략하지만, 인증·이벤트 계약 문서는 관련 소비자를 검사한다.
 - 테스트만 변경하면 해당 서비스 검증만 수행하고 이미지 배포 후보에 포함하지 않는다.
@@ -54,3 +53,10 @@ docker compose -f scripts/ci-compose.yaml config --quiet
 직접 저장소 통합 테스트를 실행할 때는 테스트 포트가 비어 있는 격리 환경을 사용한다.
 `node scripts/ci-dependencies.mjs start <service>` / `stop <service>`는 CI 전용 컨테이너를 관리하며,
 애플리케이션 테스트가 사용하는 Redis 테스트 DB를 초기화할 수 있으므로 기존 개발 저장소와 공유하지 않는다.
+
+## 병합 전 필수 설정
+
+main Ruleset/branch protection에서 `ci` 체크 성공과 PR을 통한 병합을 필수로 지정한다.
+최신 main을 반영한 PR 검증도 요구해 병합 후 조합이 미검증 상태가 되지 않게 한다.
+이 저장소 변경은 GitHub 보호 규칙 자체를 생성하지 않는다. CD는 병합 이벤트에 연결되며
+별도의 push CI를 기다리지 않는다. merge queue는 현재 트리거 범위에 포함하지 않는다.
