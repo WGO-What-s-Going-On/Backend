@@ -132,8 +132,9 @@ Gateway가 사용자 Access JWT도 검증하고, 필요한 내부 신원 헤더�
 | Post        | `POST /api/v1/posts`, `POST /api/v1/posts/{postId}/comments`, `POST /api/v1/posts/{postId}/reactions`, `POST /api/v1/posts/{postId}/participants` | `http-gateway`   | 필요; `x-user-id`                 |
 | Map         | `PUT /api/v1/location`                                                                                                                            | `http-gateway`   | 필요; `x-user-id`                 |
 
-현재 HTTP Gateway는 사용자 인증을 적용하지 않는 투명 프록시다. 이 표는 **목표
-권한**이며 현재 운영에 허용된 경로를 나타내지 않는다. 3단계에서 method·path별로
+HTTP Gateway→User REST는 이 표의 User 경로에 서비스 ES256 인증과 사용자 HS256
+검증을 적용한다. `GET /api/v1/terms`도 사용자 인증 불필요·Gateway 서비스 인증 필수로
+허용한다. 다른 서비스 행은 **목표 권한**이며 이 변경으로 운영 공개하지 않는다. 3단계에서 method·path별로
 구현하며 prefix 전체를 허용하지 않는다. User의 로그아웃·프로필 변경, Post의
 쓰기, Map의 위치 갱신은 Gateway 사용자 인증과 내부 헤더 정제가 끝나기 전까지
 운영에서 열지 않는다. 프록시에 등록된 Notification·Moderation prefix는 구현된
@@ -173,3 +174,26 @@ Gateway가 사용자 Access JWT도 검증하고, 필요한 내부 신원 헤더�
 `MapPostQuery.SearchNearbyPosts`는 ES256으로 인증한 `post-service`만 허용한다. 기존 두 MapAuthorization RPC의 HS256 전환 예외를 신규 RPC에 확장하지 않는다. Post는 기존 두 위치 인가 클라이언트와 동일한 내부 ES256 서명 함수를 사용한다. 자세한 입력/응답은 Map `contracts/map-authorization.proto`에 정의한다.
 
 `POST /api/v1/posts/similar`는 생성과 같은 사용자 인증 정책을 따른다. 현재 로컬·테스트 X-User-Id만 지원하고 운영 사용자 인증 미연결 시 503이다. 목표 Gateway 호출자는 http-gateway이며 사용자 인증/내부 헤더 정제는 기존 전환 선행 조건이다. 모델 미연결도 명시적인 503이며 API 추가가 운영 인증 개방을 뜻하지 않는다.
+
+## HTTP Gateway → User REST 적용 상태
+
+- 사용자 Access JWT 발급은 기존 User HS256 구현을 유지한다. Gateway의
+  `JWT_ACCESS_SECRET`, `JWT_ACCESS_ISSUER`, `JWT_ACCESS_AUDIENCE`를 발급 설정과 일치시킨다.
+  `typ=JWT`, `sub`(양의 안전한 정수 문자열), `sid`(UUID), 정수 `iat`·`exp`를 검증한다.
+- Gateway 서비스 개인키: `HTTP_GATEWAY_SERVICE_PRIVATE_JWK` (P-256 JWK, `alg=ES256`, `kid`).
+  User 수신 공개키: `USER_HTTP_GATEWAY_TRUSTED_JWKS` (`keys` 배열, 각 키에 `iss=wgo-http-gateway`).
+  gRPC 키 및 사용자 Access secret과 분리하며 공개키 set에는 개인키를 넣을 수 없다.
+- 서비스 토큰은 30초 수명, 최대 허용 60초다. User는 전역 REST Guard로 검증하고
+  method·path 허용표에 있는 작업만 통과시킨다. `GET /health/live`는 인증 예외다.
+  Swagger는 기존 문서 제공 경로이며 업무 API 인증을 우회하지 않는다.
+- Gateway는 User 경로의 외부 신원 헤더를 제거하고, 보호 경로에서는 검증된 사용자
+  claim만 전달한다. 사용자 JWT가 필요한 요청의 누락·위조·만료는 Gateway 401이다.
+  설정 전체 미지정 시 User 프록시는 503, 일부 누락·잘못된 키는 시작 실패다.
+  User는 신뢰 키 설정이 없거나 잘못되면 시작하지 않는다. 개발용 우회는 없다.
+- User 직접 호출은 로그인·Refresh도 서비스 JWT가 필요하다. 원본 OpenAPI는 내부
+  계약이며 Gateway 병합 문서는 사용자 Bearer만 노출한다. 약관 조회도 프록시한다.
+- HS256 사용자 토큰의 운영 WS 호환성(WGO-ARCH-03), 다른 서비스 인증 전환,
+  계정 상태 정책 변경·즉시 Access JWT 폐기는 이 작업에 포함하지 않는다.
+- 배포 시 사설 접근·TLS를 구성하고 외부 User 진입을 제한한 상태에서 Guard와 Gateway를
+  함께 전환한다. 키 교체는 신·구 공개키 등록 → Gateway 서명 키 교체 → 기존 Task 종료와
+  최대 토큰 수명 경과 후 구 공개키 제거 순서로 진행한다.

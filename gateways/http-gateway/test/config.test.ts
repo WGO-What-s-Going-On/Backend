@@ -24,4 +24,8 @@ describe('loadConfig', () => {
 
     expect(() => loadConfig()).toThrow('POST_SERVICE_URL');
   });
+  it('rejects partially configured User authentication', () => {
+    process.env = { JWT_ACCESS_SECRET: 'configured-but-incomplete' };
+    expect(() => loadConfig()).toThrow('JWT_ACCESS_ISSUER');
+  });
 });

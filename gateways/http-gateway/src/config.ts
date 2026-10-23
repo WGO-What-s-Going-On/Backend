@@ -1,3 +1,4 @@
+import type { UserAuthConfig } from './user-auth.js';
 export type ServiceName =
   | 'user'
   | 'post'
@@ -6,6 +7,7 @@ export type ServiceName =
   | 'moderation';
 
 export interface AppConfig {
+  userAuth: UserAuthConfig | null;
   nodeEnv: 'development' | 'test' | 'production';
   docs: { enabled: boolean; file: string; timeoutMs: number };
   host: string;
@@ -79,6 +81,7 @@ export function loadConfig(): AppConfig {
 
   return {
     nodeEnv,
+    userAuth: userAuthConfig(),
     docs: {
       enabled: nodeEnv !== 'production' && boolean('DOCS_ENABLED', false),
       file: process.env.DOCS_FILE ?? 'generated/openapi.json',
@@ -112,5 +115,23 @@ export function loadConfig(): AppConfig {
       notification: url('NOTIFICATION_SERVICE_URL', 'http://127.0.0.1:3004'),
       moderation: url('MODERATION_SERVICE_URL', 'http://127.0.0.1:3005'),
     },
+  };
+}
+
+function userAuthConfig(): UserAuthConfig | null {
+  const names = [
+    'JWT_ACCESS_SECRET',
+    'JWT_ACCESS_ISSUER',
+    'JWT_ACCESS_AUDIENCE',
+    'HTTP_GATEWAY_SERVICE_PRIVATE_JWK',
+  ] as const;
+  if (names.every((name) => !process.env[name])) return null;
+  for (const name of names)
+    if (!process.env[name]?.trim()) throw new Error(`${name} is required`);
+  return {
+    accessSecret: process.env.JWT_ACCESS_SECRET!,
+    issuer: process.env.JWT_ACCESS_ISSUER!,
+    audience: process.env.JWT_ACCESS_AUDIENCE!,
+    servicePrivateJwk: process.env.HTTP_GATEWAY_SERVICE_PRIVATE_JWK!,
   };
 }

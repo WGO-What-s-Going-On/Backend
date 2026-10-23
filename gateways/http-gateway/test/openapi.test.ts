@@ -86,6 +86,36 @@ async function directory() {
 }
 
 describe('public OpenAPI merge', () => {
+  it('replaces internal User credentials with public bearer authentication', async () => {
+    const user = fixture('/api/v1/users/me');
+    user.components.securitySchemes['service-jwt'] = {
+      type: 'http',
+      scheme: 'bearer',
+    };
+    user.security = [{ 'service-jwt': [] }];
+    user.paths['/api/v1/users/me'].parameters = [
+      { in: 'header', name: 'X-User-Id', schema: { type: 'string' } },
+    ];
+    user.paths['/api/v1/users/me'].get.parameters = [
+      { in: 'header', name: 'X-Session-Id', schema: { type: 'string' } },
+    ];
+    const doc = await mergeDocuments(
+      [{ service: 'user', document: user }],
+      config(),
+    );
+    expect(doc.paths['/api/v1/users/me'].parameters).toEqual([]);
+    expect(doc.paths['/api/v1/users/me'].get.parameters).toEqual([]);
+    expect(doc.paths['/api/v1/users/me'].get.security).toEqual([
+      { user__UserAccess: [] },
+    ]);
+    expect(doc.components.securitySchemes).toEqual({
+      user__UserAccess: {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT (HS256)',
+      },
+    });
+  });
   it('namespaces component, operationId, recursive ref and inherited security collisions without mutating input', async () => {
     const post = fixture(),
       map = fixture('/api/v1/location');
@@ -150,7 +180,7 @@ describe('public OpenAPI merge', () => {
       merged.paths['/api/v1/posts'].get.responses['200'].links.self.operationId,
     ).toBe('post__read');
   });
-  it('validates health-only Notification and excludes non-routed User terms', async () => {
+  it('validates health-only Notification and includes routed User terms', async () => {
     const user = fixture('/api/v1/users/me');
     user.paths['/api/v1/terms'] = {
       get: { responses: { '200': { description: 'Terms' } } },
@@ -171,7 +201,14 @@ describe('public OpenAPI merge', () => {
       ],
       config(),
     );
-    expect(Object.keys(doc.paths)).toEqual(['/api/v1/users/me']);
+    expect(Object.keys(doc.paths)).toEqual([
+      '/api/v1/users/me',
+      '/api/v1/terms',
+    ]);
+    expect(doc.paths['/api/v1/users/me'].get.security).toEqual([
+      { user__UserAccess: [] },
+    ]);
+    expect(doc.paths['/api/v1/terms'].get.security).toEqual([]);
     expect(doc['x-services-without-public-operations']).toEqual([
       'notification',
     ]);

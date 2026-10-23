@@ -1,3 +1,5 @@
+import { APP_GUARD } from '@nestjs/core';
+import { GatewayAuthGuard } from './http-auth/gateway-auth.guard.js';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -29,6 +31,9 @@ import { WithdrawalScheduler } from './withdrawal/withdrawal.scheduler.js';
     OutboxModule,
     UserGrpcModule,
   ],
-  providers: [WithdrawalScheduler],
+  providers: [
+    WithdrawalScheduler,
+    { provide: APP_GUARD, useClass: GatewayAuthGuard },
+  ],
 })
 export class AppModule {}

@@ -117,14 +117,18 @@ describe('User OpenAPI contract', () => {
     expect(
       doc.components.schemas.NicknameAvailabilityResult.properties.reason.enum,
     ).toEqual(['DUPLICATED']);
-    expect(doc.components.securitySchemes ?? {}).toEqual({});
-    for (const item of Object.values(doc.paths) as Array<
-      Record<string, { security?: unknown }>
-    >)
-      for (const operation of Object.values(item))
-        expect(operation.security).toBeUndefined();
+    expect(doc.components.securitySchemes['service-jwt']).toMatchObject({
+      scheme: 'bearer',
+    });
+    for (const [path, item] of Object.entries(doc.paths))
+      for (const operation of Object.values(
+        item as Record<string, { security?: unknown }>,
+      ))
+        expect(operation.security).toEqual(
+          path.startsWith('/api/v1/') ? [{ 'service-jwt': [] }] : undefined,
+        );
   });
-  it('matches current login/refresh/logout success and input errors, without a Bearer requirement', async () => {
+  it('matches current login/refresh/logout success and input errors, in the isolated controller fixture', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/auth/kakao')
       .send({ authorizationCode: ' code ' })
