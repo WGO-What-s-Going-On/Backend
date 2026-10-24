@@ -7,7 +7,7 @@
 - 최초 검토 기준 커밋: `4104986a7a9f12f13cd451043a78cb561d7b1f75`
 - 범위: HTTP Gateway, WS Gateway, User, Post, Map, Notification, Moderation 및 관련 계약·CI
 - 최신화: 2026-10-24, 구현 확인 기준 `ab8c792` (인증 `3e284a1`, WS·CI/CD `57a558f`, Post CI 의존성 보완 `ab8c792`).
-- 상태: 01·02는 해결(구현·로컬 검증 완료), 11은 진행 중이며 나머지는 미해결. 이 문서의 ID는 내부 추적용이며 GitHub Issue 생성이나 담당자 배정을 의미하지 않는다.
+- 상태: 01·02는 해결(구현·로컬 검증 완료), 05·11은 진행 중이며 나머지는 미해결. 이 문서의 ID는 내부 추적용이며 GitHub Issue 생성이나 담당자 배정을 의미하지 않는다.
 - 기준: [전체 아키텍처](../../ARCHITECTURE.md), [프로젝트 지침](../../AGENTS.md), [서비스 인증 계약](../contracts/service-authentication.md)
 
 ## 우선순위와 완료 관리
@@ -28,7 +28,7 @@ Critical과 High는 관련 기능의 병합·운영 공개 전 차단 이슈로 
 | WGO-ARCH-02 | High       | P0       | WS 참여와 댓글 작성의 도메인 인가 연결         | WS Gateway, Post, Map               | 해결 |
 | WGO-ARCH-03 | High       | P1       | 사용자 JWT 발급과 운영 WS 검증 계약 통일       | User, HTTP Gateway, WS Gateway      | 미해결 |
 | WGO-ARCH-04 | High       | P1       | Map 검색의 페이지 누락과 과도한 순차 조회 수정 | Map, Post                           | 미해결 |
-| WGO-ARCH-05 | High       | P1       | Moderation 결정의 Post 원본 적용 연결          | Moderation, Post, Map, Notification | 미해결 |
+| WGO-ARCH-05 | High       | P1       | Moderation 결정의 Post 원본 적용 연결          | Moderation, Post, Map, Notification | 진행 중 |
 | WGO-ARCH-06 | High       | P1       | 삭제·만료·댓글 삭제의 실시간 상태 반영         | WS Gateway, Post                    | 미해결 |
 | WGO-ARCH-07 | Medium     | P1       | Notification 전송 재시도의 전체 스캔 제거      | Notification                        | 미해결 |
 | WGO-ARCH-08 | Medium     | P1       | Moderation 전체 평가와 단일 JSON 증가 제한     | Moderation                          | 미해결 |
@@ -146,18 +146,33 @@ GEO 후보 전체를 조회한 뒤 각 후보의 Cassandra 위치와 상태를 �
 
 **심각도 High · 우선순위 P1 · 자동 제재 및 자동 종료 기능 공개 차단**
 
-Moderation은 `BOARD_STALE`, `BOARD_REACTIVATED`, `BOARD_CLOSED`를 발행하지만 Post에 이를 적용하는 Consumer나 인가된 상태 변경 API가 없다. 댓글 검사 결과도 내부 저장에 머물러 실제 제재 적용까지 연결되지 않는다. Moderation의 CLOSED와 Post의 ACTIVE가 동시에 존재할 수 있다.
+**최초 발견:** Moderation은 `BOARD_STALE`, `BOARD_REACTIVATED`, `BOARD_CLOSED`를 발행하지만 Post에 이를 적용하는 Consumer나 인가된 상태 변경 API가 없었다. 댓글 검사 결과도 내부 저장에 머물러 실제 제재 적용까지 연결되지 않는다. Moderation의 CLOSED와 Post의 ACTIVE가 동시에 존재할 수 있다.
 
 근거: [Moderation 연동 공백](../../services/moderation-service/contracts/integration-gaps.md) 27행 및 41행, [Lifecycle 처리](../../services/moderation-service/src/lifecycle/lifecycle.service.ts).
 
-목표 흐름은 `판단 → Post 적용 요청 → 원본 버전 확인 및 원자적 변경 → 적용 성공/거부 이벤트 → 소비자 반영`이다. WGO-ARCH-12에서 일반 수명주기 정책의 소유권을 먼저 확정한다. CLOSED를 EXPIRED로 임의 매핑하지 않는다.
+목표 흐름은 `판단 → Post 적용 요청 → 원본 버전 확인 및 원자적 변경 → 적용 성공/거부 이벤트 → 소비자 반영`이다. WGO-ARCH-12에서 일반 수명주기 정책의 소유권을 먼저 확정한다. 2026-10-24 사용자 합의로 CLOSED → EXPIRED 매핑을 확정했다.
 
 - [ ] 결정 ID·대상 버전·정책 버전·상태 매핑·실패 의미를 계약으로 확정한다.
 - [ ] 중복·역순 결정과 이미 삭제·만료된 대상의 처리를 검증한다.
-- [ ] 원본 상태 변경과 확정 이벤트 Outbox를 같은 로컬 트랜잭션으로 기록한다.
+- [x] 원본 상태 변경과 확정 이벤트 Outbox를 같은 로컬 트랜잭션으로 기록한다.
 - [ ] Map과 Notification은 판단이 아닌 필요한 확정 사실을 반영한다.
 - [ ] 판단부터 실제 게시물 상태 변경까지 종단 간 테스트를 통과한다.
 - [ ] 게시물 본문 검사에 필요한 인가된 조회 또는 검사 요청 계약도 명시한다.
+
+**2026-10-24 부분 구현:** 기존 Moderation lifecycle v1을 Post Consumer가 읽는다.
+STALE/REACTIVATED는 처리 이력만 남기고, CLOSED는 ACTIVE를 EXPIRED로 바꾸며 기존 투표를 종료한다.
+수신 eventId 이력·원본 변경·PostExpired Outbox를 한 MongoDB 트랜잭션에 저장하고 커밋 뒤 ACK한다.
+이미 종료된 게시물은 재종료·재개방하지 않는다. 활성화는 POST_MODERATION_CONSUMER_ENABLED와
+Moderation 생산자 endpoint/DB 설정이 필요하다. [수신 계약](../../services/post-service/contracts/post-events.md#11-moderation-lifecycle-v1-수신-2026-10-24)을 따른다.
+
+버전·상세 종료 사유·최신 활동 대조·적용 결과 피드백·검토 기반 콘텐츠 제재는
+[별도 후속 목록](../../services/moderation-service/contracts/integration-gaps.md#lifecycle-v1-연결-이후-후속-작업)에 남겼다.
+따라서 05 전체를 해결 처리하지 않으며 운영 배포·WS 종료 전파(06) 완료를 뜻하지 않는다.
+
+검증: 신규 계약·통합 테스트 20개를 포함해 Post 전체 154개 통과·선택적 5개 생략, 타입 검사·빌드 성공.
+실제 MongoDB·Redis에서 중복 수신, 커밋 후 ACK 유실, Outbox 실패 롤백, Pending 회수·DLQ와 Worker 기동을 확인했다.
+실제 Map Consumer·Cassandra·Redis GEO로 PostExpired 적용도 검증했다. Moderation 판단 자체는 변경하지 않았으며
+입력은 기존 v1 형식의 테스트 이벤트다. CI 선택 규칙을 포함한 스크립트 30개가 통과했다.
 
 ### WGO-ARCH-06 삭제와 만료의 실시간 상태 반영
 
@@ -321,7 +336,7 @@ Post E5 추론은 인스턴스에서 한 작업씩 실행하고 온라인 검색
 
 아키텍처 15개 항목과 [QA 확정 결함 7건](../../qa/artifacts/20261023-local-6975fb3/defects.md)을 함께 평가했다. QA의 부분 GEO 유실과 기본 500ms 후보 조회 실패는 모두 WGO-ARCH-04의 하위 작업으로 관리한다. 따라서 원본 기록은 22개이며, 이 두 건을 중복 작업으로 만들지 않으면 관리 대상은 20개다. 서로 다른 재현 조건과 완료 검증은 각각 유지한다.
 
-이번 순서는 심각도와 별개인 **착수·완료 순서**다. 앞의 Critical/High/Medium 및 P0/P1/P2 판정은 유지한다. CI 보강과 소유권 합의를 앞당기는 이유는 다른 수정의 선행 조건이기 때문이다. 아래는 최초 QA 기준으로 정한 착수 순서다. 2026-10-24 기준 01·02는 해결했고 11은 진행 중이다. 다음 인증 과제는 03의 운영 WS 토큰 호환성이며, 나머지 미해결 항목의 우선순위는 유지한다.
+이번 순서는 심각도와 별개인 **착수·완료 순서**다. 앞의 Critical/High/Medium 및 P0/P1/P2 판정은 유지한다. CI 보강과 소유권 합의를 앞당기는 이유는 다른 수정의 선행 조건이기 때문이다. 아래는 최초 QA 기준으로 정한 착수 순서다. 2026-10-24 기준 01·02는 해결했고 05·11은 진행 중이다. 다음 인증 과제는 03의 운영 WS 토큰 호환성이며, 나머지 미해결 항목의 우선순위는 유지한다.
 
 #### 1차: 즉시 착수 — 인증 경계, 외부 요청 제한, 수정 검증 기반
 

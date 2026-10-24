@@ -1,3 +1,4 @@
+import type { ModerationLifecycleEvent } from './moderation.js';
 import type {
   CommentRecord,
   CommentReactionCounts,
@@ -114,6 +115,7 @@ export interface PostReadQueries {
 }
 
 export interface PostCommands {
+  recordModerationEvent(input: ModerationLifecycleEvent): Promise<boolean>;
   insertPost(post: PostRecord): Promise<void>;
   insertComment(
     comment: CommentRecord & { bucketId: number },

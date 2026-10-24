@@ -197,3 +197,15 @@ test('WS source and Map participation policy run the cross-service regression', 
     assert.equal(selectChanges([file]).integration_ws_post, true);
   }
 });
+
+test('Moderation lifecycle changes validate the Post consumer and Map termination contract', () => {
+  const selected = selectChanges([
+    'services/moderation-service/src/lifecycle/lifecycle.ts',
+  ]);
+  assert.deepEqual(names(selected.matrix), [
+    'map-service',
+    'moderation-service',
+    'post-service',
+  ]);
+  assert.deepEqual(names(selected.deploy_matrix), ['moderation-service']);
+});

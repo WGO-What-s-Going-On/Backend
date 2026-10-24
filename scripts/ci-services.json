@@ -106,6 +106,16 @@
         "post-service",
         "map-service"
       ]
+    },
+    {
+      "prefixes": [
+        "services/moderation-service/src/lifecycle/",
+        "services/moderation-service/contracts/",
+        "services/post-service/src/post/application/moderation.ts",
+        "services/post-service/src/post/infrastructure/moderation-",
+        "services/post-service/test/moderation"
+      ],
+      "services": ["moderation-service", "post-service", "map-service"]
     }
   ]
 }

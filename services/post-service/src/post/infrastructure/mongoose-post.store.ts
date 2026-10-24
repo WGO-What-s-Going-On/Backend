@@ -1,3 +1,4 @@
+import type { ModerationLifecycleEvent } from '../application/moderation.js';
 import { Injectable } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
@@ -171,8 +172,25 @@ class MongoCommands implements PostCommands {
     private readonly outbox: Model<any>,
     private readonly counters: Model<any>,
     private readonly bucketCount: number,
+    private readonly moderationReceipts: Model<any>,
     private readonly session: ClientSession,
   ) {}
+
+  async recordModerationEvent(
+    input: ModerationLifecycleEvent,
+  ): Promise<boolean> {
+    if (
+      await this.moderationReceipts
+        .exists({ eventId: input.eventId })
+        .session(this.session)
+    )
+      return false;
+    await this.moderationReceipts.create(
+      [{ ...input, processedAt: new Date() }],
+      { session: this.session },
+    );
+    return true;
+  }
 
   async insertPost(post: PostRecord): Promise<void> {
     await this.posts.create(
@@ -554,6 +572,8 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
     @InjectModel('Participant') private readonly participants: Model<any>,
     @InjectModel('Outbox') private readonly outbox: Model<any>,
     @InjectModel('Counter') private readonly counters: Model<any>,
+    @InjectModel('ModerationReceipt')
+    private readonly moderationReceipts: Model<any>,
     private readonly config: ConfigService,
     private readonly outboxWorker: OutboxWorker,
   ) {}
@@ -643,6 +663,7 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
               this.outbox,
               this.counters,
               this.config.getOrThrow<number>('post.bucketCount'),
+              this.moderationReceipts,
               session,
             ),
           }),
@@ -656,10 +677,10 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
           keyPattern?: Record<string, number>;
         };
         // 레거시 게시물의 첫 카운터 생성과 수명주기 fence가 경합하면 11000이 날 수 있다.
-        // 엔터티의 중복 요청과 구분해 전체 트랜잭션을 새 스냅샷에서 제한적으로 재시도한다.
+        // 수신 이벤트 고유 키 경합도 새 스냅샷에서 재시도해 이미 커밋된 처리 이력을 읽는다.
         if (
           duplicate.code === 11000 &&
-          duplicate.keyPattern?.metric &&
+          (duplicate.keyPattern?.metric || duplicate.keyPattern?.eventId) &&
           attempt < 3
         )
           continue;

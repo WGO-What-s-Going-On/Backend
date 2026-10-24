@@ -1,3 +1,5 @@
+import { ApplyModerationLifecycle } from './application/moderation.js';
+import { ModerationWorker } from './infrastructure/moderation-consumer.js';
 import { PostLifecycle } from './application/lifecycle.js';
 import { ExpirationWorker } from './infrastructure/expiration.worker.js';
 import { VoteWorker } from './infrastructure/vote.worker.js';
@@ -35,6 +37,7 @@ import { GrpcLocationAuthorization } from './infrastructure/grpc-location.author
 import { MongoosePostRead } from './infrastructure/mongoose-post.read.js';
 import { MongoosePostStore } from './infrastructure/mongoose-post.store.js';
 import {
+  ModerationReceiptSchema,
   CommentSchema,
   CommentReactionSchema,
   CounterSchema,
@@ -51,6 +54,11 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
     SemanticModule,
     MongooseModule.forFeature([
       { name: 'Post', schema: PostSchema, collection: 'posts' },
+      {
+        name: 'ModerationReceipt',
+        schema: ModerationReceiptSchema,
+        collection: 'moderation_receipts',
+      },
       {
         name: 'VoteSelection',
         schema: VoteSelectionSchema,
@@ -153,6 +161,13 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
         new PostLifecycle(unitOfWork, partition),
       inject: [POST_UNIT_OF_WORK, PARTITION_STRATEGY],
     },
+    {
+      provide: ApplyModerationLifecycle,
+      useFactory: (unitOfWork: PostUnitOfWork) =>
+        new ApplyModerationLifecycle(unitOfWork),
+      inject: [POST_UNIT_OF_WORK],
+    },
+    ModerationWorker,
     ExpirationWorker,
     VoteWorker,
     OutboxWorker,

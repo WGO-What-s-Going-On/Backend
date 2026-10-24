@@ -279,7 +279,7 @@ Realtime은 현재 `comment` 객체를 클라이언트에 그대로 전달하므
 | `PostCommentDeleted` | ACTIVE 댓글 → DELETED | `comment: {commentId, postId, authorId, deletedAt}`, `postAuthorId`, `postCategory`, `actor`, `reason`, `activityVersion`, `moderationDecisionId?` | 유효 댓글 수·보상 보정, 알림 노출 갱신 |
 | `PostDeleted` | ACTIVE 또는 EXPIRED 게시물 → DELETED | `post: {postId, authorId, category, deletedAt}`, `actor`, `reason`, `postVersion`, `moderationDecisionId?` | 관련 활동 무효화 판단, 예약 알림 정리, 공간·검색 인덱스 제거 |
 | `PostParticipantLeft` | 참여 중 → 이탈 | `participant: {postId, userId, joinedAt, leftAt}`, `postAuthorId`, `postCategory`, `activityVersion` | 현재 참여 상태·참여 기반 알림 대상 갱신 |
-| `PostExpired` | 기한이 지난 ACTIVE 게시물 → EXPIRED | `post: {postId, authorId, category, expiresAt, expiredAt}`, `postVersion` | 후속 알림 종료, 필요 시 만료 안내, 공간·검색 인덱스 제거 |
+| `PostExpired` | 기한 도래 또는 Moderation CLOSED 결정의 ACTIVE 게시물 → EXPIRED | `post: {postId, authorId, category, expiresAt, expiredAt}`, `postVersion` | 후속 알림 종료, 필요 시 만료 안내, 공간·검색 인덱스 제거 |
 
 공감의 `createdAt`과 이탈의 `joinedAt`은 종료되는 활성 구간의 시작 시각이다.
 삭제 이벤트는 삭제된 본문 전체를 복제하지 않는다. 삭제 사유 계약은 다음 두 가지다.
@@ -535,3 +535,50 @@ Post 검증은 `test/post-events.integration.test.ts`, `test/outbox-failure.test
 - [Semantic 이벤트 파서](../src/post/semantic/index-post.ts)
 - [User 이벤트 계약 및 현재 구현](../../user-service/README.md)
 - [Notification 현재 구현](../../notification-service/README.md)
+
+
+## 11. Moderation lifecycle v1 수신 (2026-10-24)
+
+Post는 Moderation이 기존 `moderation:events`에 발행한 `eventId/eventType/data`를 소비한다.
+`data`는 schemaVersion=1, producer=moderation-service, aggregateId=postId,
+correlationId, occurredAt 및 `payload: { postId, state }`를 가진다. wire의 ID·유형과
+본문의 값이 일치해야 한다. 내부 projection 버전이나 종료 사유를 추측해 생성하지 않는다.
+
+| 수신 이벤트 | payload.state | Post 적용 |
+| --- | --- | --- |
+| BOARD_STALE | STALE | 처리 이력만 저장, ACTIVE 유지 |
+| BOARD_REACTIVATED | ACTIVE | 처리 이력만 저장, EXPIRED/DELETED 복구 금지 |
+| BOARD_CLOSED | CLOSED | ACTIVE → EXPIRED, 투표 종료와 활동 fence 적용 |
+
+`moderation_receipts.eventId` 고유 인덱스, 게시물 변경, PostExpired Outbox는 같은 MongoDB
+트랜잭션으로 저장한다. 이미 처리한 eventId나 이미 종료된 게시물에는 새 종료 이벤트를 만들지 않는다.
+처리 이력에는 TTL을 두지 않는다. 대상이 없으면 이력까지 롤백하고 제한된 재시도 후 DLQ로 보낸다.
+
+Moderation 종료에서 Post의 `expiresAt`과 PostExpired.post.expiresAt은 **BOARD_CLOSED.occurredAt**
+(결정의 효력 시각)으로 설정한다. 기존 예약 기한이 있다면 이 종료 결정이 대체한다.
+`expiredAt`과 Outbox.occurredAt은 Post의 실제 적용 시각이다. PostExpired의 기존 필수 필드와 v1을
+유지하며 선택 필드 `sourceEventId`에 Moderation 이벤트 ID를 넣고 correlationId를 이어받는다.
+이 경로는 예약 만료 Worker의 기한 검사를 우회하는 인가된 내부 Consumer 경로이며 공개 API가 아니다.
+상세 종료 사유는 현재 v1에 없어 구분하지 않는다.
+
+### 실행·장애 복구
+
+- Post 환경 변수 `POST_MODERATION_CONSUMER_ENABLED=true`로 활성화한다. 기본 false다.
+- `MODERATION_REDIS_URL`은 **Moderation 생산자의 Redis endpoint와 DB**를 지정한다.
+  Post 발행용 REDIS_URL로 대체하지 않는다. `MODERATION_EVENT_STREAM` 기본값은 moderation:events다.
+- Consumer Group은 `post-moderation-lifecycle`, 인스턴스별 consumer 이름은 무작위다.
+  처음 그룹을 만들 때 ID 0부터 시작하므로 활성화 전 보존된 과거 CLOSED의 적용 범위를 확인한다.
+- 한 번에 신규 10건·회수 10건, 순차 처리. Redis 명령 timeout 2초, 연결 실패 재시도 간격 1초,
+  실패 메시지는 30초 뒤 XAUTOCLAIM, 5회 전달 실패 후 `post-moderation-lifecycle:dead`에 격리한다.
+- 지원하는 유형의 손상·미지원 schemaVersion은 즉시 DLQ, 비구독 유형은 ACK한다.
+  DLQ 저장 실패에는 ACK하지 않는다. 커밋 후 ACK 실패는 처리 이력으로 중복을 막는다.
+- DLQ는 원본 wire fields, streamId, eventId와 분류 코드만 보존한다. 접근 권한을 제한하고
+  Pending 수·가장 오래된 idle·DLQ 증가를 감시한다. Redis Stream trim/유실 복구는 별도 운영 과제다.
+- DLQ 원인을 수정한 뒤 원래 eventId/data를 유지해 입력 Stream에 재발행한다. 해당 이력과 원본은
+  대조 완료 전 삭제하지 않는다. 이미 적용된 eventId의 재발행은 새 상태 변경을 만들지 않는다.
+- Redis ACL/TLS/네트워크로 Moderation의 입력 Stream 쓰기 권한을 제한한다. producer 문자열은 인증 수단이 아니다.
+
+PostExpired 소비는 기존 Map/semantic 경로를 사용한다. WS 종료 전파는 WGO-ARCH-06의 별도 범위다.
+검증: `RUN_INTEGRATION=1 pnpm test`는 MongoDB·Redis 수신/적용을 검사하고,
+추가 `RUN_SEMANTIC_INTEGRATION=1`은 Map 빌드·Cassandra를 사용하는 실제 인덱스 제거도 검사한다.
+[후속 과제](../../moderation-service/contracts/integration-gaps.md#lifecycle-v1-연결-이후-후속-작업)는 현재 구현 완료로 간주하지 않는다.

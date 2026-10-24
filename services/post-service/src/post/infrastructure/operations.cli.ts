@@ -6,6 +6,7 @@ import { PostLifecycle } from '../application/lifecycle.js';
 import { HashPartitionStrategy } from '../application/partition.js';
 import { MongoosePostStore } from './mongoose-post.store.js';
 import {
+  ModerationReceiptSchema,
   PostSchema,
   CommentSchema,
   ReactionSchema,
@@ -115,6 +116,11 @@ async function main() {
       db.model('Participant', ParticipantSchema, 'post_participants'),
       outbox,
       db.model('Counter', CounterSchema, 'post_counters'),
+      db.model(
+        'ModerationReceipt',
+        ModerationReceiptSchema,
+        'moderation_receipts',
+      ),
       new ConfigService(config),
       { wake() {} } as OutboxWorker,
     );

@@ -181,3 +181,16 @@ export const OutboxSchema = new Schema(
 );
 OutboxSchema.index({ status: 1, nextAttemptAt: 1 });
 OutboxSchema.index({ status: 1, claimedUntil: 1 });
+
+// TTL로 제거하지 않는다. 보존된 Stream 재생에서도 같은 eventId를 다시 적용하지 않는다.
+export const ModerationReceiptSchema = new Schema(
+  {
+    eventId: { type: String, required: true, unique: true },
+    postId: { type: String, required: true },
+    eventType: { type: String, required: true },
+    occurredAt: { type: Date, required: true },
+    correlationId: { type: String, required: true },
+    processedAt: { type: Date, required: true },
+  },
+  options,
+);
