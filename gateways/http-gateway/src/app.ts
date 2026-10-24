@@ -8,6 +8,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { Redis } from 'ioredis';
 
 import { loadConfig, type AppConfig } from './config.js';
+import { userAuthentication } from './user-auth.js';
 import { proxyRoutes } from './routes.js';
 import { registerDocs } from './docs.js';
 
@@ -45,6 +46,7 @@ export async function buildApp(
   options: BuildAppOptions = {},
 ): Promise<FastifyInstance> {
   const config = options.config ?? loadConfig();
+  const authenticateUser = await userAuthentication(config.userAuth);
   const logger =
     options.logger === false
       ? false
@@ -188,6 +190,7 @@ export async function buildApp(
   for (const route of proxyRoutes) {
     await app.register(httpProxy, {
       upstream: config.services[route.service],
+      ...(route.service === 'user' ? { preHandler: authenticateUser } : {}),
       prefix: route.prefix,
       rewritePrefix: route.prefix,
       http2: false,

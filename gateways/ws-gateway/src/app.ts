@@ -1,7 +1,7 @@
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
-import type { RawData, WebSocket } from 'ws';
+import { WebSocket, type RawData } from 'ws';
 
 import { loadConfig, type AppConfig } from './config.js';
 import {
@@ -199,6 +199,19 @@ export async function buildApp(
             const command = parseClientCommand(raw.toString());
 
             if (command.type === 'board.join') {
+              // 인가 요청은 영속 참여를 기록하므로 Room 용량부터 확인한다.
+              if (!subscriptions.canJoin(socket, command.payload.boardId)) {
+                send(
+                  socket,
+                  commandError(
+                    'WS_ROOM_LIMIT_REACHED',
+                    'The connection has reached its board subscription limit.',
+                    command.requestId,
+                  ),
+                );
+                return;
+              }
+
               let allowed: boolean;
               try {
                 allowed = await boardAccessAuthorizer.canJoin({
@@ -230,6 +243,8 @@ export async function buildApp(
                 return;
               }
 
+              // 인가 중 연결이 끊겼다면 Room을 다시 만들지 않는다. 다른 연결의 영속 참여는 유지한다.
+              if (socket.readyState !== WebSocket.OPEN) return;
               const result = subscriptions.join(
                 socket,
                 command.payload.boardId,

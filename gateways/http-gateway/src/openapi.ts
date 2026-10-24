@@ -1,6 +1,7 @@
 import SwaggerParser from '@apidevtools/swagger-parser';
 
 import type { AppConfig, ServiceName } from './config.js';
+import { userOperations } from './user-auth.js';
 import { proxyRoutes, type ProxyRoute } from './routes.js';
 
 // Service owners supply their contracts; undocumented services are never inferred.
@@ -170,7 +171,7 @@ export async function mergeDocuments(
       title: 'WGO Public HTTP API',
       version: '1.0.0',
       description:
-        'Local/dev Gateway API. Some services may have no public operations; see x-services-without-public-operations. User JWT authentication is not implemented in the Gateway. Use the documented local context headers (X-User-Id, and X-Session-Id for User logout). Internal service tokens are not public credentials. Gateway errors include code, message, requestId and timestamp; upstream responses pass through unchanged. Existing status codes may have an x-gateway-response describing the additional Gateway error shape.',
+        'Local/dev Gateway API. Some services may have no public operations; see x-services-without-public-operations. User routes authenticate user Access JWTs; their internal identity headers are not public inputs. Other services retain their documented authentication policies. Internal service tokens are not public credentials. Gateway errors include code, message, requestId and timestamp; upstream responses pass through unchanged. Existing status codes may have an x-gateway-response describing the additional Gateway error shape.',
     },
     servers: [{ url: '/' }],
     paths: {},
@@ -192,6 +193,61 @@ export async function mergeDocuments(
       );
     }
     const document = structuredClone(source.document);
+    // Translate the internal User service contract to the client-facing Gateway contract.
+    if (source.service === 'user') {
+      document.components ??= {};
+      document.components.securitySchemes ??= {};
+      document.components.securitySchemes.UserAccess = {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT (HS256)',
+      };
+      for (const [path, item] of Object.entries(document.paths) as Array<
+        [string, ObjectValue]
+      >) {
+        const externalParameters = (parameters: ObjectValue[]) =>
+          parameters.filter((parameter) => {
+            const resolved = parameter.$ref
+              ? pointer(document, parameter.$ref)
+              : parameter;
+            return !(
+              resolved.in === 'header' &&
+              ['x-user-id', 'x-session-id', 'authorization'].includes(
+                resolved.name?.toLowerCase(),
+              )
+            );
+          });
+        if (item.parameters)
+          item.parameters = externalParameters(item.parameters);
+        for (const method of methods) {
+          if (!item[method]) continue;
+          const policy = userOperations[`${method.toUpperCase()} ${path}`];
+          if (!policy) {
+            delete item[method];
+            continue;
+          }
+          const operation = item[method];
+          operation.security = policy === 'user' ? [{ UserAccess: [] }] : [];
+          if (operation.parameters)
+            operation.parameters = externalParameters(operation.parameters);
+          if (policy === 'user') {
+            const unauthorized = gatewayResponse(
+              'Invalid user Access JWT.',
+              'GATEWAY_UNAUTHORIZED',
+            );
+            if (operation.responses['401']) {
+              operation.responses['401'].description +=
+                ' Also possible at Gateway: invalid user Access JWT.';
+              operation.responses['401']['x-gateway-response'] = unauthorized;
+            } else operation.responses['401'] = unauthorized;
+          }
+          operation.responses['503'] ??= gatewayResponse(
+            'Authentication is not configured or service unavailable.',
+            'GATEWAY_UPSTREAM_UNAVAILABLE',
+          );
+        }
+      }
+    }
     const refNames = new Map<string, string>();
     for (const [category, entries] of Object.entries(
       document.components ?? {},

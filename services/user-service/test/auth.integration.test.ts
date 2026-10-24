@@ -3,7 +3,9 @@ import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { Redis } from 'ioredis';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, generateKeyPairSync } from 'node:crypto';
+import { APP_GUARD } from '@nestjs/core';
+import { GatewayAuthGuard } from '../src/http-auth/gateway-auth.guard.js';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
 import { jwtVerify } from 'jose';
@@ -158,6 +160,121 @@ describe('Auth API integration', () => {
     await testDataSource.query('TRUNCATE TABLE "outbox_events"');
     await redis.flushdb();
   });
+
+  // Opt-in cross-service regression: build/install HTTP Gateway before running this test.
+  it.runIf(process.env.RUN_GATEWAY_INTEGRATION === '1')(
+    'authenticates login -> profile -> refresh -> logout through the actual HTTP Gateway',
+    async () => {
+      const { privateKey, publicKey } = generateKeyPairSync('ec', {
+        namedCurve: 'P-256',
+      });
+      const previousKeys = process.env.USER_HTTP_GATEWAY_TRUSTED_JWKS;
+      process.env.USER_HTTP_GATEWAY_TRUSTED_JWKS = JSON.stringify({
+        keys: [
+          {
+            ...publicKey.export({ format: 'jwk' }),
+            alg: 'ES256',
+            kid: 'e2e',
+            iss: 'wgo-http-gateway',
+          },
+        ],
+      });
+      let guardedApp: INestApplication | undefined;
+      let gateway: { close(): Promise<void> } | undefined;
+      try {
+        const module = await Test.createTestingModule({
+          controllers: [AuthController, UsersController],
+          providers: [
+            { provide: AuthService, useValue: app.get(AuthService) },
+            { provide: UsersService, useValue: app.get(UsersService) },
+            { provide: APP_GUARD, useClass: GatewayAuthGuard },
+          ],
+        }).compile();
+        guardedApp = module.createNestApplication();
+        await guardedApp.listen(0, '127.0.0.1');
+        const userUrl = await guardedApp.getUrl();
+        // Use the independently built service artifact; don't compile Gateway inside User's source tree.
+        const gatewayPath = new URL(
+          '../../../gateways/http-gateway/dist/src/app.js',
+          import.meta.url,
+        ).href;
+        const configPath = new URL(
+          '../../../gateways/http-gateway/dist/src/config.js',
+          import.meta.url,
+        ).href;
+        const { buildApp } = await import(gatewayPath);
+        const { loadConfig } = await import(configPath);
+        const config = loadConfig();
+        config.rateLimit.enabled = false;
+        config.services.user = userUrl;
+        config.userAuth = {
+          accessSecret,
+          issuer: 'wgo-user-service-test',
+          audience: 'wgo-api-test',
+          servicePrivateJwk: JSON.stringify({
+            ...privateKey.export({ format: 'jwk' }),
+            alg: 'ES256',
+            kid: 'e2e',
+          }),
+        };
+        const runningGateway = await buildApp({ config, logger: false });
+        gateway = runningGateway;
+        const url = await runningGateway.listen({ host: '127.0.0.1', port: 0 });
+        await request(userUrl)
+          .get('/api/v1/users/me')
+          .set('X-User-Id', '1')
+          .expect(401);
+        await request(url)
+          .get('/api/v1/users/me')
+          .set('X-User-Id', '1')
+          .expect(401);
+        const login = await request(url)
+          .post('/api/v1/auth/kakao')
+          .send({ authorizationCode: 'code' })
+          .expect(201);
+        const token = login.body.accessToken;
+        const me = await request(url)
+          .get('/api/v1/users/me')
+          .set('Authorization', `Bearer ${token}`)
+          .set('X-User-Id', '999')
+          .expect(200);
+        expect(me.body.userId).toBe(login.body.userId);
+        await request(url)
+          .patch('/api/v1/users/me')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ nickname: 'Gateway Auth User' })
+          .expect(200);
+        const rotated = await request(url)
+          .post('/api/v1/auth/refresh')
+          .send({ refreshToken: login.body.refreshToken })
+          .expect(200);
+        await request(url)
+          .post('/api/v1/auth/refresh')
+          .send({ refreshToken: login.body.refreshToken })
+          .expect(401);
+        await request(url)
+          .post('/api/v1/auth/logout')
+          .set('Authorization', `Bearer ${rotated.body.accessToken}`)
+          .expect(204);
+        await request(url)
+          .post('/api/v1/auth/refresh')
+          .send({ refreshToken: rotated.body.refreshToken })
+          .expect(401);
+        // Logout deliberately revokes refresh only; access remains valid until its existing expiry.
+        await request(url)
+          .get('/api/v1/users/me')
+          .set('Authorization', `Bearer ${token}`)
+          .expect(200);
+      } finally {
+        await gateway?.close();
+        await guardedApp?.close();
+        if (previousKeys === undefined)
+          delete process.env.USER_HTTP_GATEWAY_TRUSTED_JWKS;
+        else process.env.USER_HTTP_GATEWAY_TRUSTED_JWKS = previousKeys;
+      }
+    },
+    30_000,
+  );
 
   it('rejects a missing or blank authorizationCode', async () => {
     await request(app.getHttpServer())

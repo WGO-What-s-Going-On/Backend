@@ -107,10 +107,13 @@ Refresh Token의 `<sessionId>.<secret>`을 파싱해 세션을 직접 조회하�
 유지한다. 사용자별 세션 Set은 변경하지 않는다. 잘못된 토큰은 동일한 401, Redis 장애는 503이다.
 
 `POST /api/v1/auth/logout`은 내부 헤더 `x-user-id`, `x-session-id`로 현재 세션을 지정한다.
-기존 Gateway 전달 규약이 없어 이 두 헤더를 사용한다. **이 헤더는 인증 수단이 아니다.**
-운영 시 User Service는 신뢰된 Gateway에서만 접근할 수 있어야 하며, Gateway는 클라이언트가
-보낸 같은 이름의 헤더를 제거하고 검증한 JWT의 `sub`, `sid`로 덮어써야 한다.
-Gateway 연결 및 네트워크 접근 제한은 이번 구현에 포함되지 않는다.
+**이 헤더는 외부 클라이언트의 인증 수단이 아니다.** HTTP Gateway는 사용자 HS256 JWT를 검증하고
+외부 신원 헤더를 제거한 뒤 검증된 `sub`, `sid`로 덮어쓴다. User의 전역 REST Guard는
+별도의 Gateway ES256 서비스 JWT와 method·path 권한을 검증한 뒤에만 이 문맥을 허용한다.
+로그인·Refresh·약관·닉네임 확인도 Gateway 서비스 인증은 필요하다. `GET /health/live`는 예외다.
+시작 시 `USER_HTTP_GATEWAY_TRUSTED_JWKS`에 Gateway 공개키를 반드시 설정한다.
+이 설정은 기존 gRPC 키 설정과 별개이며 개인키를 포함하면 시작하지 않는다.
+사설 네트워크 접근 제한과 TLS는 별도로 배포 환경에서 적용해야 한다.
 
 소유자가 일치하면 세션 삭제와 Set의 SREM을 원자적으로 수행하고 HTTP 204를 반환한다.
 이미 없는 세션도 204이며 다른 사용자의 세션은 401, Redis 장애는 503이다.
@@ -402,3 +405,26 @@ User 앱의 실제 실행에는 기존 PostgreSQL·Redis·Kakao·JWT 설정이 �
 로그아웃 session ID는 발급된 refreshToken의 점 앞 UUID이며 해당 사용자 세션이어야 한다.
 이를 구현된 Bearer 인증이나 내부 서비스 JWT 입력으로 표시하지 않는다.
 로그인은 201, refresh는 200, 로그아웃은 본문 없는 204이며 기존 응답·오류 동작을 유지한다.
+
+### REST 인증 전환 운영 메모
+
+사용자 HS256 발급 및 로그인·Refresh·로그아웃·프로필·탈퇴 비즈니스 로직은 유지한다.
+Gateway와 User의 사용자 JWT secret/issuer/audience는 같아야 한다. 서비스 인증 키는
+사용자 secret과 분리하며 Gateway에만 개인키를, User에는 공개 JWK set만 제공한다.
+Guard는 설정이 없어도 로컬 헤더 인증으로 돌아가지 않는다. 직접 REST 호출도 서비스 JWT가 필요하다.
+Swagger 원본은 내부 서비스 인증과 내부 헤더를 설명하며, Gateway의 통합 Swagger는
+User 작업을 사용자 Bearer 인증으로 변환하고 내부 헤더 입력을 제거한다.
+
+로그아웃은 Refresh 세션을 폐기하지만 기존 Access JWT는 만료까지 유효하다.
+계정 상태에 따른 기존 서비스 정책은 변경하지 않았다. 운영 WS의 비대칭 사용자 JWT
+검증과 HS256 발급 불일치는 별도 전환 작업으로 남는다.
+
+### Gateway 연결 회귀 테스트
+
+두 서비스 의존성을 설치하고 Gateway 디렉터리에서 `pnpm build`를 실행한다.
+그다음 User 디렉터리에서 테스트용 PostgreSQL 설정(`DB_HOST`, `DB_PORT`, `DB_USER`,
+`DB_PASSWORD`)을 주입하고 `RUN_GATEWAY_INTEGRATION=1 pnpm test`를 실행한다.
+기존 테스트처럼 localhost:6379 Redis의 테스트 DB 13·14·15를 사용하므로 격리 인스턴스가 필요하다.
+추가 테스트는 실제 Gateway 빌드와 User Controller·Guard·비즈니스 서비스·PostgreSQL·Redis를
+연결해 로그인→프로필 조회/수정→Refresh 회전→로그아웃과 위조 헤더 차단을 검증한다.
+외부 Kakao 응답만 대체한다. 단독 User 테스트 실행에서는 이 교차 서비스 테스트만 생략된다.

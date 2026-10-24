@@ -1,6 +1,6 @@
 # WGO HTTP Gateway
 
-Local-first transparent HTTP gateway built with Fastify and TypeScript.
+HTTP gateway built with Fastify and TypeScript, with authenticated User REST routing.
 
 ## Prerequisites
 
@@ -33,6 +33,7 @@ The server loads `.env` automatically when the file exists. Defaults also match
 | --- | --- |
 | `/api/v1/auth` | `http://127.0.0.1:3001` |
 | `/api/v1/users` | `http://127.0.0.1:3001` |
+| `/api/v1/terms` | `http://127.0.0.1:3001` |
 | `/api/v1/posts` | `http://127.0.0.1:3002` |
 | `/api/v1/location` | `http://127.0.0.1:3003` |
 | `/api/v1/notifications` | `http://127.0.0.1:3004` |
@@ -68,7 +69,27 @@ reached through `host.docker.internal`.
 - Upstream connection pooling, timeouts, and GET/HEAD retry
 - Gateway-owned error responses
 
-JWT authentication is intentionally deferred.
+User REST routes verify HS256 user Access JWTs. Other service authentication migrations are separate.
+Configure `JWT_ACCESS_SECRET` (at least 32 bytes), `JWT_ACCESS_ISSUER`, and `JWT_ACCESS_AUDIENCE`
+to match User Service. Configure `HTTP_GATEWAY_SERVICE_PRIVATE_JWK` with a private P-256 JWK
+including `alg=ES256` and `kid`. User requires the matching public key in
+`USER_HTTP_GATEWAY_TRUSTED_JWKS`, with `iss=wgo-http-gateway`; never distribute the private `d` field.
+The Gateway signs 30-second service tokens targeting only `wgo-user-service`.
+All four Gateway settings absent means User operations return 503; partial/invalid settings fail startup.
+There is no identity-header fallback in development or production.
+
+Public clients send `Authorization: Bearer <accessToken>` for profile, consents, badges,
+withdrawal and logout. Login, refresh, nickname availability and terms need no user token.
+Every User operation still receives Gateway service authentication. External `X-User-Id` and
+`X-Session-Id` are discarded, including on public operations; protected operations receive only
+verified `sub` and `sid`. Unlisted User methods/paths return 404. Health and dev docs are separate.
+
+For key rotation, first register both public keys in User, then change the Gateway private key/kid,
+and retire the old public key after old Gateway tasks stop and their 60-second maximum token lifetime
+has elapsed. Keep User private and protect internal traffic with TLS. During initial rollout, restrict
+public ingress until both components are deployed; do not roll back to unauthenticated User access.
+The shared HS256 user secret is temporary compatibility with the existing issuer; WS algorithm
+alignment remains WGO-ARCH-03. Logout revokes refresh sessions, not already issued Access JWTs.
 
 
 ## 통합 공개 OpenAPI / Swagger (로컬·dev 전용)
@@ -101,7 +122,7 @@ Moderation은 아직 OpenAPI 수집 미지원이다. Notification의 알림 조�
 operation은 포함하고 health는 제외한다. 구버전의 health 전용 문서도 수집할 수 있으며,
 공개 operation이 없을 때만 `x-services-without-public-operations`로 구분한다.
 Notification 수집 실패도 전체 갱신 실패이며 기존 파일을 보존한다.
-User의 `/api/v1/terms`는 서비스 문서에만 포함하며 현재 Gateway 라우팅에 없으므로 병합에서 제외한다.
+User의 `/api/v1/terms`도 Gateway 라우팅과 통합 문서에 포함한다.
 새 문서 제공 서비스가 생기면 `src/openapi.ts`의 대상 목록과 테스트를 갱신한다.
 
 수집은 서비스별 `DOCS_FETCH_TIMEOUT_MS`(기본 5000ms)로 제한한다. 모든 대상의
@@ -126,12 +147,10 @@ security, link 참조도 갱신한다. 통합 문서는 `servers: [{url: '/'}]`�
 Swagger 자산은 `swagger-ui-dist` 로컬 의존성에서 제공한다. 문서 라우트만 로컬 HTTP용
 CSP를 적용하며, 스크립트·API 요청은 같은 origin으로 제한하고 기존 API 헤더는 유지한다.
 
-Gateway 사용자 JWT 인증은 아직 구현되지 않았다. Post·Map의 로컬 사용자 ID는 각
-operation의 `X-User-Id` 파라미터로 입력한다. User의 프로필 등도 현재 `X-User-Id`를
-직접 읽으며 Gateway 신원 검증은 미연결이다. 로그아웃에는 `X-Session-Id`도 필요하다.
-이는 현재 로컬 테스트 문맥이며 로그인 응답의 Access JWT를 Gateway가 검증하는 기능은 없다. 내부 서비스 JWT를 Authorize에 입력하는
-방식은 제공하지 않는다. 서비스 쓰기 API의 운영 차단과 모델/저장소 미준비에 따른 오류는
-기존 서비스 동작을 따른다. Gateway 본문 제한, 상류 오류·타임아웃, 설정된 IP rate limit도
+User API는 Authorize에 로그인 응답의 사용자 Access JWT를 입력한다. 내부 신원 헤더와
+서비스 JWT는 공개 Swagger 입력에서 제거된다. 로그인·Refresh·약관·닉네임 확인은
+사용자 Bearer가 필요 없다. Post·Map 등 다른 서비스의 인증 정책과 운영 차단은
+기존 동작을 따른다. Gateway 본문 제한, 상류 오류·타임아웃, 설정된 IP rate limit도
 통합 문서에 반영한다. 이미 서비스가 사용하는 오류 상태 코드는 원본 응답을 유지하고
 설명 및 `x-gateway-response`로 추가 Gateway 오류 모양을 기록한다.
 

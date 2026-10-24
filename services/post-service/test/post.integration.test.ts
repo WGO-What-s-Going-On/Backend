@@ -59,6 +59,9 @@ suite('post creation integration', () => {
   let map: Server;
   let mapUnavailable = false;
   let mapTimeout = false;
+  let locationDecision:
+    | ((input: any) => { allowed: boolean; reason: string })
+    | undefined;
   const mapKeys = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const redis = createClient({ url: 'redis://localhost:6380' });
   let id: string;
@@ -119,6 +122,8 @@ suite('post creation integration', () => {
         setTimeout(() => callback(null, { allowed: true, reason: '' }), 200);
         return;
       }
+      if (locationDecision)
+        return callback(null, locationDecision(call.request));
       callback(null, {
         allowed: ['123', '789'].includes(call.request.userId),
         reason: ['123', '789'].includes(call.request.userId)
@@ -329,6 +334,11 @@ suite('post creation integration', () => {
   }, 10000);
 
   it('creates comments, reactions, and participants once', async () => {
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${id}/participants`)
+      .set(header)
+      .send({})
+      .expect(201);
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${id}/comments`)
       .set(header)
@@ -667,6 +677,11 @@ suite('post creation integration', () => {
       'legacy-read',
       ...expected.map((row) => row.commentId).reverse(),
     ]);
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${bucketedId}/participants`)
+      .set(header)
+      .send({})
+      .expect(201);
     const first = await request(app.getHttpServer())
       .post(`/api/v1/posts/${bucketedId}/comments`)
       .set(header)
@@ -714,6 +729,11 @@ suite('post creation integration', () => {
       { postId: legacyId },
       { $unset: { bucketCount: '' } },
     );
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${legacyId}/participants`)
+      .set(header)
+      .send({})
+      .expect(201);
     const response = await request(app.getHttpServer())
       .post(`/api/v1/posts/${legacyId}/comments`)
       .set(header)
@@ -898,6 +918,11 @@ suite('post creation integration', () => {
       })
       .expect(201);
     const postId = created.body.postId as string;
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${postId}/participants`)
+      .set(header)
+      .send({})
+      .expect(201);
     const first = await request(app.getHttpServer())
       .post(`/api/v1/posts/${postId}/comments`)
       .set(header)
@@ -1006,6 +1031,11 @@ suite('post creation integration', () => {
       ).body.postId as string;
     const sparse = await make();
     await request(app.getHttpServer())
+      .post(`/api/v1/posts/${sparse}/participants`)
+      .set(header)
+      .send({})
+      .expect(201);
+    await request(app.getHttpServer())
       .post(`/api/v1/posts/${sparse}/comments`)
       .set(header)
       .send({ content: 'Only one' })
@@ -1043,6 +1073,11 @@ suite('post creation integration', () => {
       ).body.status,
     ).toBe('NONE');
     const cancelled = await make();
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${cancelled}/participants`)
+      .set(header)
+      .send({})
+      .expect(201);
     const one = await request(app.getHttpServer())
       .post(`/api/v1/posts/${cancelled}/comments`)
       .set(header)
@@ -1070,6 +1105,11 @@ suite('post creation integration', () => {
       ).body.status,
     ).toBe('CANCELLED');
     const empty = await make();
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${empty}/participants`)
+      .set(header)
+      .send({})
+      .expect(201);
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${empty}/comments`)
       .set(header)
@@ -1112,6 +1152,11 @@ suite('post creation integration', () => {
       })
       .expect(201);
     const postId = created.body.postId as string;
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${postId}/participants`)
+      .set(header)
+      .send({})
+      .expect(201);
     const first = await request(app.getHttpServer())
       .post(`/api/v1/posts/${postId}/comments`)
       .set(header)
@@ -1151,4 +1196,202 @@ suite('post creation integration', () => {
       .get(`/api/v1/posts/${postId}`)
       .expect(404);
   });
+  it.runIf(process.env.RUN_WS_INTEGRATION === '1')(
+    'enforces location and participation through real WS -> Post -> Map RPC',
+    async () => {
+      const wsAppPath = new URL(
+        '../../../gateways/ws-gateway/dist/src/app.js',
+        import.meta.url,
+      ).href;
+      const wsClientPath = new URL(
+        '../../../gateways/ws-gateway/dist/src/realtime/post-client.js',
+        import.meta.url,
+      ).href;
+      const wsConfigPath = new URL(
+        '../../../gateways/ws-gateway/dist/src/config.js',
+        import.meta.url,
+      ).href;
+      const mapPolicyPath = new URL(
+        '../../map-service/dist/location.js',
+        import.meta.url,
+      ).href;
+      const { buildApp } = await import(wsAppPath);
+      const { HttpPostClient } = await import(wsClientPath);
+      const { loadConfig } = await import(wsConfigPath);
+      const { decide } = await import(mapPolicyPath);
+      const keys = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+      const previousKeys = process.env.POST_WS_TRUSTED_JWKS;
+      process.env.POST_WS_TRUSTED_JWKS = JSON.stringify({
+        keys: [
+          {
+            ...keys.publicKey.export({ format: 'jwk' }),
+            alg: 'ES256',
+            kid: 'ws-e2e',
+            iss: 'wgo-ws-gateway',
+          },
+        ],
+      });
+      let gateway: any;
+      const sockets: any[] = [];
+      try {
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/posts')
+          .set(header)
+          .send({
+            title: 'WS authorization',
+            content: 'Details',
+            category: 'INCIDENT',
+            latitude: 37.5,
+            longitude: 127,
+            radiusM: 250,
+          })
+          .expect(201);
+        const boardId = created.body.postId;
+        await app.listen(0, '127.0.0.1');
+        const config = loadConfig();
+        config.postService.url = await app.getUrl();
+        config.postService.servicePrivateJwk = JSON.stringify({
+          ...keys.privateKey.export({ format: 'jwk' }),
+          alg: 'ES256',
+          kid: 'ws-e2e',
+        });
+        gateway = await buildApp({
+          config,
+          logger: false,
+          postClient: new HttpPostClient(config.postService),
+          authenticator: { authenticate: async () => ({ userId: '123' }) },
+        });
+        await gateway.ready();
+        const socket = await gateway.injectWS('/ws/v1');
+        sockets.push(socket);
+        let sequence = 0;
+        const command = (client: any, type: string, payload: object) => {
+          const received = new Promise<any>((resolve) =>
+            client.once('message', (data: Buffer) =>
+              resolve(JSON.parse(data.toString())),
+            ),
+          );
+          client.send(
+            JSON.stringify({
+              version: 1,
+              requestId: String(++sequence),
+              type,
+              payload,
+            }),
+          );
+          return received;
+        };
+        let location: {
+          latitude: number;
+          longitude: number;
+          updatedAt: Date;
+        } | null = null;
+        locationDecision = (input) =>
+          decide(
+            location,
+            { latitude: input.latitude, longitude: input.longitude },
+            input.radiusM,
+          );
+        for (const value of [
+          null,
+          {
+            latitude: 37.5,
+            longitude: 127,
+            updatedAt: new Date(Date.now() - 301000),
+          },
+          { latitude: 38.5, longitude: 127, updatedAt: new Date() },
+        ]) {
+          location = value;
+          expect(
+            await command(socket, 'board.join', { boardId }),
+          ).toMatchObject({ code: 'WS_BOARD_JOIN_FORBIDDEN' });
+          expect(await participants.countDocuments({ postId: boardId })).toBe(
+            0,
+          );
+        }
+        location = { latitude: 37.5, longitude: 127, updatedAt: new Date() };
+        mapUnavailable = true;
+        expect(await command(socket, 'board.join', { boardId })).toMatchObject({
+          code: 'WS_BOARD_AUTHORIZATION_UNAVAILABLE',
+        });
+        mapUnavailable = false;
+        expect(await command(socket, 'board.join', { boardId })).toMatchObject({
+          type: 'command.ack',
+        });
+        expect(await command(socket, 'board.join', { boardId })).toMatchObject({
+          type: 'command.ack',
+        });
+        expect(
+          await participants.countDocuments({ postId: boardId, leftAt: null }),
+        ).toBe(1);
+        expect(
+          await outbox.countDocuments({
+            aggregateId: boardId,
+            eventType: 'PostParticipantJoined',
+          }),
+        ).toBe(1);
+        await request(app.getHttpServer())
+          .post(`/internal/v1/posts/${boardId}/participants`)
+          .set('X-User-Id', '123')
+          .send({})
+          .expect(401);
+        await request(app.getHttpServer())
+          .post(`/api/v1/posts/${boardId}/comments`)
+          .set('X-User-Id', '789')
+          .send({ content: 'not joined' })
+          .expect(403);
+        const first = await command(socket, 'comment.create', {
+          boardId,
+          content: 'valid',
+          mutationId: 'ws-retry',
+        });
+        expect(first.type).toBe('command.result');
+        location = null;
+        expect(
+          await command(socket, 'comment.create', {
+            boardId,
+            content: 'invalid',
+            mutationId: 'new-write',
+          }),
+        ).toMatchObject({ code: 'WS_POST_REJECTED' });
+        const replay = await command(socket, 'comment.create', {
+          boardId,
+          content: 'valid',
+          mutationId: 'ws-retry',
+        });
+        expect(replay.result.commentId).toBe(first.result.commentId);
+        expect(await comments.countDocuments({ postId: boardId })).toBe(1);
+        expect(await command(socket, 'board.leave', { boardId })).toMatchObject(
+          { type: 'command.ack' },
+        );
+        expect(
+          await participants.countDocuments({ postId: boardId, leftAt: null }),
+        ).toBe(1);
+        location = { latitude: 37.5, longitude: 127, updatedAt: new Date() };
+        const reconnected = await gateway.injectWS('/ws/v1');
+        sockets.push(reconnected);
+        expect(
+          await command(reconnected, 'board.join', { boardId }),
+        ).toMatchObject({ type: 'command.ack' });
+        expect(
+          await outbox.countDocuments({
+            aggregateId: boardId,
+            eventType: 'PostParticipantJoined',
+          }),
+        ).toBe(1);
+        await app.get(PostLifecycle).deletePost(boardId, 123);
+        expect(
+          await command(reconnected, 'board.join', { boardId }),
+        ).toMatchObject({ code: 'WS_BOARD_JOIN_FORBIDDEN' });
+      } finally {
+        mapUnavailable = false;
+        locationDecision = undefined;
+        for (const socket of sockets) socket.terminate();
+        await gateway?.close();
+        if (previousKeys === undefined) delete process.env.POST_WS_TRUSTED_JWKS;
+        else process.env.POST_WS_TRUSTED_JWKS = previousKeys;
+      }
+    },
+    30000,
+  );
 });

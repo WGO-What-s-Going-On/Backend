@@ -22,6 +22,7 @@ import type {
   ParticipantRecord,
 } from '../domain/post.js';
 import {
+  LocationDeniedError,
   ParticipationUnavailableError,
   UniqueConflictError,
 } from './errors.js';
@@ -97,6 +98,7 @@ export class CreateComment {
     private readonly unitOfWork: PostUnitOfWork,
     private readonly queries: PostStateQueries,
     private readonly partitionStrategy: PartitionStrategy,
+    private readonly authorization: LocationAuthorization,
   ) {}
 
   async execute(
@@ -105,6 +107,30 @@ export class CreateComment {
     authorId: number,
     mutationId?: string,
   ): Promise<CommentRecord> {
+    const post = await this.queries.findPost(postId);
+    requireActive(post);
+    // 이미 성공한 mutation 재시도는 새 쓰기가 아니므로 위치가 만료돼도 기존 결과를 반환한다.
+    if (mutationId) {
+      const existing = await this.queries.findCommentByMutation(
+        postId,
+        authorId,
+        mutationId,
+      );
+      if (existing) return existing;
+    }
+    const participant = await this.queries.findParticipant(postId, authorId);
+    if (!participant || participant.leftAt !== null)
+      throw new LocationDeniedError('Active participation required');
+    if (!post.locationSnapshot || post.radiusM === undefined)
+      throw new ParticipationUnavailableError('Post location unavailable');
+    // 네트워크 호출은 트랜잭션 밖에서 수행하고 참여·게시물 상태는 쓰기 직전에 재확인한다.
+    await this.authorization.assertCanJoin(
+      authorId,
+      postId,
+      post.locationSnapshot.latitude,
+      post.locationSnapshot.longitude,
+      post.radiusM,
+    );
     const now = new Date();
     const comment = createComment(
       postId,
@@ -125,6 +151,12 @@ export class CreateComment {
           );
           if (existing) return existing;
         }
+        const participant = await transaction.queries.findParticipant(
+          postId,
+          authorId,
+        );
+        if (!participant || participant.leftAt !== null)
+          throw new LocationDeniedError('Active participation required');
         const bucketId = this.partitionStrategy.resolveBucket(
           comment.commentId,
           post.bucketCount,

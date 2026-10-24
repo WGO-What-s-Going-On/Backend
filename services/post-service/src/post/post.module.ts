@@ -108,8 +108,14 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
         unitOfWork: PostUnitOfWork,
         queries: PostStateQueries,
         partition: PartitionStrategy,
-      ) => new CreateComment(unitOfWork, queries, partition),
-      inject: [POST_UNIT_OF_WORK, POST_STATE_QUERIES, PARTITION_STRATEGY],
+        authorization: LocationAuthorization,
+      ) => new CreateComment(unitOfWork, queries, partition, authorization),
+      inject: [
+        POST_UNIT_OF_WORK,
+        POST_STATE_QUERIES,
+        PARTITION_STRATEGY,
+        LOCATION_AUTHORIZATION,
+      ],
     },
     {
       provide: CreateCommentReaction,

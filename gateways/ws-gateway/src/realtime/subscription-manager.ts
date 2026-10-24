@@ -13,6 +13,13 @@ export class SubscriptionManager {
       this.#roomsBySocket.set(socket, new Set());
   }
 
+  canJoin(socket: WebSocket, boardId: string): boolean {
+    const rooms = this.#roomsBySocket.get(socket);
+    return (
+      !!rooms && (rooms.has(boardId) || rooms.size < this.maxRoomsPerSocket)
+    );
+  }
+
   join(socket: WebSocket, boardId: string): JoinResult {
     const rooms = this.#roomsBySocket.get(socket);
     if (!rooms)

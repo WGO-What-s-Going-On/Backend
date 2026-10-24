@@ -28,6 +28,9 @@ importers:
       ioredis:
         specifier: 6.0.0
         version: 6.0.0
+      jose:
+        specifier: 6.1.0
+        version: 6.1.0
       swagger-ui-dist:
         specifier: 5.33.2
         version: 5.33.2
@@ -1101,6 +1104,12 @@ packages:
         integrity: sha512-aq+t5NAc+cS6rZQQVWC2x98CPqGtKKTMDd4Gaodv0wShnItdKg/51djkGJ1hqH+Oy0ivDftCbSLCQob8zso01w==,
       }
     engines: { node: '>= 10' }
+
+  jose@6.1.0:
+    resolution:
+      {
+        integrity: sha512-TTQJyoEoKcC1lscpVDCSsVgYzUDg/0Bt3WE//WiTPK6uOCQC2KZS4MpugbMWt/zyjkopgZoXhZuCi00gLudfUA==,
+      }
 
   joycon@3.1.1:
     resolution:
@@ -2178,6 +2187,8 @@ snapshots:
   ip-address@10.7.2: {}
 
   ipaddr.js@2.5.0: {}
+
+  jose@6.1.0: {}
 
   joycon@3.1.1: {}
 

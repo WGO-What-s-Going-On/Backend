@@ -22,6 +22,7 @@ export interface AppConfig {
   postService: {
     url: string;
     serviceSecret: string;
+    servicePrivateJwk?: string;
     issuer: string;
     audience: string;
   };
@@ -89,9 +90,14 @@ export function loadConfig(): AppConfig {
     (nodeEnv === 'production'
       ? ''
       : 'local-ws-service-secret-change-me-at-least-32');
-  if (serviceSecret.length < 32)
+  if (!process.env.WS_SERVICE_PRIVATE_JWK && serviceSecret.length < 32)
     throw new Error(
       'WS_SERVICE_JWT_SECRET must contain at least 32 characters',
+    );
+
+  if (nodeEnv === 'production' && !process.env.WS_SERVICE_PRIVATE_JWK)
+    throw new Error(
+      'WS_SERVICE_PRIVATE_JWK is required for Post participation in production',
     );
 
   const path = process.env.WS_PATH ?? '/ws/v1';
@@ -134,6 +140,9 @@ export function loadConfig(): AppConfig {
     postService: {
       url: process.env.POST_SERVICE_URL ?? 'http://127.0.0.1:3002',
       serviceSecret,
+      ...(process.env.WS_SERVICE_PRIVATE_JWK
+        ? { servicePrivateJwk: process.env.WS_SERVICE_PRIVATE_JWK }
+        : {}),
       issuer: process.env.WS_SERVICE_JWT_ISSUER ?? 'wgo-ws-gateway',
       audience: process.env.WS_SERVICE_JWT_AUDIENCE ?? 'wgo-post-service',
     },

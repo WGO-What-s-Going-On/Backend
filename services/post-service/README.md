@@ -2,13 +2,21 @@
 
 ## WebSocket Gateway 내부 계약 (2026-09-26)
 
-`boardId=postId`다. Gateway는 서비스 JWT로
-`GET /internal/v1/posts/{postId}/status`의 ACTIVE 상태를 확인한다. 같은 인증으로
-`GET /internal/v1/posts/{postId}`, `GET /internal/v1/posts/{postId}/comments`,
-`POST /internal/v1/posts/{postId}/comments`를 호출한다. 서비스 JWT는 30초 수명이며
-댓글 작성에는 검증된 숫자 `userId`를 담는다. `mutationId`는 사용자·게시물별로
-유일하고 반복 요청은 기존 댓글을 반환한다. Outbox Worker는 트랜잭션 커밋 직후
-깨우고 1초 주기 폴링을 복구용으로 유지한다.
+`boardId=postId`다. WS Gateway는 ES256 서비스 JWT로
+`POST /internal/v1/posts/{postId}/participants`를 호출한다. Post는 기존 `JoinPost`를
+사용해 Map에 저장된 최신 사용자 위치와 게시물 중심·반경을 확인하고 영속 참여를 기록한다.
+서비스 토큰은 30초 수명, `typ=wgo-service+jwt`, `iss=wgo-ws-gateway`,
+`sub=ws-gateway`, `aud=wgo-post-service`, `kid`가 필요하다. 공개키는
+`POST_WS_TRUSTED_JWKS`에 `iss=wgo-ws-gateway`와 함께 설정하며 개인키를 포함하지 않는다.
+사용자 신원은 인증된 Gateway의 `X-User-Id`로 전달한다. 참여 API는 HS256·직접 신원 헤더 호출을 거부한다.
+기존 내부 조회·댓글은 전환 기간 HS256 호출도 유지하지만 ES256 검증 실패 시 fallback하지 않는다.
+
+HTTP/내부 댓글 작성은 공통 `CreateComment`에서 ACTIVE 게시물·활성 참여와 최신 위치를 확인한다.
+새 댓글은 먼저 참여해야 하며 위치 없음·만료·반경 밖은 403, Map 장애는 503이다.
+`mutationId`는 사용자·게시물별로 유일하며 성공한 요청의 재시도는 기존 댓글을 반환한다.
+위치 호출은 트랜잭션 밖에서 수행하고 쓰기 직전에 게시물·참여 상태를 다시 확인한다.
+Room leave·연결 해제는 도메인 탈퇴가 아니다. 명시적인 HTTP 참여 이탈만 영속 상태를 변경한다.
+Outbox Worker는 트랜잭션 커밋 직후 깨우고 1초 주기 폴링을 복구용으로 유지한다.
 
 NestJS와 MongoDB 기반의 Post Service다. 생성·상태 변경 API는 MongoDB 트랜잭션에
 도메인 데이터와 Outbox 이벤트를 함께 기록한다. Outbox Worker는 Redis Streams의
@@ -249,3 +257,13 @@ RUN_INTEGRATION=1 RUN_SEMANTIC_INTEGRATION=1 RUN_EMBEDDING_MODEL=1 pnpm test
 
 
 Map `SearchNearbyPosts` gRPC는 기존 공간 조회의 커서를 전달한다. `GrpcNearbyPosts.page({latitude, longitude, radiusM, limit, cursor?})`로 페이지당 최대 200개를 조회하고 반환된 `nextCursor`로 이어서 조회할 수 있다. 마지막 페이지는 `nextCursor: null`이다. 유사도 검색용 `search()`는 150m 첫 페이지 200개까지만 비교하며 추가 페이지를 자동 조회하지 않는다. 일반 페이지 조회를 사용하려면 nextCursor를 지원하는 Map을 먼저 배포한다.
+
+### WS 위치 인가 교차 서비스 검증
+
+WS Gateway와 Map Service의 의존성을 설치하고 각각 `pnpm build`를 실행한다.
+MongoDB localhost:27017 replica set `rs0`와 Redis localhost:6380을 준비한 뒤 Post에서
+`RUN_INTEGRATION=1 RUN_WS_INTEGRATION=1 pnpm test`를 실행한다.
+실제 WS 클라이언트 어댑터→Post Controller·유스케이스→Map gRPC 어댑터 및 Map의 위치 판정
+함수를 연결한다. 위치 저장소와 WS 사용자 인증만 테스트 fixture로 대체한다.
+위치 없음·만료·반경 밖·Map 장애·정상 참여·재연결·중복 join·댓글 위치 재검증·멱등 재시도를 확인한다.
+기존 WS 이벤트 테스트는 동일 Redis Stream을 사용하므로 Post 테스트와 별도 실행한다.

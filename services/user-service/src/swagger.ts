@@ -5,7 +5,11 @@ export function configureSwagger(app: INestApplication): void {
   const config = new DocumentBuilder()
     .setTitle('WGO User Service HTTP API')
     .setDescription(
-      'Current REST implementation. Auth endpoints issue user tokens, but the HTTP Gateway and User REST endpoints do not validate user Bearer JWTs yet. X-User-Id and logout X-Session-Id are read directly; use only trusted local test context. /api/v1/terms is not routed by the current Gateway. Internal gRPC is outside this HTTP contract.',
+      'Internal User REST contract. All /api/v1 operations require the HTTP Gateway service JWT. Identity headers are Gateway-generated context, not public credentials. Public clients use the Gateway with a user Access JWT; login/refresh, nickname availability and terms do not require a user token. Internal gRPC is outside this contract.',
+    )
+    .addBearerAuth(
+      { type: 'http', scheme: 'bearer', bearerFormat: 'Service JWT (ES256)' },
+      'service-jwt',
     )
     .setVersion('1.0.0')
     .build();
@@ -13,7 +17,26 @@ export function configureSwagger(app: INestApplication): void {
   SwaggerModule.setup(
     'docs',
     app,
-    () => SwaggerModule.createDocument(app, config),
+    () => {
+      const document = SwaggerModule.createDocument(app, config);
+      for (const [path, item] of Object.entries(document.paths)) {
+        if (!path.startsWith('/api/v1/')) continue;
+        for (const method of ['get', 'post', 'patch'] as const) {
+          const operation = item[method];
+          if (operation) {
+            operation.security = [{ 'service-jwt': [] }];
+            operation.responses['401'] ??= {
+              description:
+                'Invalid Gateway service authentication or user context.',
+            };
+            operation.responses['403'] ??= {
+              description: 'Gateway operation not permitted.',
+            };
+          }
+        }
+      }
+      return document;
+    },
     { jsonDocumentUrl: 'docs/openapi.json' },
   );
 }

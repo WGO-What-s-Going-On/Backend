@@ -26,6 +26,10 @@ services:
       LOG_LEVEL: debug
       LOG_PRETTY: 'false'
       REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-}
+      JWT_ACCESS_ISSUER: ${JWT_ACCESS_ISSUER:-}
+      JWT_ACCESS_AUDIENCE: ${JWT_ACCESS_AUDIENCE:-}
+      HTTP_GATEWAY_SERVICE_PRIVATE_JWK: ${HTTP_GATEWAY_SERVICE_PRIVATE_JWK:-}
       USER_SERVICE_URL: http://host.docker.internal:3001
       POST_SERVICE_URL: http://host.docker.internal:3002
       MAP_SERVICE_URL: http://host.docker.internal:3003
