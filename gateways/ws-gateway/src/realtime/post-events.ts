@@ -2,10 +2,46 @@ import { randomUUID } from 'node:crypto';
 import { createClient } from 'redis';
 import type { SubscriptionManager } from './subscription-manager.js';
 import { WebSocket } from 'ws';
+import {
+  InvalidPostEvent,
+  realtimePostEvent,
+  type PostRealtimeMessage,
+} from './post-event-contract.js';
 
 const stream = 'post:events';
 const group = 'post-realtime';
 const channel = 'post:realtime';
+const deadStream = 'post-realtime:dead';
+
+// Redis에서 버전 판정·발행·상태 저장을 직렬화한다. 다른 Consumer의 역순 처리와 재시작도 보호한다.
+// 이 상태는 원본이 아닌 소비자 재생 방어용이며 TTL로 삭제하면 오래된 생성 이벤트가 부활할 수 있다.
+const publishOrdered = `
+local m=cjson.decode(ARGV[1])
+local terminal=redis.call('HGET',KEYS[1],'status')
+local ending=m.type=='post.deleted' or m.type=='post.expired'
+if terminal and not ending then return 0 end
+if ending then
+  if terminal=='post.deleted' or terminal==m.type then return 0 end
+  local prior=tonumber(redis.call('HGET',KEYS[1],'postVersion') or '0')
+  if prior>=tonumber(m.postVersion) then return 0 end
+elseif m.type=='comment.created' or m.type=='comment.deleted' then
+  local field='comment:'..m.comment.commentId
+  local deleted=redis.call('HGET',KEYS[1],'deleted:'..m.comment.commentId)
+  if deleted then return 0 end
+  local prior=tonumber(redis.call('HGET',KEYS[1],field) or '0')
+  if prior>=tonumber(m.activityVersion) then return 0 end
+end
+local delivered=redis.call('PUBLISH',ARGV[2],ARGV[1])
+if delivered==0 then return -1 end
+if ending then
+  redis.call('DEL',KEYS[1])
+  redis.call('HSET',KEYS[1],'status',m.type,'postVersion',tostring(m.postVersion))
+elseif m.type=='comment.created' or m.type=='comment.deleted' then
+  redis.call('HSET',KEYS[1],'comment:'..m.comment.commentId,tostring(m.activityVersion))
+  if m.type=='comment.deleted' then redis.call('HSET',KEYS[1],'deleted:'..m.comment.commentId,'1') end
+end
+return delivered
+`;
 
 export interface RealtimeBus {
   start(): Promise<void>;
@@ -21,6 +57,8 @@ export class PostEvents implements RealtimeBus {
   private readonly consumer = randomUUID();
   private stopped = false;
   private active = false;
+  private running?: Promise<void>;
+  private cursor = '0-0';
   private readonly seen = new Map<string, number>();
   private failures = 0;
 
@@ -29,28 +67,52 @@ export class PostEvents implements RealtimeBus {
     private readonly subscriptions: SubscriptionManager,
     private readonly log: { warn(value: unknown): void },
   ) {
-    this.reader = createClient({ url: redisUrl });
-    this.publisher = createClient({ url: redisUrl });
-    this.subscriber = createClient({ url: redisUrl });
+    const options = {
+      url: redisUrl,
+      disableOfflineQueue: true,
+      socket: { connectTimeout: 2000 },
+    };
+    this.reader = createClient(options);
+    this.publisher = createClient(options);
+    this.subscriber = createClient(options);
     for (const client of [this.reader, this.publisher, this.subscriber])
-      client.on('error', (error) => this.log.warn(error));
+      client.on('error', () =>
+        this.log.warn({ event: 'realtime_redis_error' }),
+      );
+    this.subscriber.on('error', () => this.resync());
+    this.subscriber.on('reconnecting', () => this.resync());
+    this.subscriber.on('end', () => this.resync());
+  }
+
+  private resync(): void {
+    if (this.stopped) return;
+    for (const socket of this.subscriptions.reset()) {
+      // 전체 Room을 재인가·재조회하도록 연결을 닫는다. 단절 중 Pub/Sub 전달은 복원할 수 없다.
+      if (socket.readyState === WebSocket.OPEN)
+        socket.close(1012, 'Realtime interrupted; reconnect and reload');
+    }
+    this.seen.clear();
   }
 
   async start(): Promise<void> {
-    await Promise.all([
-      this.reader.connect(),
-      this.publisher.connect(),
-      this.subscriber.connect(),
-    ]);
-    // 그룹이 처음 만들어질 때는 보관 중인 Stream 이벤트부터 읽는다.
     try {
-      await this.reader.xGroupCreate(stream, group, '0', { MKSTREAM: true });
+      await Promise.all([
+        this.reader.connect(),
+        this.publisher.connect(),
+        this.subscriber.connect(),
+      ]);
+      try {
+        await this.reader.xGroupCreate(stream, group, '0', { MKSTREAM: true });
+      } catch (error) {
+        if (!String(error).includes('BUSYGROUP')) throw error;
+      }
+      await this.subscriber.subscribe(channel, (raw) => this.deliver(raw));
+      this.active = true;
+      this.running = this.loop();
     } catch (error) {
-      if (!String(error).includes('BUSYGROUP')) throw error;
+      await this.close();
+      throw error;
     }
-    await this.subscriber.subscribe(channel, (raw) => this.deliver(raw));
-    this.active = true;
-    void this.loop();
   }
 
   ready(): boolean {
@@ -66,7 +128,9 @@ export class PostEvents implements RealtimeBus {
     consumerPending: number;
     deliveryFailures: number;
   }> {
-    const pending = await this.reader.xPending(stream, group);
+    const pending = await this.reader
+      .withCommandOptions({ timeout: 2000 })
+      .xPending(stream, group);
     return {
       consumerPending: Number(pending.pending),
       deliveryFailures: this.failures,
@@ -76,148 +140,134 @@ export class PostEvents implements RealtimeBus {
   async close(): Promise<void> {
     this.stopped = true;
     this.active = false;
-    await Promise.all(
-      [this.reader, this.publisher, this.subscriber].map(async (client) => {
-        if (client.isOpen) await client.quit();
-      }),
-    );
+    for (const client of [this.reader, this.publisher, this.subscriber])
+      if (client.isOpen) client.destroy();
+    await this.running;
   }
 
   private async loop(): Promise<void> {
     while (!this.stopped) {
       try {
-        // ACK 전에 소비자가 죽은 이벤트를 먼저 회수한 뒤 새 이벤트를 읽는다.
-        const claimed = (await this.reader.sendCommand([
-          'XAUTOCLAIM',
+        const reader = this.reader.withCommandOptions({ timeout: 2500 });
+        const claimed = await reader.xAutoClaim(
           stream,
           group,
           this.consumer,
-          '5000',
-          '0-0',
-          'COUNT',
-          '20',
-        ])) as unknown[];
-        const pending = Array.isArray(claimed?.[1])
-          ? (claimed[1] as unknown[])
-          : [];
-        for (const entry of pending) await this.processRaw(entry);
-        const batches = await this.reader.xReadGroup(
+          5000,
+          this.cursor,
+          { COUNT: 20 },
+        );
+        this.cursor = claimed.nextId;
+        for (const entry of claimed.messages)
+          if (entry) await this.process(entry.id, entry.message);
+        const batches = (await reader.xReadGroup(
           group,
           this.consumer,
           { key: stream, id: '>' },
           { COUNT: 20, BLOCK: 1000 },
-        );
-        if (Array.isArray(batches))
-          for (const batch of batches as Array<{
-            messages: Array<{ id: string; message: Record<string, string> }>;
-          }>)
-            for (const message of batch.messages)
-              await this.process(message.id, message.message.data);
-      } catch (error) {
+        )) as Array<{
+          messages: Array<{ id: string; message: Record<string, string> }>;
+        }> | null;
+        for (const batch of batches ?? [])
+          for (const entry of batch.messages)
+            await this.process(entry.id, entry.message);
+      } catch {
         if (!this.stopped) {
           this.failures++;
-          this.log.warn({ error, failures: this.failures });
+          this.log.warn({
+            event: 'realtime_consumer_retry',
+            failures: this.failures,
+          });
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
       }
     }
   }
 
-  private async processRaw(entry: unknown): Promise<void> {
-    if (
-      !Array.isArray(entry) ||
-      typeof entry[0] !== 'string' ||
-      !Array.isArray(entry[1])
-    )
-      return;
-    const fields = entry[1] as string[];
-    const index = fields.indexOf('data');
-    if (index >= 0) await this.process(entry[0], fields[index + 1]);
-  }
-
-  private async process(id: string, raw: string | undefined): Promise<void> {
-    if (!raw) {
-      await this.reader.xAck(stream, group, id);
-      return;
+  private async process(
+    id: string,
+    fields: Record<string, string>,
+  ): Promise<void> {
+    try {
+      const message = realtimePostEvent(fields);
+      if (message) {
+        const delivered = await this.publisher
+          .withCommandOptions({ timeout: 2000 })
+          .eval(publishOrdered, {
+            keys: [`post:realtime:state:${message.postId}`],
+            arguments: [JSON.stringify(message), channel],
+          });
+        if (Number(delivered) < 0) throw new Error('No subscribers');
+      }
+    } catch (error) {
+      this.failures++;
+      const pending = await this.reader
+        .withCommandOptions({ timeout: 2000 })
+        .xPendingRange(stream, group, id, id, 1);
+      const attempt = pending[0]?.deliveriesCounter ?? 1;
+      const invalid = error instanceof InvalidPostEvent;
+      this.log.warn({
+        event: 'realtime_event_failed',
+        streamId: id,
+        attempt,
+        errorCode: invalid ? 'INVALID_CONTRACT' : 'DELIVERY_FAILED',
+      });
+      if (!invalid && attempt < 5) return;
+      // DLQ 저장 실패에는 ACK하지 않고 다음 회수에서 재시도한다.
+      await this.publisher
+        .withCommandOptions({ timeout: 2000 })
+        .xAdd(deadStream, '*', {
+          streamId: id,
+          error: invalid ? 'INVALID_CONTRACT' : 'RETRY_EXHAUSTED',
+          original: JSON.stringify(fields),
+        });
+      this.log.warn({ event: 'realtime_event_dead_lettered', streamId: id });
     }
-    const event = JSON.parse(raw) as Record<string, unknown>;
-    const postId = event.aggregateId;
-    const eventId = event.eventId;
-    if (typeof postId !== 'string' || typeof eventId !== 'string')
-      throw new Error('Invalid post event');
-    let message: Record<string, unknown>;
-    switch (event.eventType) {
-      case 'PostCommentCreated':
-        if (!event.comment || typeof event.comment !== 'object')
-          throw new Error('Invalid comment event');
-        message = { type: 'comment.created', comment: event.comment };
-        break;
-      case 'PostCreated':
-        message = { type: 'post.created' };
-        break;
-      case 'PostReactionCreated':
-        message = { type: 'post.reaction.created' };
-        break;
-      case 'PostParticipantJoined':
-        message = { type: 'post.participant.joined' };
-        break;
-      default:
-        await this.reader.xAck(stream, group, id);
-        return;
-    }
-    // 모든 Gateway 인스턴스가 같은 Pub/Sub 채널을 듣는다. 게시 후에 ACK해야 실패 시 재시도할 수 있다.
-    const subscribers = await this.publisher.publish(
-      channel,
-      JSON.stringify({
-        version: 1,
-        eventId,
-        postId,
-        boardId: postId,
-        ...message,
-      }),
-    );
-    if (subscribers === 0)
-      throw new Error(
-        'No realtime subscribers; leaving event pending for retry',
-      );
-    await this.reader.xAck(stream, group, id);
+    await this.reader
+      .withCommandOptions({ timeout: 2000 })
+      .xAck(stream, group, id);
   }
 
   private deliver(raw: string): void {
     try {
-      const message = JSON.parse(raw) as Record<string, unknown>;
+      const message = JSON.parse(raw) as PostRealtimeMessage;
       if (
+        message.version !== 1 ||
         typeof message.eventId !== 'string' ||
-        typeof message.boardId !== 'string'
+        typeof message.boardId !== 'string' ||
+        message.boardId !== message.postId
       )
         return;
-      const commentId =
-        message.type === 'comment.created' &&
-        typeof (message.comment as Record<string, unknown>)?.commentId ===
-          'string'
-          ? String((message.comment as Record<string, unknown>).commentId)
-          : undefined;
-      const key = commentId ?? message.eventId;
       const now = Date.now();
-      // Stream 재전달이나 ACK 실패로 같은 이벤트가 다시 게시돼도 이 인스턴스에서는 한 번만 보낸다.
-      if (this.seen.has(key)) return;
-      this.seen.set(key, now);
+      // 제한된 중복 전송 억제다. 도메인 순서는 위의 Redis 처리 상태로 판정한다.
       for (const [id, at] of this.seen)
-        if (at < now - 300_000) this.seen.delete(id);
+        if (at < now - 300000) this.seen.delete(id);
+      if (this.seen.has(message.eventId)) return;
+      if (this.seen.size >= 10000)
+        this.seen.delete(this.seen.keys().next().value!);
+      this.seen.set(message.eventId, now);
+      const terminal =
+        message.type === 'post.deleted' || message.type === 'post.expired';
+      const sockets = [...this.subscriptions.socketsForBoard(message.boardId)];
+      // 인가 await 중의 join도 먼저 무효화한다. 다른 Room·영속 참여 정보는 변경하지 않는다.
+      if (terminal) this.subscriptions.closeBoard(message.boardId);
       const encoded = JSON.stringify(message);
-      for (const socket of this.subscriptions.socketsForBoard(
-        message.boardId,
-      )) {
-        if (socket.readyState === WebSocket.OPEN)
+      for (const socket of sockets) {
+        if (socket.readyState !== WebSocket.OPEN) continue;
+        try {
           socket.send(encoded, (error) => {
             if (error) {
               this.failures++;
-              this.log.warn(error);
+              socket.terminate();
             }
           });
+        } catch {
+          this.failures++;
+          socket.terminate();
+        }
       }
-    } catch (error) {
-      this.log.warn(error);
+    } catch {
+      this.log.warn({ event: 'invalid_realtime_message' });
     }
   }
 }

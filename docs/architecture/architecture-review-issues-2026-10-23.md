@@ -29,7 +29,7 @@ Critical과 High는 관련 기능의 병합·운영 공개 전 차단 이슈로 
 | WGO-ARCH-03 | High       | P1       | 사용자 JWT 발급과 운영 WS 검증 계약 통일       | User, HTTP Gateway, WS Gateway      | 진행 중 |
 | WGO-ARCH-04 | High       | P1       | Map 검색의 페이지 누락과 과도한 순차 조회 수정 | Map, Post                           | 미해결 |
 | WGO-ARCH-05 | High       | P1       | Moderation 결정의 Post 원본 적용 연결          | Moderation, Post, Map, Notification | 진행 중 |
-| WGO-ARCH-06 | High       | P1       | 삭제·만료·댓글 삭제의 실시간 상태 반영         | WS Gateway, Post                    | 미해결 |
+| WGO-ARCH-06 | High       | P1       | 삭제·만료·댓글 삭제의 실시간 상태 반영         | WS Gateway, Post                    | 진행 중 |
 | WGO-ARCH-07 | Medium     | P1       | Notification 전송 재시도의 전체 스캔 제거      | Notification                        | 미해결 |
 | WGO-ARCH-08 | Medium     | P1       | Moderation 전체 평가와 단일 JSON 증가 제한     | Moderation                          | 미해결 |
 | WGO-ARCH-09 | Medium     | P1       | WS 수신 큐와 송신 버퍼 상한 적용               | WS Gateway                          | 미해결 |
@@ -185,15 +185,27 @@ Moderation 생산자 endpoint/DB 설정이 필요하다. [수신 계약](../../s
 
 **심각도 High · 우선순위 P1 · 실시간 상태 동기화 차단**
 
-WS 이벤트 소비자는 생성 계열 4종을 전달하고 그 밖의 이벤트는 ACK한다. Post 삭제·만료·댓글 삭제가 기존 Room과 클라이언트 상태에 반영되지 않는다. 이것이 Post의 종료 후 쓰기 검증까지 모두 우회한다는 뜻은 아니지만, 연결 중 화면과 구독 상태는 오래된 상태로 남는다.
+최초 점검 당시 WS 이벤트 소비자는 생성 계열 4종만 전달하고 Post 삭제·만료·댓글 삭제를 ACK하여 버렸다.
+2026-10-25 현재 브랜치에서 세 종료·삭제 이벤트 처리를 구현했다. 다른 Room은 유지하고 종료된 Room만 해제한다.
+참여 인가 중 종료되는 경쟁 조건을 차단하고, Redis 소비자 처리 상태로 중복·역순 이벤트와 Gateway 재시작을 보호한다.
 
-근거: [WS 이벤트 분기](../../gateways/ws-gateway/src/realtime/post-events.ts) 150행, [Room 관리](../../gateways/ws-gateway/src/realtime/subscription-manager.ts).
+근거: [WS 이벤트 처리](../../gateways/ws-gateway/src/realtime/post-events.ts),
+[메시지 계약과 배포 절차](../../gateways/ws-gateway/README.md),
+[실제 Post Outbox 연결 검증](../../services/post-service/test/ws-lifecycle.integration.test.ts).
 
-- [ ] 삭제·만료·댓글 삭제 및 필요한 반응 취소의 WS 메시지 계약을 정의한다.
-- [ ] 종료 게시물의 기존 Room 처리와 클라이언트 통지 정책을 구현한다.
-- [ ] 삭제 후 늦게 도착한 생성 이벤트가 클라이언트 상태를 되살리지 않도록 버전을 처리한다.
-- [ ] 여러 Gateway 인스턴스에서 동일하게 반영되는지 검증한다.
-- [ ] 재연결 후 원본 상태 조회로 누락 이벤트를 복구한다.
+- [x] 삭제·만료·댓글 삭제의 WS 메시지 계약을 정의한다. 삭제된 본문·제재 감사 정보는 전달하지 않는다.
+- [x] 종료 게시물의 기존 Room 처리와 클라이언트 통지 정책을 구현한다.
+- [x] 삭제 후 늦게 도착한 생성 이벤트가 상태를 되살리지 않도록 버전·삭제 표식을 처리한다.
+- [x] 두 Gateway 인스턴스와 Gateway 재시작에서 동일하게 반영되는지 검증한다.
+- [x] Pub/Sub 단절 시 1012로 재연결을 유도하고, 새 연결에서 종료 게시물 재참여가 거부됨을 검증한다.
+- [ ] 프런트엔드의 재연결 → 참여 → 원본 조회와 화면 갱신을 실제 클라이언트에서 확인한다.
+- [ ] 필요한 반응 취소의 실시간 계약·처리는 별도 범위로 정한다.
+
+로컬 검증: WS 테스트 51개, 실제 Post·Outbox·Redis·WS 통합 테스트를 포함한 교차 서비스 테스트 21개 통과.
+새 lifecycle 통합 테스트는 위치 인가를 fixture로 대체하며 기존 교차 서비스 테스트의 Map 정책 검증과 구분한다.
+Moderation 구현·버전 계약은 변경하지 않았다. AWS 운영 배포와 실제 프런트엔드 검증 완료를 뜻하지 않는다.
+최초 전환은 기존 Consumer를 모두 중지한 뒤 교체해야 하며, 이미 ACK된 종료 이벤트는 보존 이벤트 재생 또는
+원본 대조가 필요하다. Redis 처리 상태 전체 유실의 자동 복구·표식 보존 정책은 후속 운영 작업이다.
 
 ## 성능과 검증 개선 이슈
 

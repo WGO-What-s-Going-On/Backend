@@ -44,3 +44,16 @@ describe('SubscriptionManager', () => {
     expect(manager.join(client, 'board-2')).toBe('room-limit-reached');
   });
 });
+
+it('closing a board invalidates pending joins and preserves other rooms', () => {
+  const manager = new SubscriptionManager(3);
+  const client = socket();
+  manager.register(client);
+  manager.join(client, 'closed');
+  manager.join(client, 'other');
+  const pending = manager.beginJoin('closed');
+  manager.closeBoard('closed');
+  expect(pending.valid).toBe(false);
+  expect(manager.roomsForSocket(client)).toEqual(new Set(['other']));
+  manager.endJoin('closed', pending);
+});

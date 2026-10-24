@@ -6,7 +6,38 @@ export class SubscriptionManager {
   readonly #roomsBySocket = new Map<WebSocket, Set<string>>();
   readonly #socketsByBoard = new Map<string, Set<WebSocket>>();
 
+  readonly #pending = new Map<string, Set<{ valid: boolean }>>();
+
   constructor(readonly maxRoomsPerSocket: number) {}
+
+  beginJoin(boardId: string): { valid: boolean } {
+    const ticket = { valid: true };
+    const pending = this.#pending.get(boardId) ?? new Set();
+    pending.add(ticket);
+    this.#pending.set(boardId, pending);
+    return ticket;
+  }
+
+  endJoin(boardId: string, ticket: { valid: boolean }): void {
+    const pending = this.#pending.get(boardId);
+    pending?.delete(ticket);
+    if (!pending?.size) this.#pending.delete(boardId);
+  }
+
+  closeBoard(boardId: string): void {
+    for (const ticket of this.#pending.get(boardId) ?? []) ticket.valid = false;
+    for (const socket of [...this.socketsForBoard(boardId)])
+      this.leave(socket, boardId);
+  }
+
+  // Pub/Sub 단절 중 놓친 이벤트는 재생되지 않는다. 재연결 후 원본을 다시 읽도록 기존 구독을 폐기한다.
+  reset(): WebSocket[] {
+    for (const pending of this.#pending.values())
+      for (const ticket of pending) ticket.valid = false;
+    const sockets = [...this.#roomsBySocket.keys()];
+    for (const socket of sockets) this.remove(socket);
+    return sockets;
+  }
 
   register(socket: WebSocket): void {
     if (!this.#roomsBySocket.has(socket))

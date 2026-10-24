@@ -198,6 +198,18 @@ export async function buildApp(
           .then(async () => {
             const command = parseClientCommand(raw.toString());
 
+            if (bus && !bus.ready()) {
+              send(
+                socket,
+                commandError(
+                  'WS_REALTIME_UNAVAILABLE',
+                  'Reconnect and reload board state.',
+                  command.requestId,
+                ),
+              );
+              return;
+            }
+
             if (command.type === 'board.join') {
               // 인가 요청은 영속 참여를 기록하므로 Room 용량부터 확인한다.
               if (!subscriptions.canJoin(socket, command.payload.boardId)) {
@@ -212,6 +224,7 @@ export async function buildApp(
                 return;
               }
 
+              const ticket = subscriptions.beginJoin(command.payload.boardId);
               let allowed: boolean;
               try {
                 allowed = await boardAccessAuthorizer.canJoin({
@@ -229,8 +242,21 @@ export async function buildApp(
                   ),
                 );
                 return;
+              } finally {
+                subscriptions.endJoin(command.payload.boardId, ticket);
               }
 
+              if (!ticket.valid) {
+                send(
+                  socket,
+                  commandError(
+                    'WS_BOARD_JOIN_FORBIDDEN',
+                    'The board closed during authorization.',
+                    command.requestId,
+                  ),
+                );
+                return;
+              }
               if (!allowed) {
                 send(
                   socket,
@@ -295,6 +321,21 @@ export async function buildApp(
                           command.payload.content!,
                           command.payload.mutationId!,
                         );
+                if (
+                  !subscriptions
+                    .roomsForSocket(socket)
+                    .has(command.payload.boardId)
+                ) {
+                  send(
+                    socket,
+                    commandError(
+                      'WS_BOARD_NOT_JOINED',
+                      'The board subscription ended.',
+                      command.requestId,
+                    ),
+                  );
+                  return;
+                }
                 send(socket, {
                   version: protocolVersion,
                   type: 'command.result',

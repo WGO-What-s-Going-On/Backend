@@ -603,3 +603,13 @@ Redis 단계 실패는 DLQ_WRITE_FAILED / ACK_FAILED / PENDING_LOOKUP_FAILED로 
 Pending 조회 실패도 moderation_event_retry를 ERROR로 출력하며 attempt=null, causeCode에 업무 오류 분류를 남긴다.
 DLQ 저장 실패의 causeCode 역시 원래 업무 오류 분류다. 성공한 일반 처리는 로그를 추가하지 않는다.
 대시보드·알림·주기적 적체 지표 수집은 별도 observability 작업이며 이번 로그 추가에 포함하지 않는다.
+
+
+## 12. WS 종료·삭제 소비 (2026-10-25)
+
+WS는 PostDeleted → post.deleted, PostExpired → post.expired,
+PostCommentDeleted → comment.deleted로 전달한다. 원본 생산 이벤트는 변경하지 않는다.
+postVersion/activityVersion을 소비해 중복·역순 생성을 억제하고, 종료 시 해당 Room만 해제한다.
+삭제 댓글 본문을 재노출하지 않으며 종료된 게시물 재참여의 최종 인가는 기존 Post JoinPost가 담당한다.
+[WS 계약·재연결·배포 순서](../../../gateways/ws-gateway/README.md#post-종료삭제-실시간-계약-2026-10-25)를 따른다.
+실제 Post 트랜잭션과 Outbox 발행부터 WS 전달까지 test/ws-lifecycle.integration.test.ts에서 검증한다.

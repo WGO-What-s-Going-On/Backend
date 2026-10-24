@@ -47,6 +47,16 @@
     },
     {
       "prefixes": [
+        "gateways/ws-gateway/test/post-lifecycle.integration.test.ts",
+        "gateways/ws-gateway/test/post-events.integration.test.ts",
+        "services/post-service/test/ws-lifecycle.integration.test.ts",
+        "services/post-service/contracts/post-events.md"
+      ],
+      "services": ["post-service", "ws-gateway"],
+      "integration": "ws-post"
+    },
+    {
+      "prefixes": [
         "services/user-service/contracts/",
         "services/post-service/contracts/user.proto"
       ],

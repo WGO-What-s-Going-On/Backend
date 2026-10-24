@@ -6,7 +6,7 @@
 - `post.get`, `comment.list`, `comment.create`와 `requestId` 결과 응답을 제공한다.
 - 사용자 토큰은 개발·운영 모두 User와 같은 HS256 키·issuer·audience 및 필수 claim으로 검증한다.
 - 별도 단기 서비스 JWT로 Post Service 내부 조회·댓글 작성을 인증한다.
-- `post-realtime` Consumer Group → Redis Pub/Sub → 각 Gateway room으로 네 생성 이벤트를 전파한다.
+- `post-realtime` Consumer Group → Redis Pub/Sub → 각 Gateway room으로 생성 4종과 삭제·만료·댓글 삭제 3종을 전파한다. 종료 시 해당 Room과 대기 중인 join을 정리한다.
 - Redis를 쓰는 두 인스턴스 전파·Pending 복구를 포함해 16개 테스트와 타입 검사·빌드를 통과했다.
 - 로컬 MongoDB·Redis, Post Service, Gateway 2개 인스턴스에서 댓글 100회 전송부터 다른 인스턴스 수신까지 P95 10.98ms(최대 12.38ms)를 측정했다. 커밋 전 시간도 포함하므로 500ms 목표를 충족한다. `pnpm exec tsx scripts/benchmark.ts`로 재측정한다.
 
@@ -98,3 +98,10 @@ Milestone 1 검증 결과:
 - `pnpm typecheck`: 통과
 - `pnpm test`: 4개 test file, 13개 test 통과
 - `pnpm build`: 통과
+
+
+### 2026-10-25 Lifecycle 전달
+
+PostDeleted/PostExpired/PostCommentDeleted를 추가했다. 순서·중복 방어는 Redis 소비자 처리 상태,
+연결 단절 복구는 1012 재연결과 원본 재조회로 처리한다. 기존 사용자 JWT 계약은 유지한다.
+세부 메시지·복구·혼합 버전 배포 제한은 README의 Post 종료·삭제 실시간 계약을 따른다.
