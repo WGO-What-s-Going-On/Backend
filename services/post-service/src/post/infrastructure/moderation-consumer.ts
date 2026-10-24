@@ -1,6 +1,7 @@
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import {
+  ConsoleLogger,
   Injectable,
   Logger,
   type OnModuleInit,
@@ -9,6 +10,8 @@ import {
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createClient } from 'redis';
+import { PostNotFoundError } from '../domain/post.js';
+import type { ModerationLifecycleEvent } from '../application/moderation.js';
 import { ApplyModerationLifecycle } from '../application/moderation.js';
 import {
   InvalidModerationEvent,
@@ -29,6 +32,10 @@ export class ModerationConsumer {
     private readonly application: Pick<ApplyModerationLifecycle, 'execute'>,
     private readonly reclaimMs = 30000,
     private readonly stream = MODERATION_STREAM,
+    private readonly logger: Pick<
+      ConsoleLogger,
+      'warn' | 'error'
+    > = new ConsoleLogger(ModerationConsumer.name, { json: true }),
   ) {}
 
   private commands() {
@@ -68,35 +75,109 @@ export class ModerationConsumer {
   }
 
   async process(entry: Entry): Promise<void> {
+    let input: ModerationLifecycleEvent | null = null;
+    // 손상된 payload나 예외 본문을 로그에 펼치지 않고 식별자만 명시적으로 선택한다.
+    const context = () => ({
+      service: 'post-service',
+      stream: this.stream,
+      group: MODERATION_GROUP,
+      consumer: this.name,
+      streamId: entry.id,
+      eventId:
+        input?.eventId ??
+        (/^evt_[0-9a-f-]{36}$/.test(entry.message.eventId ?? '')
+          ? entry.message.eventId
+          : undefined),
+      postId: input?.postId,
+      correlationId: input?.correlationId,
+    });
     try {
-      const input = parseModerationEvent(entry.message);
+      input = parseModerationEvent(entry.message);
       if (input) await this.application.execute(input);
     } catch (error) {
-      const pending = await this.commands().xPendingRange(
-        this.stream,
-        MODERATION_GROUP,
-        entry.id,
-        entry.id,
-        1,
-      );
-      if (
-        !(error instanceof InvalidModerationEvent) &&
-        (pending[0]?.deliveriesCounter ?? 1) < 5
-      )
+      const errorCode =
+        error instanceof InvalidModerationEvent
+          ? 'INVALID_CONTRACT'
+          : error instanceof PostNotFoundError
+            ? 'POST_NOT_FOUND'
+            : 'PROCESSING_FAILED';
+      let attempt: number;
+      try {
+        const pending = await this.commands().xPendingRange(
+          this.stream,
+          MODERATION_GROUP,
+          entry.id,
+          entry.id,
+          1,
+        );
+        attempt = pending[0]?.deliveriesCounter ?? 1;
+      } catch (pendingError) {
+        this.logger.error({
+          ...context(),
+          event: 'moderation_event_retry',
+          errorCode: 'PENDING_LOOKUP_FAILED',
+          causeCode: errorCode,
+          attempt: null,
+          disposition: 'RETRY',
+        });
+        throw pendingError;
+      }
+      if (!(error instanceof InvalidModerationEvent) && attempt < 5) {
+        this.logger.warn({
+          ...context(),
+          event: 'moderation_event_retry',
+          errorCode,
+          attempt,
+          disposition: 'RETRY',
+        });
         return;
-      // DB 오류 상세는 공개하지 않는다. 원문은 접근 제한된 DLQ에 보존하며 저장 실패 시 ACK하지 않는다.
-      await this.commands().xAdd(MODERATION_DEAD_STREAM, '*', {
-        streamId: entry.id,
-        eventId: entry.message.eventId ?? '',
-        error:
+      }
+      // DLQ 저장이 성공했을 때만 격리 완료를 기록한다. 저장 실패에는 ACK하지 않는다.
+      try {
+        await this.commands().xAdd(MODERATION_DEAD_STREAM, '*', {
+          streamId: entry.id,
+          eventId: entry.message.eventId ?? '',
+          error:
+            error instanceof InvalidModerationEvent
+              ? 'INVALID_CONTRACT'
+              : 'RETRY_EXHAUSTED',
+          original: JSON.stringify(entry.message),
+        });
+      } catch (deadLetterError) {
+        this.logger.error({
+          ...context(),
+          event: 'moderation_event_dlq_failed',
+          errorCode: 'DLQ_WRITE_FAILED',
+          causeCode: errorCode,
+          attempt,
+          disposition: 'RETRY',
+        });
+        throw deadLetterError;
+      }
+      this.logger.warn({
+        ...context(),
+        event: 'moderation_event_dead_lettered',
+        errorCode,
+        attempt,
+        disposition: 'DLQ',
+        reason:
           error instanceof InvalidModerationEvent
             ? 'INVALID_CONTRACT'
             : 'RETRY_EXHAUSTED',
-        original: JSON.stringify(entry.message),
       });
     }
     // ACK 실패는 업무 실패 재시도 예산과 분리한다. 재전달 시 MongoDB 처리 이력이 중복을 막는다.
-    await this.commands().xAck(this.stream, MODERATION_GROUP, entry.id);
+    try {
+      await this.commands().xAck(this.stream, MODERATION_GROUP, entry.id);
+    } catch (error) {
+      this.logger.error({
+        ...context(),
+        event: 'moderation_event_ack_failed',
+        errorCode: 'ACK_FAILED',
+        disposition: 'RETRY',
+      });
+      throw error;
+    }
   }
 }
 

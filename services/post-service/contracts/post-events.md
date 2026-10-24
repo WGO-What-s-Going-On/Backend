@@ -582,3 +582,24 @@ PostExpired 소비는 기존 Map/semantic 경로를 사용한다. WS 종료 전�
 검증: `RUN_INTEGRATION=1 pnpm test`는 MongoDB·Redis 수신/적용을 검사하고,
 추가 `RUN_SEMANTIC_INTEGRATION=1`은 Map 빌드·Cassandra를 사용하는 실제 인덱스 제거도 검사한다.
 [후속 과제](../../moderation-service/contracts/integration-gaps.md#lifecycle-v1-연결-이후-후속-작업)는 현재 구현 완료로 간주하지 않는다.
+
+
+### Lifecycle Consumer 실패 로그
+
+Consumer는 한 줄 JSON 로그를 출력한다. Nest JSON envelope의 `message`에 `service`, `stream`,
+`group`, `consumer`, `streamId`와 검증된 `eventId`, `postId`, `correlationId`가 포함된다.
+손상된 메시지에서는 확인할 수 없는 식별자를 생략한다. 원문 payload·예외 메시지·stack·연결 문자열은 출력하지 않는다.
+
+| event | 레벨 | 의미 |
+| --- | --- | --- |
+| moderation_event_retry | WARN | 업무 처리 실패로 Pending 유지, attempt는 Redis 전달 횟수 |
+| moderation_event_dead_lettered | WARN | DLQ 저장 성공, disposition=DLQ |
+| moderation_event_dlq_failed | ERROR | DLQ 저장 실패, ACK 없이 재시도 |
+| moderation_event_ack_failed | ERROR | 처리 또는 격리 후 ACK 실패, 재전달 가능 |
+
+업무 오류 `errorCode`는 INVALID_CONTRACT / POST_NOT_FOUND / PROCESSING_FAILED로 구분한다.
+DLQ 격리의 `reason`은 INVALID_CONTRACT / RETRY_EXHAUSTED이며 오류 원인과 분리한다.
+Redis 단계 실패는 DLQ_WRITE_FAILED / ACK_FAILED / PENDING_LOOKUP_FAILED로 구분한다.
+Pending 조회 실패도 moderation_event_retry를 ERROR로 출력하며 attempt=null, causeCode에 업무 오류 분류를 남긴다.
+DLQ 저장 실패의 causeCode 역시 원래 업무 오류 분류다. 성공한 일반 처리는 로그를 추가하지 않는다.
+대시보드·알림·주기적 적체 지표 수집은 별도 observability 작업이며 이번 로그 추가에 포함하지 않는다.
