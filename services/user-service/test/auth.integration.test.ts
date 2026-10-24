@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { UnauthorizedException, type INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
@@ -161,9 +162,9 @@ describe('Auth API integration', () => {
     await redis.flushdb();
   });
 
-  // Opt-in cross-service regression: build/install HTTP Gateway before running this test.
+  // Opt-in cross-service regression: build/install both Gateways before running this test.
   it.runIf(process.env.RUN_GATEWAY_INTEGRATION === '1')(
-    'authenticates login -> profile -> refresh -> logout through the actual HTTP Gateway',
+    'accepts actual User login tokens in HTTP and production WS without remote JWKS',
     async () => {
       const { privateKey, publicKey } = generateKeyPairSync('ec', {
         namedCurve: 'P-256',
@@ -181,6 +182,8 @@ describe('Auth API integration', () => {
       });
       let guardedApp: INestApplication | undefined;
       let gateway: { close(): Promise<void> } | undefined;
+      let wsGateway: any;
+      const wsSockets: Array<{ terminate(): void }> = [];
       try {
         const module = await Test.createTestingModule({
           controllers: [AuthController, UsersController],
@@ -233,6 +236,77 @@ describe('Auth API integration', () => {
           .send({ authorizationCode: 'code' })
           .expect(201);
         const token = login.body.accessToken;
+        const { buildApp: buildWsApp } = await import(
+          new URL(
+            '../../../gateways/ws-gateway/dist/src/app.js',
+            import.meta.url,
+          ).href
+        );
+        const { loadConfig: loadWsConfig } = await import(
+          new URL(
+            '../../../gateways/ws-gateway/dist/src/config.js',
+            import.meta.url,
+          ).href
+        );
+        const previousEnv = { ...process.env };
+        let wsConfig;
+        try {
+          process.env.NODE_ENV = 'production';
+          process.env.JWT_ACCESS_SECRET = accessSecret;
+          process.env.JWT_ACCESS_ISSUER = 'wgo-user-service-test';
+          process.env.JWT_ACCESS_AUDIENCE = 'wgo-api-test';
+          process.env.WS_SERVICE_PRIVATE_JWK =
+            config.userAuth.servicePrivateJwk;
+          delete process.env.JWT_JWKS_URL;
+          wsConfig = loadWsConfig();
+        } finally {
+          process.env = previousEnv;
+        }
+        wsGateway = await buildWsApp({
+          config: wsConfig,
+          logger: false,
+          // 이 테스트는 실제 인증·handshake만 검증하고 이벤트 fan-out은 별도 통합 테스트에 맡긴다.
+          realtimeBus: {
+            start: async () => {},
+            close: async () => {},
+            ready: () => true,
+          },
+        });
+        const wsUrl = (
+          await wsGateway.listen({ host: '127.0.0.1', port: 0 })
+        ).replace(/^http/, 'ws');
+        const WebSocket = createRequire(
+          new URL('../../../gateways/ws-gateway/package.json', import.meta.url),
+        )('ws');
+        // Handshake uses the actual authenticator; no injected user identity or external JWKS server.
+        for (const headers of [
+          { authorization: `Bearer ${token}` },
+          { cookie: `wgo_access_token=${token}` },
+        ]) {
+          const socket = new WebSocket(`${wsUrl}/ws/v1`, { headers });
+          wsSockets.push(socket);
+          const ready = await new Promise<any>((resolve, reject) => {
+            socket.once('message', (data: Buffer) =>
+              resolve(JSON.parse(data.toString())),
+            );
+            socket.once('error', reject);
+          });
+          expect(ready.type).toBe('connection.ready');
+          expect(ready.userId).toBe(String(login.body.userId));
+        }
+        expect(
+          (
+            await wsGateway.inject({
+              method: 'GET',
+              url: '/ws/v1',
+              headers: {
+                authorization: 'Basic invalid',
+                cookie: `wgo_access_token=${token}`,
+              },
+            })
+          ).statusCode,
+        ).toBe(401);
+
         const me = await request(url)
           .get('/api/v1/users/me')
           .set('Authorization', `Bearer ${token}`)
@@ -266,6 +340,8 @@ describe('Auth API integration', () => {
           .set('Authorization', `Bearer ${token}`)
           .expect(200);
       } finally {
+        for (const socket of wsSockets) socket.terminate();
+        await wsGateway?.close();
         await gateway?.close();
         await guardedApp?.close();
         if (previousKeys === undefined)

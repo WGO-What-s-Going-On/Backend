@@ -4,7 +4,7 @@
 
 - Post의 내부 참여 API로 최신 위치·반경·ACTIVE 상태와 영속 참여를 확인한 뒤 room에 가입한다. `boardId=postId`다.
 - `post.get`, `comment.list`, `comment.create`와 `requestId` 결과 응답을 제공한다.
-- 운영 사용자 토큰은 issuer·audience·JWKS 필수 설정으로 검증한다.
+- 사용자 토큰은 개발·운영 모두 User와 같은 HS256 키·issuer·audience 및 필수 claim으로 검증한다.
 - 별도 단기 서비스 JWT로 Post Service 내부 조회·댓글 작성을 인증한다.
 - `post-realtime` Consumer Group → Redis Pub/Sub → 각 Gateway room으로 네 생성 이벤트를 전파한다.
 - Redis를 쓰는 두 인스턴스 전파·Pending 복구를 포함해 16개 테스트와 타입 검사·빌드를 통과했다.
@@ -53,8 +53,7 @@
 
 ### Production JWT key distribution
 
-개발 환경은 HS256 secret을 사용한다. 운영 환경은 issuer·audience·JWKS
-설정을 필수로 요구한다. URL query token 전달은 지원하지 않는다.
+개발·운영 모두 JWT_ACCESS_SECRET/ISSUER/AUDIENCE를 명시한다. 원격 JWKS를 사용하지 않는다. 사용자 키와 서비스 ES256 키는 분리하며, 연결 중 만료/철회 처리는 후속이다. URL query token 전달은 지원하지 않는다.
 
 ### Distributed fan-out
 

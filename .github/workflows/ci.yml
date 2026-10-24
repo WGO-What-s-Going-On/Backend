@@ -113,13 +113,15 @@ jobs:
         with:
           node-version: 24
       - run: npm install --global pnpm@10.33.0
-      - name: Install contract participants and build Gateway artifact
+      - name: Install contract participants and build both Gateway artifacts
         run: |
           node scripts/ci-run.mjs http-gateway install
           node scripts/ci-run.mjs http-gateway build
+          node scripts/ci-run.mjs ws-gateway install
+          node scripts/ci-run.mjs ws-gateway build
           node scripts/ci-run.mjs user-service install
       - run: node scripts/ci-dependencies.mjs start user-service
-      - name: Exercise actual Gateway to User authentication flow
+      - name: Exercise User token authentication through HTTP and production WS
         working-directory: services/user-service
         env:
           RUN_GATEWAY_INTEGRATION: '1'

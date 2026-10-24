@@ -7,7 +7,7 @@
 - 최초 검토 기준 커밋: `4104986a7a9f12f13cd451043a78cb561d7b1f75`
 - 범위: HTTP Gateway, WS Gateway, User, Post, Map, Notification, Moderation 및 관련 계약·CI
 - 최신화: 2026-10-24, 구현 확인 기준 `ab8c792` (인증 `3e284a1`, WS·CI/CD `57a558f`, Post CI 의존성 보완 `ab8c792`).
-- 상태: 01·02는 해결(구현·로컬 검증 완료), 05·11은 진행 중이며 나머지는 미해결. 이 문서의 ID는 내부 추적용이며 GitHub Issue 생성이나 담당자 배정을 의미하지 않는다.
+- 상태: 01·02는 해결(구현·로컬 검증 완료), 03·05·11은 진행 중이며 나머지는 미해결. 이 문서의 ID는 내부 추적용이며 GitHub Issue 생성이나 담당자 배정을 의미하지 않는다.
 - 기준: [전체 아키텍처](../../ARCHITECTURE.md), [프로젝트 지침](../../AGENTS.md), [서비스 인증 계약](../contracts/service-authentication.md)
 
 ## 우선순위와 완료 관리
@@ -26,7 +26,7 @@ Critical과 High는 관련 기능의 병합·운영 공개 전 차단 이슈로 
 | ----------- | ---------- | -------- | ---------------------------------------------- | ----------------------------------- | ------ |
 | WGO-ARCH-01 | Critical   | P0       | 공개 사용자 API의 신원 헤더 신뢰 제거          | HTTP Gateway, User                  | 해결 |
 | WGO-ARCH-02 | High       | P0       | WS 참여와 댓글 작성의 도메인 인가 연결         | WS Gateway, Post, Map               | 해결 |
-| WGO-ARCH-03 | High       | P1       | 사용자 JWT 발급과 운영 WS 검증 계약 통일       | User, HTTP Gateway, WS Gateway      | 미해결 |
+| WGO-ARCH-03 | High       | P1       | 사용자 JWT 발급과 운영 WS 검증 계약 통일       | User, HTTP Gateway, WS Gateway      | 진행 중 |
 | WGO-ARCH-04 | High       | P1       | Map 검색의 페이지 누락과 과도한 순차 조회 수정 | Map, Post                           | 미해결 |
 | WGO-ARCH-05 | High       | P1       | Moderation 결정의 Post 원본 적용 연결          | Moderation, Post, Map, Notification | 진행 중 |
 | WGO-ARCH-06 | High       | P1       | 삭제·만료·댓글 삭제의 실시간 상태 반영         | WS Gateway, Post                    | 미해결 |
@@ -103,17 +103,24 @@ Post 129개 및 WS 18개 테스트가 통과했으며 실제 WS→Post→Map RPC
 
 **심각도 High · 우선순위 P1 · 로그인과 운영 WS 연동 공개 차단**
 
-User는 HS256 Access Token을 발급한다. 운영 WS는 JWKS를 필수로 요구하고 RS256 또는 ES256만 허용한다. issuer와 audience를 맞춰도 서명 알고리즘이 호환되지 않는다. 실제 User 발급 토큰이 로컬 WS 검증은 통과하고 JWKS 검증 경로에서는 거부되는 것을 재현했다.
+**최초 발견:** User는 HS256 Access Token을 발급한다. 운영 WS는 JWKS를 필수로 요구하고 RS256 또는 ES256만 허용한다. issuer와 audience를 맞춰도 서명 알고리즘이 호환되지 않는다. 실제 User 발급 토큰이 로컬 WS 검증은 통과하고 JWKS 검증 경로에서는 거부되는 것을 재현했다.
 
 근거: [User 토큰 발급](../../services/user-service/src/auth/access-token.service.ts) 22행, [WS 토큰 검증](../../gateways/ws-gateway/src/realtime/authentication.ts) 47행, [WS 운영 설정](../../gateways/ws-gateway/src/config.ts).
 
 사용자 토큰의 알고리즘·issuer·audience·필수 claim·키 배포 및 교체 계약을 통일한다. 사용자 인증과 서비스 간 호출자 인증은 구분한다. WGO-ARCH-01과 함께 설계하되, 계약 변경 시 기존 토큰의 전환 정책도 정한다.
 
-- [ ] 실제 로그인으로 발급한 토큰으로 운영 설정의 WS 연결에 성공한다.
-- [ ] HTTP Gateway도 동일한 사용자 토큰 계약을 검증한다.
+- [x] 실제 로그인으로 발급한 토큰으로 운영 설정의 WS 연결에 성공한다.
+- [x] HTTP Gateway도 동일한 사용자 토큰 계약을 검증한다.
 - [ ] 키 교체 중 신·구 토큰의 허용 기간과 만료 동작을 검증한다.
-- [ ] 잘못된 알고리즘·issuer·audience·만료 토큰을 거부한다.
+- [x] 잘못된 알고리즘·issuer·audience·만료 토큰을 거부한다.
 - [ ] 계정 정지·탈퇴와 이미 연결된 소켓의 처리 정책을 명시한다.
+
+**2026-10-25 사용자 JWT 계약 통일:** User의 기존 HS256 발급 로직과 HTTP Gateway 검증은 유지하고,
+WS도 HS256·typ=JWT·sub/sid/iat/exp·동일 issuer/audience를 검증하도록 변경했다.
+개발·운영 모두 JWT_ACCESS_SECRET/ISSUER/AUDIENCE를 명시하며 원격 JWKS를 사용하지 않는다.
+실제 User 로그인 토큰으로 HTTP API와 운영 설정 WS의 Bearer·쿠키 접속을 검증했다.
+서비스 간 ES256 인증은 별도로 유지한다. 연결 중 만료·즉시 세션 철회·키 교체 및 AWS 검증은
+이번 범위에서 제외했으므로 03 전체를 해결 처리하지 않는다.
 
 ### WGO-ARCH-04 Map 검색의 페이지 누락과 과도한 순차 조회 수정
 

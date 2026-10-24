@@ -16,7 +16,7 @@ Map의 최신 위치(5분)·반경과 게시물 ACTIVE 상태를 확인하고 �
 `post.get`으로 카운터를 다시 읽는다. 재연결 후에는 다시 참여하고
 `post.get`과 `comment.list`의 페이지를 읽어 누락분을 회복한다.
 
-운영에서는 `JWT_JWKS_URL`, `JWT_ISSUER`, `JWT_AUDIENCE`와 별도의
+개발·운영 모두 User와 같은 `JWT_ACCESS_SECRET`, `JWT_ACCESS_ISSUER`, `JWT_ACCESS_AUDIENCE`로 HS256을 검증한다. 운영에서는 별도의
 `WS_SERVICE_PRIVATE_JWK`(P-256 ES256 개인키, alg/kid 포함)을 설정한다.
 Post에는 대응 공개키 set `POST_WS_TRUSTED_JWKS`를 설정한다.
 사용자 Access JWT와 서비스 JWT 키는 분리한다. Redis Stream `post:events`의 `post-realtime`
@@ -61,8 +61,7 @@ pnpm dev
 - HTTP health: `http://127.0.0.1:8081/health/live`
 - WebSocket: `ws://127.0.0.1:8081/ws/v1`
 
-개발 기본 JWT secret은 로컬 부팅용이다. 운영은 issuer·audience·JWKS와
-별도 서비스 JWT secret을 요구한다.
+로컬도 `.env`에 User와 같은 사용자 JWT 설정을 명시해야 한다. 키는 최소 32바이트이며 누락·잘못된 설정은 시작 시 거부한다. 운영 서비스 호출은 기존 ES256 설정을 유지한다.
 
 ## WebSocket 명령
 
@@ -106,5 +105,16 @@ Room 한도를 먼저 확인하여 가입 불가능한 요청이 영속 참여�
 가입 이후 위치 이동으로 기존 실시간 수신 권한을 즉시 회수하는 지속적 위치 감시는 이 작업의 범위가 아니다.
 삭제·만료 이벤트에 따른 Room 해제는 별도 WGO-ARCH-06 작업이다.
 
-User의 기존 HS256 사용자 Access JWT와 운영 WS JWKS 검증 불일치(WGO-ARCH-03)는
-별도 작업이다. 서비스 인증 ES256 전환이 사용자 토큰 호환성을 해결하지 않는다.
+사용자 JWT는 User·HTTP·WS가 HS256, typ=JWT, sub/sid/iat/exp 및 같은 issuer/audience 계약을 사용한다.
+sub는 양의 안전 정수 문자열, sid는 UUID이며 HTTP Gateway와 동일하게 검증한다.
+Authorization이 없을 때만 JWT_COOKIE_NAME 쿠키를 사용한다. 잘못된/중복 Authorization은 쿠키로 우회하지 않는다.
+JWT_SECRET/JWT_ISSUER/JWT_AUDIENCE는 새 JWT_ACCESS_* 이름으로 이전해야 한다. JWT_JWKS_URL은 사용하지 않는다.
+기존 User 발급 키·issuer·audience를 유지하면 토큰 재발급은 필요 없다. 운영 키를 이번 배포에서 임의 교체하지 않는다.
+사용자 secret은 User와 두 Gateway에만 주입한다. 서비스 인증 ES256·Task 보안그룹·Task Role은 별도다.
+인증은 연결 시 수행한다. 연결 중 토큰 만료·즉시 로그아웃/정지 소켓 차단과 키 교체 정책은 후속 작업이다.
+
+로컬에서는 세 서비스의 JWT_ACCESS_*를 같은 값으로 설정하고 기존 User 로그인 응답의 accessToken으로 접속한다.
+Node 클라이언트는 Authorization: Bearer를, 브라우저는 허용된 Origin에서 접근 가능한 wgo_access_token 쿠키를 사용한다.
+로그인 응답 자체가 이 쿠키를 자동 설정한다는 의미는 아니다. URL query 토큰은 지원하지 않는다.
+실제 User 토큰 교차 검증은 두 Gateway 빌드 후 User에서 `RUN_GATEWAY_INTEGRATION=1 pnpm exec vitest run test/auth.integration.test.ts`로 실행한다.
+이 테스트는 PostgreSQL·Redis가 필요하며 CI의 user-gateway 작업에서도 실행한다.
