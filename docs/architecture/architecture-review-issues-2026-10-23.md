@@ -4,9 +4,10 @@
 
 - 검토일: 2026-10-23
 - 기준 브랜치: `test/infra-setup`
-- 기준 커밋: `4104986a7a9f12f13cd451043a78cb561d7b1f75`
+- 최초 검토 기준 커밋: `4104986a7a9f12f13cd451043a78cb561d7b1f75`
 - 범위: HTTP Gateway, WS Gateway, User, Post, Map, Notification, Moderation 및 관련 계약·CI
-- 상태: 모든 항목 미해결. 이 문서의 ID는 내부 추적용이며 GitHub Issue 생성이나 담당자 배정을 의미하지 않는다.
+- 최신화: 2026-10-24, 구현 확인 기준 `ab8c792` (인증 `3e284a1`, WS·CI/CD `57a558f`, Post CI 의존성 보완 `ab8c792`).
+- 상태: 01·02는 해결(구현·로컬 검증 완료), 11은 진행 중이며 나머지는 미해결. 이 문서의 ID는 내부 추적용이며 GitHub Issue 생성이나 담당자 배정을 의미하지 않는다.
 - 기준: [전체 아키텍처](../../ARCHITECTURE.md), [프로젝트 지침](../../AGENTS.md), [서비스 인증 계약](../contracts/service-authentication.md)
 
 ## 우선순위와 완료 관리
@@ -19,12 +20,12 @@
 
 Critical과 High는 관련 기능의 병합·운영 공개 전 차단 이슈로 취급한다. Medium의 차단 범위는 각 항목에 별도로 명시한다. Suggestion은 측정·설계 검토 과제이며 확정된 결함과 구분한다.
 
-상태는 `미해결 → 진행 중 → 검증 대기 → 해결`로 갱신한다. 해결 시 구현 PR 또는 커밋, 실행한 검증, 남은 제한을 해당 항목에 기록한다. 완료 체크리스트는 앞으로 충족할 조건이며 기존 구현이나 테스트 통과를 의미하지 않는다.
+상태는 `미해결 → 진행 중 → 검증 대기 → 해결`로 갱신한다. 해결 시 구현 PR 또는 커밋, 실행한 검증, 남은 제한을 해당 항목에 기록한다. 체크된 항목은 확인된 구현·검증 범위이며, 미체크 항목은 남은 완료 조건이다. 해결은 AWS 배포나 운영 공개 승인을 의미하지 않는다.
 
 | ID          | 심각도     | 우선순위 | 해결할 이슈                                    | 관련 서비스                         | 상태   |
 | ----------- | ---------- | -------- | ---------------------------------------------- | ----------------------------------- | ------ |
-| WGO-ARCH-01 | Critical   | P0       | 공개 사용자 API의 신원 헤더 신뢰 제거          | HTTP Gateway, User                  | 미해결 |
-| WGO-ARCH-02 | High       | P0       | WS 참여와 댓글 작성의 도메인 인가 연결         | WS Gateway, Post, Map               | 로컬 검증 완료 |
+| WGO-ARCH-01 | Critical   | P0       | 공개 사용자 API의 신원 헤더 신뢰 제거          | HTTP Gateway, User                  | 해결 |
+| WGO-ARCH-02 | High       | P0       | WS 참여와 댓글 작성의 도메인 인가 연결         | WS Gateway, Post, Map               | 해결 |
 | WGO-ARCH-03 | High       | P1       | 사용자 JWT 발급과 운영 WS 검증 계약 통일       | User, HTTP Gateway, WS Gateway      | 미해결 |
 | WGO-ARCH-04 | High       | P1       | Map 검색의 페이지 누락과 과도한 순차 조회 수정 | Map, Post                           | 미해결 |
 | WGO-ARCH-05 | High       | P1       | Moderation 결정의 Post 원본 적용 연결          | Moderation, Post, Map, Notification | 미해결 |
@@ -33,7 +34,7 @@ Critical과 High는 관련 기능의 병합·운영 공개 전 차단 이슈로 
 | WGO-ARCH-08 | Medium     | P1       | Moderation 전체 평가와 단일 JSON 증가 제한     | Moderation                          | 미해결 |
 | WGO-ARCH-09 | Medium     | P1       | WS 수신 큐와 송신 버퍼 상한 적용               | WS Gateway                          | 미해결 |
 | WGO-ARCH-10 | Medium     | P1       | 투표 후보 선정의 전체 댓글 조회 제한           | Post                                | 미해결 |
-| WGO-ARCH-11 | Medium     | P1       | CI 타입·빌드·통합·소비자 계약 검증 보강        | 전체, CI                            | 미해결 |
+| WGO-ARCH-11 | Medium     | P1       | CI 타입·빌드·통합·소비자 계약 검증 보강        | 전체, CI                            | 진행 중 |
 | WGO-ARCH-12 | Medium     | P1       | 데이터 소유권과 저장소 기준 문서 정합성 확보   | 전체                                | 미해결 |
 | WGO-ARCH-13 | Medium     | P2       | 복잡한 업무 규칙과 저장소 구현의 결합 완화     | Post, Notification, Map             | 미해결 |
 | WGO-ARCH-14 | Medium     | P1       | 요청과 후속 이벤트의 Correlation ID 연결       | HTTP Gateway, Post, 이벤트 소비자   | 미해결 |
@@ -45,7 +46,7 @@ Critical과 High는 관련 기능의 병합·운영 공개 전 차단 이슈로 
 
 **심각도 Critical · 우선순위 P0 · 인증 경로 공개 차단**
 
-HTTP Gateway가 외부 요청의 `X-User-Id`를 그대로 전달하고, User Controller는 형식만 확인한 뒤 사용자 신원으로 사용한다. 사용자 Bearer 검증이나 운영 환경 차단이 없어 다른 사용자 ID로 프로필 조회·수정, 약관 동의, 탈퇴를 요청할 수 있다.
+**최초 발견(2026-10-23):** HTTP Gateway가 외부 요청의 `X-User-Id`를 그대로 전달하고, User Controller는 형식만 확인한 뒤 사용자 신원으로 사용한다. 사용자 Bearer 검증이나 운영 환경 차단이 없어 다른 사용자 ID로 프로필 조회·수정, 약관 동의, 탈퇴를 요청할 수 있다.
 
 격리 재현에서는 `NODE_ENV=production`, 인증 토큰 없음, `X-User-Id: 42` 조건으로 `POST /api/v1/users/me/withdrawal`을 호출했다. 실제 Gateway와 User Controller를 통과해 사용자 42의 탈퇴 서비스가 호출되고 200이 반환됐다. DB 변경 서비스는 Mock으로 대체했으며 실제 계정은 변경하지 않았다.
 
@@ -53,17 +54,30 @@ HTTP Gateway가 외부 요청의 `X-User-Id`를 그대로 전달하고, User Con
 
 해결 방향은 외부 신원 헤더 제거, 사용자 토큰 검증, 인증된 내부 호출 문맥 전달이다. User도 내부 호출자와 사용자 문맥을 검증해야 한다. 연결 전에는 보호 대상 운영 API를 닫는다.
 
-- [ ] 토큰 없이 신원 헤더만 보낸 요청은 거부한다.
-- [ ] 사용자 A의 토큰과 사용자 B의 헤더를 함께 보내도 B의 데이터에 접근하지 못한다.
-- [ ] User 직접 접근도 내부 호출자 인증을 우회하지 못한다.
-- [ ] 프로필·약관·탈퇴·로그아웃 등 신원 헤더를 사용하는 경로를 함께 점검한다.
-- [ ] 정상 사용자 요청과 만료·변조·잘못된 issuer/audience 요청을 Gateway부터 검증한다.
+- [x] 토큰 없이 신원 헤더만 보낸 요청은 거부한다.
+- [x] 사용자 A의 토큰과 사용자 B의 헤더를 함께 보내도 B의 데이터에 접근하지 못한다.
+- [x] User 직접 접근도 내부 호출자 인증을 우회하지 못한다.
+- [x] 프로필·약관·탈퇴·로그아웃 등 신원 헤더를 사용하는 경로를 함께 점검한다.
+- [x] 정상 사용자 요청과 만료·변조·잘못된 issuer/audience 요청을 Gateway부터 검증한다.
+
+**2026-10-24 해결 — `3e284a1`:** [Gateway 사용자 인증](../../gateways/http-gateway/src/user-auth.ts)이
+외부 `X-User-Id`·`X-Session-Id`를 제거하고 User의 HS256 Access Token을 검증한다.
+검증된 claim으로 내부 신원 헤더를 다시 구성하고 별도 ES256 서비스 토큰으로 User를 호출한다.
+[User Gateway 인증 Guard](../../services/user-service/src/http-auth/gateway-auth.guard.ts)는 내부 호출자와
+사용자 문맥을 검증한다. 따라서 헤더 자체를 내부 계약에서 없앤 것이 아니라 **외부 헤더를 신원으로 신뢰하는 경로를 제거**한 것이다.
+
+[Gateway 인증 회귀 테스트](../../gateways/http-gateway/test/user-auth.test.ts)와
+[실제 Gateway→User 인증 통합 테스트](../../services/user-service/test/auth.integration.test.ts)에
+헤더만 보낸 요청·User 직접 호출 거부, 위조 헤더 무시, 로그인→프로필→refresh→logout 경로가 반영돼 있다.
+기존 작업에서 로컬 검증했으며 이번 문서 갱신에서는 구현·테스트 코드를 대조했다.
+운영에는 `HTTP_GATEWAY_SERVICE_PRIVATE_JWK`, `USER_HTTP_GATEWAY_TRUSTED_JWKS`, 사용자 JWT 설정 주입이 필요하다.
+이 완료 범위는 User HTTP API이며 운영 WS 토큰 호환성(03)은 별도다.
 
 ### WGO-ARCH-02 WS 참여와 댓글 작성의 도메인 인가 연결
 
 **심각도 High · 우선순위 P0 · 위치 기반 참여 기능 공개 차단**
 
-HTTP의 `JoinPost`는 Map 위치 판정을 사용하지만 WS의 `canJoin()`은 사용자 ID를 사용하지 않고 Post의 ACTIVE 상태만 조회한다. Room 가입 후 댓글 작성에서도 Post의 `CreateComment`는 위치나 영속 참여 상태를 확인하지 않는다. 따라서 유효한 토큰과 게시물 ID가 있으면 위치 제한을 거치지 않는 참여·작성 경로가 존재한다.
+**최초 발견(2026-10-23):** HTTP의 `JoinPost`는 Map 위치 판정을 사용하지만 WS의 `canJoin()`은 사용자 ID를 사용하지 않고 Post의 ACTIVE 상태만 조회한다. Room 가입 후 댓글 작성에서도 Post의 `CreateComment`는 위치나 영속 참여 상태를 확인하지 않는다. 따라서 유효한 토큰과 게시물 ID가 있으면 위치 제한을 거치지 않는 참여·작성 경로가 존재한다.
 
 서로 다른 사용자에 대해 동일한 상태 조회만 수행하고 참여를 허용하는 동작을 어댑터 재현으로 확인했다.
 
@@ -77,8 +91,9 @@ Post가 소유하는 공통 참여 인가 유스케이스를 HTTP와 WS가 사�
 - [x] 정상 참여, 재참여, 재연결, 중복 댓글 요청의 동작을 검증한다.
 - [x] Gateway에 도메인 정책을 복제하지 않고 Post에서 최종 인가한다.
 
-**2026-10-24 구현·검증:** WS는 ES256 인증 내부 참여 HTTP API를 통해 기존 Post `JoinPost`를 호출한 뒤
-Room을 등록한다. 신규 댓글은 활성 참여 및 Map 위치 판정을 통과해야 하며 기존 mutation 재시도는
+**2026-10-24 해결 — `57a558f` 구현·검증:** WS는 ES256 인증 내부 참여 HTTP API를 통해 기존 Post `JoinPost`를 호출한 뒤
+Room을 등록한다. HTTP·WS 모두 Post `JoinPost` → Map `CheckPostParticipation` gRPC를 사용한다.
+신규 댓글도 Post `CreateComment`에서 활성 참여와 같은 Map 위치 판정을 통과해야 하며 기존 mutation 재시도는
 중복 쓰기를 하지 않는다. Room 용량·인가 중 연결 종료·재연결도 검증했다.
 Post 129개 및 WS 18개 테스트가 통과했으며 실제 WS→Post→Map RPC와 위치 정책 연결을 포함한다.
 해당 통합 테스트의 위치 저장소는 fixture이며 실제 Cassandra 검증과 AWS 배포는 별도다.
@@ -217,16 +232,27 @@ WS 이벤트 소비자는 생성 계열 4종을 전달하고 그 밖의 이벤�
 
 **심각도 Medium · 우선순위 P1 · 차단 이슈 수정 PR부터 적용**
 
-현재 CI는 기본 Vitest를 실행하지만 typecheck·build 단계가 없다. Map·Post·Gateway의 여러 통합 테스트는 환경 플래그로 건너뛰고, Notification·Moderation 통합 테스트는 별도 설정을 사용한다. 변경 서비스 중심의 선택만으로 생산자 변경에 따른 소비자 호환성을 확인할 수 없다.
+**최초 발견(2026-10-23):** CI는 기본 Vitest를 실행하지만 typecheck·build 단계가 없다. Map·Post·Gateway의 여러 통합 테스트는 환경 플래그로 건너뛰고, Notification·Moderation 통합 테스트는 별도 설정을 사용한다. 변경 서비스 중심의 선택만으로 생산자 변경에 따른 소비자 호환성을 확인할 수 없다.
 
 근거: [CI](../../.github/workflows/ci.yml) 77행, [변경 서비스 선택](../../scripts/ci.mjs), [Map 통합 테스트](../../services/map-service/test/post-index.integration.test.ts), [Notification 통합 설정](../../services/notification-service/vitest.integration.config.ts), [Moderation 통합 설정](../../services/moderation-service/vitest.integration.config.ts).
 
-- [ ] 변경 서비스의 타입 검사와 빌드를 필수 검사에 추가한다.
-- [ ] 계약 변경 시 관련 생산자·소비자 검증을 함께 실행한다.
-- [ ] 실제 DB·Redis를 사용하는 핵심 통합 테스트를 실행한다.
+- [x] 변경 서비스의 타입 검사와 빌드를 필수 검사에 추가한다.
+- [x] 계약 변경 시 관련 생산자·소비자 검증을 함께 실행한다.
+- [x] 실제 DB·Redis를 사용하는 핵심 통합 테스트를 실행한다.
 - [ ] 인증, 위치 참여, 상태 종료 전파의 최소 종단 간 시나리오를 추가한다.
 - [ ] 필수 테스트가 모두 skip된 실행을 성공으로 오인하지 않게 한다.
 - [ ] 지침의 lint 요구를 실제 제공하는 검사 명령과 일치시킨다.
+
+**2026-10-24 진행 중 — `57a558f`, `ab8c792`:** PR 생성·업데이트·재오픈 시 변경 서비스와 계약 소비자를 선택하고,
+정의된 typecheck/lint, 테스트, build와 런타임 변경 이미지 빌드를 실행한다. 최종 `ci` 체크가 실패·취소를 차단한다.
+실제 Gateway→User 인증, WS→Post→Map 참여 회귀 작업을 추가했으며, Post semantic 테스트용 Map 설치·빌드,
+Cassandra 스키마 초기화와 Elasticsearch 기동 누락도 수정했다. 구성은 [CI 문서](../ci.md)를 따른다.
+
+`ab8c792` 변경의 로컬 검증 결과는 Post 134개 통과·5개 선택적 테스트 생략, Post 타입 검사·빌드 성공,
+CI/CD 스크립트 29개 통과, 워크플로 문법 검사 통과다. Post semantic 테스트는 실제 MongoDB·Redis·Cassandra·Elasticsearch와
+Map gRPC를 사용한다. 이 실행은 별도 WS 통합 플래그를 켠 앞선 Post 129개 검증과 범위가 다르다.
+상태 종료 전파 종단 간 검증(05·06), 필수 suite의 전체 skip 방지, lint 지침 정합성과 기존 User CI 간헐 실패 조사는 남아 있어
+11 전체를 해결 처리하지 않는다. GitHub 최신 실행 전체 성공이나 AWS 배포 성공으로 확대 해석하지 않는다.
 
 ## 구조와 운영 기준 개선 이슈
 
@@ -295,7 +321,7 @@ Post E5 추론은 인스턴스에서 한 작업씩 실행하고 온라인 검색
 
 아키텍처 15개 항목과 [QA 확정 결함 7건](../../qa/artifacts/20261023-local-6975fb3/defects.md)을 함께 평가했다. QA의 부분 GEO 유실과 기본 500ms 후보 조회 실패는 모두 WGO-ARCH-04의 하위 작업으로 관리한다. 따라서 원본 기록은 22개이며, 이 두 건을 중복 작업으로 만들지 않으면 관리 대상은 20개다. 서로 다른 재현 조건과 완료 검증은 각각 유지한다.
 
-이번 순서는 심각도와 별개인 **착수·완료 순서**다. 앞의 Critical/High/Medium 및 P0/P1/P2 판정은 유지한다. CI 보강과 소유권 합의를 앞당기는 이유는 다른 수정의 선행 조건이기 때문이다. QA 기준 `6975fb3`부터 현재 확인한 `bb1f151`까지 변경은 QA 문서와 `.gitignore`이며, 제품 코드 수정에 따른 해결은 확인되지 않았다. 아래 항목은 모두 미해결이다.
+이번 순서는 심각도와 별개인 **착수·완료 순서**다. 앞의 Critical/High/Medium 및 P0/P1/P2 판정은 유지한다. CI 보강과 소유권 합의를 앞당기는 이유는 다른 수정의 선행 조건이기 때문이다. 아래는 최초 QA 기준으로 정한 착수 순서다. 2026-10-24 기준 01·02는 해결했고 11은 진행 중이다. 다음 인증 과제는 03의 운영 WS 토큰 호환성이며, 나머지 미해결 항목의 우선순위는 유지한다.
 
 #### 1차: 즉시 착수 — 인증 경계, 외부 요청 제한, 수정 검증 기반
 
@@ -344,11 +370,11 @@ Gateway start 실패는 `pnpm build && pnpm start`에서 확인됐다. Dockerfil
 - **미확정 WS 오류:** [QA-13 관측](../../qa/artifacts/20261023-local-6975fb3/QA-13/findings.md)의 9,000건 중 `command.error` 1건은 원본 오류가 없어 timeout으로 확정하지 않는다. 같은 mutationId 재시도에서 중복 저장이 없었던 증거는 유지하며, 14와 함께 trace·오류를 보강해 별도 프로세스 환경에서 재측정한다.
 - **CI 간헐 실패 조사:** 동일 커밋 `4104986`의 User 동시성 테스트가 [dev 실행](https://github.com/WGO-What-s-Going-On/Backend/actions/runs/39911143559)에서는 201 대신 401로 실패하고 [후속 브랜치 실행](https://github.com/WGO-What-s-Going-On/Backend/actions/runs/39911851271)에서는 성공했다. 11에서 원인을 재현·분리한다. QA 확정 결함 7건에 추가 합산하거나 재실행 성공만으로 해결 처리하지 않는다.
 
-이번 갱신은 기존 QA·아키텍처 증거와 CI 로그를 바탕으로 실행 순서를 정한 것이다. 제품 수정·새 통합 테스트·ECS 검증은 수행하지 않았으며 GitHub Issue 생성·라벨·담당자 변경도 포함하지 않는다.
+2026-10-23의 실행 순서는 당시 QA·아키텍처 증거와 CI 로그를 기준으로 했다. 2026-10-24 최신화는 이후 구현 커밋과 기존 검증 결과를 반영했다. 이번 문서 수정 자체로 제품 코드 변경·새 테스트 실행·ECS 검증·GitHub Issue 변경은 수행하지 않았다.
 
 ## 검토 상태와 검증 기록
 
-아래 결과는 2026-10-23 아키텍처 검토 시점의 기록이다. 이 문서 작성이나 검사 통과가 위 이슈 해결을 의미하지 않는다.
+아래 결과는 2026-10-23 아키텍처 검토 시점의 과거 기록이다. 최신 수정의 검증 결과는 01·02·11 항목을 따른다. 이 문서 작성이나 검사 통과가 위 이슈 해결을 의미하지 않는다.
 
 | 애플리케이션 | 타입 검사 | 빌드     | 실행한 기존 테스트 통과 | 기본 실행에서 건너뜀           |
 | ------------ | --------- | -------- | ----------------------- | ------------------------------ |
