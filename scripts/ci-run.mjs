@@ -28,6 +28,18 @@ if (mode === 'install')
   run(manager === 'pnpm' ? ['install', '--frozen-lockfile'] : ['ci']);
 else if (mode === 'build') run(['run', 'build']);
 else {
+  // Semantic tests import Map's compiled modules, including its own dependencies.
+  if (name === 'post-service') {
+    for (const prerequisite of ['install', 'build']) {
+      const result = spawnSync(
+        process.execPath,
+        ['scripts/ci-run.mjs', 'map-service', prerequisite],
+        { stdio: 'inherit', env: process.env },
+      );
+      if (result.error) throw result.error;
+      if (result.status !== 0) process.exit(result.status ?? 1);
+    }
+  }
   for (const script of ['typecheck', 'lint'])
     if (pkg.scripts?.[script]) run(['run', script]);
   if (!pkg.scripts?.test) throw new Error(`${name} must define test`);

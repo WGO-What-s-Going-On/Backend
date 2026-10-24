@@ -10,7 +10,7 @@ const dependencies = {
   http: ['redis6381'],
   ws: ['redis6380'],
   user: ['postgres', 'redis6379'],
-  post: ['mongo', 'redis6380'],
+  post: ['mongo', 'redis6380', 'cassandra', 'elasticsearch'],
   map: ['cassandra', 'redis6381'],
   notification: ['redis6382', 'dynamodb'],
   moderation: ['redis6383'],
@@ -40,7 +40,7 @@ else {
       "try { rs.status(); } catch (error) { if (error.codeName !== 'NotYetInitialized') throw error; rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}); } for (let i=0; i<60; i++) { if (db.hello().isWritablePrimary) quit(0); sleep(1000); } quit(1);",
     ]);
   }
-  if (service.dependencies === 'map')
+  if (dependencies.includes('cassandra'))
     docker(
       ['exec', '-T', 'cassandra', 'cqlsh'],
       readFileSync('services/map-service/schema.cql'),

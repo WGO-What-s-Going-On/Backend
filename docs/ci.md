@@ -30,13 +30,13 @@
 런타임 변경 서비스는 Dockerfile 빌드도 확인한다. 현재 lint 명령이 없는 패키지에는 임의 도구를 추가하지 않는다.
 
 `scripts/ci-compose.yaml`은 CI 작업에 필요한 저장소만 실행한다. User는 PostgreSQL·Redis,
-Post는 MongoDB replica set·Redis, Map은 Cassandra·Redis, Notification은 DynamoDB Local·Redis,
+Post는 MongoDB replica set·Redis·Cassandra·Elasticsearch, Map은 Cassandra·Redis, Notification은 DynamoDB Local·Redis,
 Moderation과 Gateway는 해당 테스트의 Redis를 사용한다. 로컬 Compose 볼륨과 애플리케이션 컨테이너는 사용하지 않는다.
 각 GitHub 작업은 별도 runner이며 Compose 프로젝트 이름에 run ID·attempt·service를 포함한다. 종료 시 해당 프로젝트만 정리한다.
 
 - User→Gateway 교차 검증: Gateway 빌드를 준비한 후 `RUN_GATEWAY_INTEGRATION=1`로 User 인증 통합 테스트를 실행한다. 외부 Kakao 응답은 fixture이며 실제 OAuth 제공자를 호출하지 않는다.
 - WS→Post 교차 검증: WS·Map 빌드를 준비한 후 Post 통합 테스트에 `RUN_WS_INTEGRATION=1`, `RUN_INTEGRATION=1`을 적용한다. 실제 WebSocket/HTTP/gRPC 경로와 Map 판정 코드를 사용하지만 Map 위치 저장소는 fixture다. 별도의 Map 서비스 테스트에서 Cassandra·Redis 동작을 검사한다.
-- Post semantic 통합 테스트도 저장소 fixture로 실행한다. 외부 모델 다운로드·실제 OpenAI/FCM 호출 등 별도 자격 증명과 비용이 필요한 smoke test는 자동 실행하지 않는다.
+- Post 검증은 Map 의존성 설치·빌드를 먼저 수행하고 Cassandra 스키마를 초기화한 뒤 semantic 통합 테스트를 실행한다. MongoDB·Redis·Cassandra·Elasticsearch와 Map gRPC는 실제 구현을 사용하며 임베딩 모델만 fixture로 대체한다. 외부 모델 다운로드·실제 OpenAI/FCM 호출 등 별도 자격 증명과 비용이 필요한 smoke test는 자동 실행하지 않는다.
 
 모든 PR에서 고정 이름의 `ci` 최종 체크를 유지한다. 검증 실패·취소·감지 실패는 차단하며,
 변경이 없어 정상적으로 생략된 서비스 작업만 허용한다. 브랜치 보호 required check는 동적 서비스 이름 대신 `ci`를 사용한다.
