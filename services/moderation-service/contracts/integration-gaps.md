@@ -1,6 +1,6 @@
 # 외부 연동 조사와 계약 요청
 
-2026-10-15 기준입니다. 기존 구현과 사용자가 확정한 ENDED 스냅샷 정책을 반영합니다. 아래 제안은 합의·구현된 외부 이벤트가 아니며 이 서비스가 임의로 발행하거나 호출하지 않습니다.
+최초 조사 2026-10-15, lifecycle v1 수신 연결 상태 갱신 2026-10-24. 기존 구현과 사용자가 확정한 ENDED 스냅샷 정책을 반영합니다. 아래 신규 계약 제안은 구현된 외부 이벤트가 아닙니다. 기존 lifecycle v1의 Post 수신 연결은 별도로 구현 상태를 명시합니다.
 
 ## 확인한 기준
 
@@ -40,9 +40,9 @@ Post가 다음 중 하나를 확정해야 한다.
 
 ## Lifecycle 실제 적용
 
-Moderation은 기존 v1 `moderation:events`에 BOARD_STALE / BOARD_REACTIVATED / BOARD_CLOSED를 발행하지만 dev Post에는 이를 소비하는 consumer/인가된 상태 적용 API가 없다. Post 원본 상태는 ACTIVE/EXPIRED/DELETED로 Moderation의 ACTIVE/STALE/CLOSED와 다르다. CLOSED를 EXPIRED와 임의로 동일시하지 않는다.
+Moderation은 기존 v1 `moderation:events`에 BOARD_STALE / BOARD_REACTIVATED / BOARD_CLOSED를 발행한다. 2026-10-24 Post에 opt-in Consumer를 연결했다. STALE/REACTIVATED는 처리 이력만 남기고, CLOSED는 사용자가 확정한 정책에 따라 ACTIVE → EXPIRED로 적용한다. Post 원본 상태는 ACTIVE/EXPIRED/DELETED로 Moderation의 ACTIVE/STALE/CLOSED와 다르다. 이번 연결은 CLOSED → EXPIRED 매핑을 사용하며 상세 종료 사유는 후속 계약으로 남긴다.
 
-Post가 결정 consumer 또는 명령 API를 제공하고 다음을 정해야 한다.
+Post의 기본 수신·적용 계약은 [Post 이벤트 문서](../../post-service/contracts/post-events.md#11-moderation-lifecycle-v1-수신-2026-10-24)를 따른다. 다음 확장은 아직 미구현이다.
 
 1. 결정 ID, 게시물 ID, lifecycle decision version, expected Post version, decidedAt, reason과 필요한 근거.
 2. STALE/REACTIVATED의 원본 상태/가시성 의미와 CLOSED의 실제 상태 매핑. 이미 DELETED/EXPIRED인 경우의 거부·무시 규칙.
@@ -75,4 +75,26 @@ WS Gateway는 참가 시 Post status가 ACTIVE인지 확인한다. 현재 PostEv
 
 ## Issue #31 범위
 
-이 서비스 내부의 9종 소비, 활동/ENDED 판단, 삭제·만료, Redis 정합성 및 검증은 구현했다. 게시글 검사와 콘텐츠 제재/실제 Post 상태 적용/종료 알림의 종단 간 연동은 위 계약이 없어 미완료다. Issue 전체를 완료로 닫지 않으며 사용자 확인 없이 PR을 생성하지 않는다.
+이 서비스 내부의 9종 소비, 활동/ENDED 판단, 삭제·만료, Redis 정합성 및 검증은 구현했다. 게시글 검사와 콘텐츠 제재/종료 알림의 종단 간 연동은 미완료다. 기존 lifecycle v1의 Post 종료 적용은 별도 opt-in Consumer로 연결했으며 버전·사유 등 확장 계약은 후속이다. Issue 전체를 완료로 닫지 않으며 사용자 확인 없이 PR을 생성하지 않는다.
+
+
+## Lifecycle v1 연결 이후 후속 작업
+
+이번 작업은 기존 생산 이벤트를 그대로 소비한다. 아래 항목은 의도적으로 범위에서 제외했다.
+
+1. **순서 버전**: projection.version을 이벤트에 노출할지 결정한다. 내부 활동 갱신에도 증가하므로
+   연속 번호 누락을 곧바로 유실로 해석하지 않는다. Post가 유예 상태를 복제할 때 역순 방어가 필요하다.
+2. **종료 사유**: INACTIVITY/ENDED를 이벤트와 Post 원본에 전달하고 자연 만료와 구분한다.
+   현재는 sourceEventId로 발행 원인을 추적할 수 있지만 상세 사유는 복원하지 않는다.
+3. **최신 활동과 판단의 차이**: 현재 Post는 CLOSED 판단 뒤 새 활동이 있었는지 대조하지 않는다.
+   아직 Moderation에 도착하지 않은 활동을 포함한 완결성을 보장하지 않는다. 원본 snapshot·revision·
+   gRPC 조회가 필요한 정책을 먼저 정한다. 이는 현재 단방향 종료 연결의 선행 작업이 아니다.
+4. **성공/거부 피드백**: PostExpired는 발행하지만 별도 결정 적용/거부 이벤트 및 Moderation 재평가는 없다.
+5. **콘텐츠 제재**: AI flagged는 검토 대기, 확정 제재만 적용하는 정책을 따른다. 검토 Case·승인 경로·
+   콘텐츠 버전 검증·결정 이벤트가 아직 없으므로 기존 댓글 검사만으로 자동 삭제하지 않는다.
+6. **운영 영속성**: 결정 감사 보존, Redis 유실/trim 이후 복구와 저장소 문서 정합성은 별도 설계한다.
+   이번 작업에서 Moderation 저장소를 PostgreSQL로 이전하거나 gRPC를 추가하지 않는다.
+
+Post에는 처리 이력·상태 변경·Outbox를 같은 MongoDB 트랜잭션에 저장하는 중복 방어를 구현했다.
+`BOARD_REACTIVATED`로 이미 EXPIRED/DELETED인 게시물을 다시 열지 않는다. WS 종료 알림·Room 정리는
+WGO-ARCH-06이며 이번 lifecycle Consumer 구현의 완료 범위에 포함하지 않는다.
