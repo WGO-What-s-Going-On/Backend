@@ -14,6 +14,7 @@ import { decide, validCoordinates, type LocationStore } from './location.js';
 import { InvalidCursorError, type PostIndex } from './post-index.js';
 import { serveSwagger } from './swagger.js';
 import { serviceCaller, trustedKeys } from './service-auth.js';
+import { NearbySearchError } from './nearby-budget.js';
 
 type Check = {
   userId: string;
@@ -152,12 +153,20 @@ export function createGrpcServer(
           code: status.INVALID_ARGUMENT,
           message: 'Invalid nearby query',
         });
+      const cancellation = new AbortController();
+      const cancel = () => cancellation.abort();
+      call.on('cancelled', cancel);
+      if (call.cancelled) cancel();
+      const deadline = Number(call.getDeadline());
       try {
         if (!index) throw new Error('Post index unavailable');
-        const result = await index.nearby({
-          ...input,
-          radiusM: input.radiusM as 150 | 250 | 350,
-        });
+        const result = await index.nearby(
+          {
+            ...input,
+            radiusM: input.radiusM as 150 | 250 | 350,
+          },
+          { deadline, signal: cancellation.signal },
+        );
         callback(null, {
           items: result.items,
           truncated: result.nextCursor !== null,
@@ -166,14 +175,20 @@ export function createGrpcServer(
       } catch (error) {
         callback({
           code:
-            error instanceof InvalidCursorError
-              ? status.INVALID_ARGUMENT
-              : status.UNAVAILABLE,
+            error instanceof NearbySearchError
+              ? status[error.code]
+              : error instanceof InvalidCursorError
+                ? status.INVALID_ARGUMENT
+                : status.UNAVAILABLE,
           message:
-            error instanceof InvalidCursorError
-              ? 'Invalid nearby cursor'
-              : 'Post index unavailable',
+            error instanceof NearbySearchError
+              ? error.code
+              : error instanceof InvalidCursorError
+                ? 'Invalid nearby cursor'
+                : 'Post index unavailable',
         });
+      } finally {
+        call.removeListener('cancelled', cancel);
       }
     },
   });
@@ -234,22 +249,41 @@ export function createHttpServer(
         response.writeHead(400).end();
         return;
       }
+      const cancellation = new AbortController();
+      const cancel = () => {
+        if (!response.writableEnded) cancellation.abort();
+      };
+      response.on('close', cancel);
       try {
         if (!index) throw new Error('Post index unavailable');
-        const result = await index.nearby({
-          latitude,
-          longitude,
-          radiusM: radiusM as 150 | 250 | 350,
-          limit,
-          cursor: params.get('cursor') ?? undefined,
-        });
+        const result = await index.nearby(
+          {
+            latitude,
+            longitude,
+            radiusM: radiusM as 150 | 250 | 350,
+            limit,
+            cursor: params.get('cursor') ?? undefined,
+          },
+          { signal: cancellation.signal },
+        );
         response
           .writeHead(200, { 'content-type': 'application/json' })
           .end(JSON.stringify(result));
       } catch (error) {
-        response
-          .writeHead(error instanceof InvalidCursorError ? 400 : 503)
-          .end();
+        if (!response.destroyed) {
+          if (error instanceof NearbySearchError)
+            response
+              .writeHead(error.code === 'DEADLINE_EXCEEDED' ? 504 : 503, {
+                'content-type': 'application/json',
+              })
+              .end(JSON.stringify({ code: error.code }));
+          else
+            response
+              .writeHead(error instanceof InvalidCursorError ? 400 : 503)
+              .end();
+        }
+      } finally {
+        response.removeListener('close', cancel);
       }
       return;
     }

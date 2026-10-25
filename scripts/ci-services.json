@@ -50,6 +50,7 @@
         "gateways/ws-gateway/test/post-lifecycle.integration.test.ts",
         "gateways/ws-gateway/test/post-events.integration.test.ts",
         "services/post-service/test/ws-lifecycle.integration.test.ts",
+        "services/post-service/test/map-budget.integration.test.ts",
         "services/post-service/contracts/post-events.md"
       ],
       "services": ["post-service", "ws-gateway"],
@@ -88,7 +89,10 @@
         "gateways/ws-gateway/src/",
         "services/post-service/test/post.integration.test.ts",
         "services/map-service/src/location.ts",
-        "services/map-service/src/server.ts"
+        "services/map-service/src/server.ts",
+        "services/map-service/src/post-index.ts",
+        "services/map-service/src/nearby-budget.ts",
+        "services/map-service/src/geo-index-state.ts"
       ],
       "services": ["post-service", "ws-gateway", "map-service"],
       "integration": "ws-post"

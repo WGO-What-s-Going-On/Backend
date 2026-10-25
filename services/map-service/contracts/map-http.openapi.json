@@ -109,7 +109,12 @@
           },
           "400": { "description": "잘못된 검색 입력 또는 커서" },
           "401": { "description": "Gateway JWT가 없거나 유효하지 않음" },
-          "503": { "description": "필요한 Cassandra 조회 실패" }
+          "503": {
+            "description": "Required Cassandra read failure or search budget exhausted. Budget failure returns {code: RESOURCE_EXHAUSTED}; no partial result."
+          },
+          "504": {
+            "description": "Search deadline exceeded. Returns {code: DEADLINE_EXCEEDED}; no partial result."
+          }
         }
       }
     }

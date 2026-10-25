@@ -197,6 +197,8 @@ test('WS source and Map participation policy run the cross-service regression', 
   for (const file of [
     'gateways/ws-gateway/src/app.ts',
     'services/map-service/src/location.ts',
+    'services/map-service/src/nearby-budget.ts',
+    'services/post-service/test/map-budget.integration.test.ts',
     'gateways/ws-gateway/test/post-lifecycle.integration.test.ts',
     'gateways/ws-gateway/test/post-events.integration.test.ts',
     'services/post-service/test/ws-lifecycle.integration.test.ts',

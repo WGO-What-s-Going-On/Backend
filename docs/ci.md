@@ -60,3 +60,5 @@ main Ruleset/branch protection에서 `ci` 체크 성공과 PR을 통한 병합�
 최신 main을 반영한 PR 검증도 요구해 병합 후 조합이 미검증 상태가 되지 않게 한다.
 이 저장소 변경은 GitHub 보호 규칙 자체를 생성하지 않는다. CD는 병합 이벤트에 연결되며
 별도의 push CI를 기다리지 않는다. merge queue는 현재 트리거 범위에 포함하지 않는다.
+
+The WS/Post cross-service job also runs `test/map-budget.integration.test.ts` after building Map. It exercises the real Post client, ES256 authentication and Map gRPC/search-budget implementation with controlled DB responses to verify resource errors, the existing 500ms caller deadline and cancellation. Actual Cassandra load measurements are recorded separately in docs/performance/map-budget-2026-10-25.

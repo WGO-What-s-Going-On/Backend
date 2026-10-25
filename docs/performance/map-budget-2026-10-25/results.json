@@ -1,0 +1,194 @@
+[
+  {
+    "label": "1000-geo",
+    "variant": "baseline",
+    "samples": [
+      {
+        "outcome": "OK",
+        "elapsedMs": 265.95,
+        "callsAtReturn": 2000,
+        "callsAfterDrain": 2000
+      },
+      {
+        "outcome": "OK",
+        "elapsedMs": 272.87,
+        "callsAtReturn": 2000,
+        "callsAfterDrain": 2000
+      },
+      {
+        "outcome": "OK",
+        "elapsedMs": 268.68,
+        "callsAtReturn": 2000,
+        "callsAfterDrain": 2000
+      }
+    ]
+  },
+  {
+    "label": "1000-geo",
+    "variant": "default-budget",
+    "samples": [
+      {
+        "outcome": "OK",
+        "elapsedMs": 289.18,
+        "callsAtReturn": 2000,
+        "callsAfterDrain": 2000
+      },
+      {
+        "outcome": "OK",
+        "elapsedMs": 288.81,
+        "callsAtReturn": 2000,
+        "callsAfterDrain": 2000
+      },
+      {
+        "outcome": "OK",
+        "elapsedMs": 282.11,
+        "callsAtReturn": 2000,
+        "callsAfterDrain": 2000
+      }
+    ]
+  },
+  {
+    "label": "2000-geo",
+    "variant": "baseline",
+    "samples": [
+      {
+        "outcome": "OK",
+        "elapsedMs": 556.04,
+        "callsAtReturn": 4000,
+        "callsAfterDrain": 4000
+      },
+      {
+        "outcome": "OK",
+        "elapsedMs": 561.62,
+        "callsAtReturn": 4000,
+        "callsAfterDrain": 4000
+      },
+      {
+        "outcome": "OK",
+        "elapsedMs": 574.06,
+        "callsAtReturn": 4000,
+        "callsAfterDrain": 4000
+      }
+    ]
+  },
+  {
+    "label": "2000-geo",
+    "variant": "default-budget",
+    "samples": [
+      {
+        "outcome": "DEADLINE_EXCEEDED",
+        "elapsedMs": 500.54,
+        "callsAtReturn": 3036,
+        "callsAfterDrain": 3036
+      },
+      {
+        "outcome": "DEADLINE_EXCEEDED",
+        "elapsedMs": 500.09,
+        "callsAtReturn": 3033,
+        "callsAfterDrain": 3033
+      },
+      {
+        "outcome": "DEADLINE_EXCEEDED",
+        "elapsedMs": 500.48,
+        "callsAtReturn": 3503,
+        "callsAfterDrain": 3503
+      }
+    ]
+  },
+  {
+    "label": "2500-geo",
+    "variant": "baseline",
+    "samples": [
+      {
+        "outcome": "OK",
+        "elapsedMs": 696.05,
+        "callsAtReturn": 5000,
+        "callsAfterDrain": 5000
+      },
+      {
+        "outcome": "OK",
+        "elapsedMs": 675.23,
+        "callsAtReturn": 5000,
+        "callsAfterDrain": 5000
+      },
+      {
+        "outcome": "OK",
+        "elapsedMs": 695.49,
+        "callsAtReturn": 5000,
+        "callsAfterDrain": 5000
+      }
+    ]
+  },
+  {
+    "label": "2500-geo",
+    "variant": "default-budget",
+    "samples": [
+      {
+        "outcome": "RESOURCE_EXHAUSTED",
+        "elapsedMs": 6.98,
+        "callsAtReturn": 0,
+        "callsAfterDrain": 0
+      },
+      {
+        "outcome": "RESOURCE_EXHAUSTED",
+        "elapsedMs": 6.9,
+        "callsAtReturn": 0,
+        "callsAfterDrain": 0
+      },
+      {
+        "outcome": "RESOURCE_EXHAUSTED",
+        "elapsedMs": 6.31,
+        "callsAtReturn": 0,
+        "callsAfterDrain": 0
+      }
+    ]
+  },
+  {
+    "label": "1000-query-cap32",
+    "variant": "query-cap32",
+    "samples": [
+      {
+        "outcome": "RESOURCE_EXHAUSTED",
+        "elapsedMs": 15.79,
+        "callsAtReturn": 32,
+        "callsAfterDrain": 32
+      },
+      {
+        "outcome": "RESOURCE_EXHAUSTED",
+        "elapsedMs": 11,
+        "callsAtReturn": 32,
+        "callsAfterDrain": 32
+      },
+      {
+        "outcome": "RESOURCE_EXHAUSTED",
+        "elapsedMs": 12.16,
+        "callsAtReturn": 32,
+        "callsAfterDrain": 32
+      }
+    ]
+  },
+  {
+    "label": "1000-caller-deadline20",
+    "variant": "default-budget",
+    "samples": [
+      {
+        "outcome": "DEADLINE_EXCEEDED",
+        "elapsedMs": 20.34,
+        "callsAtReturn": 64,
+        "callsAfterDrain": 64
+      },
+      {
+        "outcome": "DEADLINE_EXCEEDED",
+        "elapsedMs": 20.85,
+        "callsAtReturn": 88,
+        "callsAfterDrain": 88
+      },
+      {
+        "outcome": "DEADLINE_EXCEEDED",
+        "elapsedMs": 20.24,
+        "callsAtReturn": 96,
+        "callsAfterDrain": 96
+      }
+    ]
+  }
+]
