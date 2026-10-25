@@ -27,6 +27,7 @@ import {
   type StreamEntry,
   withSemanticLease,
 } from '../src/post/semantic/worker.js';
+import { PostLifecycle } from '../src/post/application/lifecycle.js';
 import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
 import { rebuildSemanticIndex } from '../src/post/semantic/rebuild.js';
 import { draft, vector } from './fixtures/semantic.js';
@@ -75,6 +76,8 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
     vi.stubEnv('SEMANTIC_WORKER_ENABLED', 'false');
     vi.stubEnv('SEMANTIC_INDEX_ALIAS', `${prefix}-read`);
     vi.stubEnv('MAP_GRPC_TIMEOUT_MS', '10000');
+    // 201개 기존 후보에 두 개를 추가하면 실제 후보 예산을 초과하도록 설정한다.
+    vi.stubEnv('MAP_NEARBY_MAX_CANDIDATES', '202');
     const pair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
     vi.stubEnv(
       'POST_SERVICE_SIGNING_JWK',
@@ -128,7 +131,8 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
       .useValue(embedding)
       .compile();
     app = module.createNestApplication();
-    await app.init();
+    // 반복 HTTP 요청이 닫힌 임시 서버의 keep-alive 연결을 재사용하지 않게 한다.
+    await app.listen(0, '127.0.0.1');
     db = app.get(getConnectionToken());
     posts = app.get(getModelToken('Post'));
     source = new MongooseSemanticSource(posts);
@@ -279,7 +283,176 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
       (await similar().expect(200)).body.items.map((p: any) => p.postId),
     ).not.toContain(ids[199]);
   }, 120000);
+  const publish = async () => {
+    await expect
+      .poll(
+        async () => {
+          await app.get(OutboxWorker).publishPending();
+          return app
+            .get<Model<any>>(getModelToken('Outbox'))
+            .countDocuments({ status: { $ne: 'PUBLISHED' } });
+        },
+        { timeout: 10000 },
+      )
+      .toBe(0);
+  };
+  const createLifecyclePost = async () => {
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/posts')
+      .set('X-User-Id', '912341')
+      .send({
+        ...draft,
+        limit: undefined,
+        latitude,
+        longitude: longitude - 0.00001,
+      })
+      .expect(201);
+    const id = response.body.postId as string;
+    ids.push(id);
+    return id;
+  };
+  it.each(['DELETED', 'EXPIRED'] as const)(
+    'delivers real %s outbox events and recovers failed Cell cleanup',
+    async (status) => {
+      const id = await createLifecyclePost();
+      await publish();
+      const created = await read('post-map', 'lifecycle-map');
+      expect(created).toHaveLength(1);
+      for (const entry of created) await mapConsumer.process(entry);
+      const client = app.get<GrpcNearbyPosts>(NEARBY_POST_CANDIDATES);
+      expect(
+        (await client.search(latitude, longitude)).items.map((p) => p.postId),
+      ).toContain(id);
+      const row = (
+        await mapIndex.db.execute(
+          'SELECT cell, shard FROM post_locations WHERE post_id = ?',
+          [id],
+          { prepare: true },
+        )
+      ).first();
+      const cellCount = async () =>
+        (
+          await mapIndex.db.execute(
+            'SELECT post_id FROM posts_by_cell WHERE cell = ? AND shard = ? AND post_id = ?',
+            [row.get('cell'), row.get('shard'), id],
+            { prepare: true },
+          )
+        ).rowLength;
+      expect(await cellCount()).toBe(1);
+      if (status === 'DELETED') {
+        await request(app.getHttpServer())
+          .delete(`/api/v1/posts/${id}`)
+          .set('X-User-Id', '912341')
+          .expect(204);
+      } else {
+        const lifecycle = app.get(PostLifecycle);
+        await lifecycle.scheduleExpiration(id, new Date(Date.now() - 1000));
+        await lifecycle.expire(id);
+      }
+      await publish();
+      const entries = await read('post-map', 'lifecycle-map');
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.message.eventType).toBe(
+        status === 'DELETED' ? 'PostDeleted' : 'PostExpired',
+      );
+      // 실제 CQL 삭제 직전 한 번 실패시켜 ACK가 앞서지 않고 회수로 복구되는지 확인한다.
+      const execute = mapIndex.db.execute.bind(mapIndex.db);
+      const failure = vi
+        .spyOn(mapIndex.db, 'execute')
+        .mockImplementation(async (...args: any[]) => {
+          if (String(args[0]).startsWith('DELETE FROM posts_by_cell'))
+            throw new Error('injected Cell cleanup failure');
+          return execute(...args);
+        });
+      try {
+        await mapConsumer.process(entries[0]);
+      } finally {
+        failure.mockRestore();
+      }
+      expect((await mapConsumer.metrics()).pending).toBe(1);
+      expect(await cellCount()).toBe(1);
+      // 인덱스 정리가 실패해도 종료 상태 검증은 검색 노출을 막는다.
+      expect(
+        (await client.search(latitude, longitude)).items.map((p) => p.postId),
+      ).not.toContain(id);
+      const claimed = await mapIndex.redis.xAutoClaim(
+        'post:events',
+        'post-map',
+        'recovery-map',
+        0,
+        '0-0',
+      );
+      expect(claimed.messages).toHaveLength(1);
+      await mapConsumer.process(claimed.messages[0]);
+      expect(await mapConsumer.metrics()).toMatchObject({
+        pending: 0,
+        deadLetters: 0,
+      });
+      expect(await cellCount()).toBe(0);
+      const geo =
+        (await mapIndex.redis.get('map:posts:geo:active')) ??
+        'map:posts:geo:v1';
+      expect(await mapIndex.redis.geoPos(geo, id)).toEqual([null]);
+      expect(await mapIndex.getStatus(id)).toBe(status);
+      // 동일 생성 이벤트를 재배달해도 종료된 게시물을 되살리지 않는다.
+      await mapConsumer.process(created[0]);
+      expect(await cellCount()).toBe(0);
+      expect(
+        (await similar().expect(200)).body.items.map((p: any) => p.postId),
+      ).not.toContain(id);
+    },
+    30000,
+  );
+
+  it('returns HTTP 503 when the real Map candidate budget is exceeded', async () => {
+    const extraIds = [await createLifecyclePost(), await createLifecyclePost()];
+    try {
+      await publish();
+      for (const entry of await read('post-map', 'budget-map'))
+        await mapConsumer.process(entry);
+      const client = app.get<GrpcNearbyPosts>(NEARBY_POST_CANDIDATES);
+      await expect(client.search(latitude, longitude)).rejects.toMatchObject({
+        code: 8,
+      });
+      const response = await similar().expect(503);
+      expect(response.body.code).toBe('SIMILARITY_CHECK_UNAVAILABLE');
+      expect(response.body).not.toHaveProperty('items');
+    } finally {
+      for (const id of extraIds)
+        await app.get(PostLifecycle).deletePost(id, 912341);
+      await publish();
+      for (const entry of await read('post-map', 'budget-map'))
+        await mapConsumer.process(entry);
+    }
+  }, 30000);
+
+  it('returns HTTP 503 when Map times out instead of reporting a completed empty search', async () => {
+    const execute = mapIndex.db.execute.bind(mapIndex.db);
+    const reads: Promise<any>[] = [];
+    const slow = vi
+      .spyOn(mapIndex.db, 'execute')
+      .mockImplementation((...args: any[]) => {
+        if (!String(args[0]).startsWith('SELECT')) return execute(...args);
+        const read = new Promise((resolve) => setTimeout(resolve, 600)).then(
+          () => execute(...args),
+        );
+        reads.push(read);
+        return read;
+      });
+    try {
+      const response = await similar().expect(503);
+      expect(response.body.code).toBe('SIMILARITY_CHECK_UNAVAILABLE');
+      expect(response.body).not.toHaveProperty('items');
+    } finally {
+      slow.mockRestore();
+      await Promise.allSettled(reads);
+    }
+  }, 10000);
+
   it('recovers a pending delivery through XAUTOCLAIM and reuses saved vectors', async () => {
+    // 앞선 lifecycle 검증의 이벤트도 별도 Semantic 그룹에서 소비한 뒤 장애 배달을 만든다.
+    for (const entry of await read(consumer.group, 'lifecycle-semantic'))
+      await consumer.process(entry);
     const eventId = `evt_${randomUUID()}`;
     const envelope = {
       eventId,

@@ -146,8 +146,9 @@ WS도 HS256·typ=JWT·sub/sid/iat/exp·동일 issuer/audience를 검증하도록
 - [ ] 같은 거리의 동률·비활성 후보·다음 페이지에서 중복과 누락을 검증한다.
 - [ ] 빈 결과·Redis 장애·밀집 지역의 DB 호출 수와 응답 시간을 측정한다.
 - [x] 요청별 조회량·후보·시간 예산과 요청당 병렬8, deadline 이후 새 작업 중단을 정의한다. 이미 전송한 DB 작업의 서버 측 취소는 보장하지 않는다.
-- [ ] Cell 데이터의 보존·정리·재구축 정책을 검증한다.
-- [ ] 소비자인 Post 유사도 검색의 후보·부분 결과 계약을 회귀 검증한다.
+- [x] 종료·만료 Cell 행 정리, 생성/재구축 경합 및 실패 재처리를 실제 Redis·Cassandra로 검증한다.
+- [ ] 원본 데이터 보존 및 원본 없는 orphan Cell 정리 정책을 정의한다.
+- [x] 소비자인 Post 유사도 검색의 후보·부분 결과 계약을 회귀 검증한다.
 
 현재 브랜치에서는 Cassandra 후속 페이지, 요청당 최대 8개 병렬 처리, 동일 Cell·Shard 진행 중 조회 공유를 구현했다.
 재구축 완료·멤버 수·미완료 쓰기를 검사해 신뢰 가능한 빈 GEO는 DB 조회 없이 반환하며, 미확인·멤버 수 불일치에는
@@ -156,6 +157,12 @@ WS도 HS256·typ=JWT·sub/sid/iat/exp·동일 issuer/audience를 검증하도록
 요청별 총 예산과 gRPC deadline/취소 전달을 구현했고, 공유 조회의 남은 대기자를 보호한다.
 [밀집 지역 예산 측정](../performance/map-budget-2026-10-25/README.md)에 실제 DB 호출 수와 중단 결과를 기록했다.
 삭제·만료 이벤트의 현재/재구축 Redis GEO 및 Cassandra Cell 행 정리를 구현했다. 늦은 생성·재구축과 종료의 경합은 기록 후 상태 재확인으로 보상하고, 정리 실패는 재처리한다. `rebuild:posts`는 기존 종료·만료 Cell 행도 정리한다. 위치 원본과 상태는 유지한다.
+
+2026-10-26 통합 검증: [Post→Map 테스트](../../services/post-service/test/semantic.integration.test.ts)에 실제 HTTP 생성/삭제 및 lifecycle 만료 → MongoDB Outbox → Redis Stream → Map Consumer → Cassandra·GEO → gRPC 검색 검증을 추가했다. Cell 삭제 실패를 주입했을 때 Pending 유지·상태 기반 검색 제외·XAUTOCLAIM 복구를 확인했다. 같은 생성 이벤트를 다시 처리해도 종료 상태와 Cell 제거가 유지된다. 후보 한도 초과는 실제 Map gRPC `RESOURCE_EXHAUSTED`를 거쳐 Post HTTP `503 / SIMILARITY_CHECK_UNAVAILABLE`로 반환한다. DB 읽기 지연 주입으로 Map timeout도 동일한 HTTP 오류가 되며 정상 빈 검색으로 반환하지 않음을 확인했다. 정상 200개 후보 제한은 기존 `CANDIDATE_LIMIT` 부분 결과 계약을 유지한다.
+
+검증 결과: Post의 semantic integration·map budget·nearby gRPC 17개 통과, 선택적 실제 E5 모델 테스트 1개 미실행. Map 전체 81개 통과. 실제 MongoDB replica set·Redis·Cassandra·Elasticsearch와 TCP gRPC를 사용했고 임베딩 모델만 대체했다. Consumer 처리는 테스트가 직접 구동하고 실패·지연은 주입했으므로 ECS 다중 Task 및 실제 네트워크 단절 검증은 포함하지 않는다. 루트 format, Post typecheck/build, Map build도 통과했다.
+
+재실행: 일회용 DB에서 `node scripts/ci-dependencies.mjs start post-service`와 `pnpm --dir services/map-service build` 후, Post 디렉터리에서 `RUN_SEMANTIC_INTEGRATION=1 RUN_WS_INTEGRATION=1 pnpm exec vitest run test/semantic.integration.test.ts test/map-budget.integration.test.ts test/nearby-grpc.test.ts`를 실행한다. 기존 Post CI가 semantic 통합 테스트를 실행하므로 새 사례도 포함된다.
 
 전역 동시성, 원본 보존 및 원본 없는 orphan Cell 정리 정책, 동일 개수의 임의 데이터 변조 탐지는 아직 미해결이다.
 따라서 이 항목 전체를 해결 처리하지 않는다.
