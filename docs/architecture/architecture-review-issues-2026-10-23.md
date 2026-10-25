@@ -27,7 +27,7 @@ Critical과 High는 관련 기능의 병합·운영 공개 전 차단 이슈로 
 | WGO-ARCH-01 | Critical   | P0       | 공개 사용자 API의 신원 헤더 신뢰 제거          | HTTP Gateway, User                  | 해결 |
 | WGO-ARCH-02 | High       | P0       | WS 참여와 댓글 작성의 도메인 인가 연결         | WS Gateway, Post, Map               | 해결 |
 | WGO-ARCH-03 | High       | P1       | 사용자 JWT 발급과 운영 WS 검증 계약 통일       | User, HTTP Gateway, WS Gateway      | 진행 중 |
-| WGO-ARCH-04 | High       | P1       | Map 검색의 페이지 누락과 과도한 순차 조회 수정 | Map, Post                           | 미해결 |
+| WGO-ARCH-04 | High       | P1       | Map 검색의 페이지 누락과 과도한 순차 조회 수정 | Map, Post                           | 진행 중 |
 | WGO-ARCH-05 | High       | P1       | Moderation 결정의 Post 원본 적용 연결          | Moderation, Post, Map, Notification | 진행 중 |
 | WGO-ARCH-06 | High       | P1       | 삭제·만료·댓글 삭제의 실시간 상태 반영         | WS Gateway, Post                    | 진행 중 |
 | WGO-ARCH-07 | Medium     | P1       | Notification 전송 재시도의 전체 스캔 제거      | Notification                        | 미해결 |
@@ -126,7 +126,7 @@ WS도 HS256·typ=JWT·sub/sid/iat/exp·동일 issuer/audience를 검증하도록
 
 **심각도 High · 우선순위 P1 · 검색 정확성 및 확장 차단**
 
-GEO 후보 전체를 조회한 뒤 각 후보의 Cassandra 위치와 상태를 순차 조회하고, 전체 정렬 후 응답 limit을 적용한다. GEO 결과가 없으면 H3 Cell별 16개 Shard를 순차 조회한다. Cassandra 결과의 `pageState`는 소비하지 않는다.
+최초 점검에서는 GEO 후보 전체를 조회한 뒤 각 후보의 Cassandra 위치와 상태를 순차 조회하고, 전체 정렬 후 응답 limit을 적용한다. GEO 결과가 없으면 H3 Cell별 16개 Shard를 순차 조회한다. Cassandra 결과의 `pageState`는 소비하지 않는다.
 
 저장소 어댑터 재현 결과는 다음과 같다. 실제 DB 응답 시간이나 처리량 측정값은 아니다.
 
@@ -148,6 +148,13 @@ GEO 후보 전체를 조회한 뒤 각 후보의 Cassandra 위치와 상태를 �
 - [ ] 요청별 조회량과 동시성 상한, deadline 이후 작업 중단을 정의한다.
 - [ ] Cell 데이터의 보존·정리·재구축 정책을 검증한다.
 - [ ] 소비자인 Post 유사도 검색의 후보·부분 결과 계약을 회귀 검증한다.
+
+현재 브랜치에서는 Cassandra 후속 페이지, 요청당 최대 8개 병렬 처리, 동일 Cell·Shard 진행 중 조회 공유를 구현했다.
+재구축 완료·멤버 수·미완료 쓰기를 검사해 신뢰 가능한 빈 GEO는 DB 조회 없이 반환하며, 미확인·멤버 수 불일치에는
+후보가 일부 남아 있어도 Cassandra로 보완한다. 공유는 인스턴스 내부에 한정되고 완료 결과를 캐시하지 않는다.
+[실제 DB 호출 수 비교](../performance/map-fallback-sharing-2026-10-25/README.md)에 검증 범위를 기록했다.
+요청별 총 예산·deadline 취소·전역 동시성·Cell 보존 정책과 동일 개수의 임의 데이터 변조 탐지는 아직 미해결이다.
+따라서 이 항목 전체를 해결 처리하지 않는다.
 
 ### WGO-ARCH-05 Moderation 결정의 Post 원본 적용 연결
 
