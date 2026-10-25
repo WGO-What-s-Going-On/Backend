@@ -301,12 +301,18 @@ export class PostIndex {
         2,
       ))
         for (let shard = 0; shard < 16; shard++) {
-          const page = await this.db.execute(
-            'SELECT post_id FROM posts_by_cell WHERE cell = ? AND shard = ?',
-            [cell, shard],
-            { prepare: true },
-          );
-          for (const row of page.rows) ids.add(row.get('post_id'));
+          // pageState는 같은 Cell·Shard 안에서만 이어 쓴다. 후속 페이지 실패는
+          // 상위로 전파하여 일부 후보만 읽은 결과를 정상 응답으로 반환하지 않는다.
+          let pageState: string | undefined;
+          do {
+            const page = await this.db.execute(
+              'SELECT post_id FROM posts_by_cell WHERE cell = ? AND shard = ?',
+              [cell, shard],
+              { prepare: true, pageState, autoPage: false },
+            );
+            for (const row of page.rows) ids.add(row.get('post_id'));
+            pageState = page.pageState;
+          } while (pageState);
         }
       items = await this.filterCandidates([...ids], center, query.radiusM);
     }

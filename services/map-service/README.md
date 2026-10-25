@@ -30,6 +30,8 @@ Swagger documents HTTP only. `/docs` is served directly by Map Service and is no
 
 Map reads candidates from the current Redis GEO index, then confirms location, `ACTIVE` status, and expiry in Cassandra. If Redis fails or yields no valid candidate, Map checks the center H3 resolution 8 cell and two surrounding rings in `posts_by_cell`. Partial GEO loss can omit posts while other valid candidates remain until `pnpm rebuild:posts` repairs the index. Redis GEO cannot store latitudes outside its supported range; Map keeps these posts in Cassandra and searches polar coordinates through H3. Map status is the last status event applied locally, so propagation can lag Post Service. Post Service does not yet emit expiry/deletion events.
 
+Cassandra fallback reads every page of each Cell/Shard using the driver's `pageState` before sorting and applying the API cursor/limit. A later-page read failure fails the request instead of returning incomplete results. This internal paging token is not exposed as the API cursor. Candidate validation and partition reads remain sequential; query budgets and partial GEO recovery are separate follow-up work.
+
 ## Post spatial index
 
 Set `REDIS_URL` to the **same Redis instance as Post Service** so Map can consume `post:events`. The local Map compose Redis uses port 6381; when running Post Service's Redis on port 6380, set `REDIS_URL=redis://localhost:6380` instead. Redis also holds the latest user location cache and rebuildable post GEO index. Apply the updated `schema.cql` before starting the service. The `post-map` Consumer Group starts at Stream ID `0` when first created, uses `XREADGROUP`, and reclaims idle Pending entries with `XAUTOCLAIM`. Multiple Map instances share the group.
