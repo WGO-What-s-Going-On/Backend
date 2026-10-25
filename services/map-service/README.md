@@ -32,7 +32,7 @@ Map reads candidates from Redis GEO and confirms location, ACTIVE status and exp
 
 Cassandra fallback consumes every page of each Cell/Shard before applying the existing distance order and API cursor/limit. In-flight reads for the same Cell/Shard are shared within one PostIndex instance, including their subsequent pages and failures. The sharing map holds at most 1,024 entries; requests beyond that use independent reads. Completed results are removed rather than cached. Each request independently validates candidates, distance, radius, expiry, sorting and cursor. Different ECS tasks do not share in-flight promises. Creation/status writes clear local sharing references before and after application to avoid retaining pre-write work for later requests.
 
-Candidate validation and Cell/Shard exploration use at most eight workers per request. Pages within a partition remain sequential. A read failure stops assignment of new work, waits for in-flight work and fails the request rather than returning incomplete results. Total query/time budgets, cancellation and process-wide/cluster-wide DB concurrency limits remain follow-up work.
+Candidate validation and Cell/Shard exploration use at most eight workers per request. Pages within a partition remain sequential. A read failure stops assignment of new work, waits for in-flight work and fails the request rather than returning incomplete results. Nearby searches enforce request-wide time/query/candidate budgets and propagate cancellation. Process-wide/cluster-wide DB concurrency limits remain follow-up work.
 
 ### GEO health and recovery
 
@@ -101,3 +101,15 @@ Run the store backed tests with `RUN_INTEGRATION=1 pnpm test` after applying `sc
 ### Post 추천 후보 gRPC
 
 `MapPostQuery.SearchNearbyPosts`를 위치 인가와 같은 gRPC 서버에 등록한다. ES256 Post 신원만 허용하고 150/250/350m 내 페이지당 최대 200개 후보 및 truncated·nextCursor를 반환한다. cursor를 보내 기존 주변 조회의 다음 페이지를 요청할 수 있다. Post 유사도 검색은 150m·첫 페이지 최대 200개만 비교한다. 기존 HTTP 최대 100개/커서 및 MapAuthorization HS256 전환 호환성은 유지한다. [계약](contracts/map-authorization.md). Post의 실제 임베딩 모델은 미연결이며 후보 RPC 자체는 모델과 무관하다. 실제 검색 연동 검증은 Post의 `pnpm semantic:fixture`에서 MongoDB·Redis·Cassandra·Map gRPC·ES를 함께 사용한다.
+
+## Nearby request budgets
+
+Defaults: MAP_NEARBY_TIMEOUT_MS=500, MAP_NEARBY_MAX_QUERIES=4500, MAP_NEARBY_MAX_CANDIDATES=2000, MAP_NEARBY_READ_TIMEOUT_MS=250. Values must be positive integers; timeout/read timeout are capped at 10000ms and query/candidate limits at 100000. Invalid settings fail startup. Supply overrides through the map-service runtime secrets map; these do not increase Post location authorization timeout.
+
+The caller deadline can shorten the internal time budget. Query budget counts logical Cassandra page/location/status reads across the entire request, including pages already read by a shared operation. Unique candidate IDs are bounded across GEO and Cassandra. These caps do not imply dense queries will succeed within the deadline. A timed-out/cancelled waiter detaches without cancelling other active waiters. When all waiters leave, no further pages are started and the sharing entry is removed.
+
+Redis waits use the remaining deadline and AbortSignal. Cassandra calls use readTimeout and FallthroughRetryPolicy; shared page reads use the configured per-read timeout so one short-deadline waiter cannot impose its deadline on longer-lived waiters. Actual server-side query cancellation is not guaranteed. Request completion stops scheduling new work and does not await an unresponsive driver indefinitely.
+
+Budget errors log map_nearby_budget_exceeded with code, logicalQueries, candidates and elapsedMs, without coordinates, tokens or content. gRPC and HTTP 503/504 error contracts are documented in contracts/map-authorization.md and map-http.openapi.json. Completed results are never silently truncated because a budget ran out.
+
+[Measurement and validation](../../docs/performance/map-budget-2026-10-25/README.md).

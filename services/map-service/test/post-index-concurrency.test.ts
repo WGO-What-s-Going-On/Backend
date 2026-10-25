@@ -17,6 +17,9 @@ describe('bounded nearby reads', () => {
     'bounds Cassandra reads for fallback=%s and keeps results',
     async (fallback) => {
       const index = new PostIndex();
+      vi.spyOn(index.redis, 'withCommandOptions').mockReturnValue(
+        index.redis as any,
+      );
       const ids = Array.from(
         { length: 20 },
         (_, n) => `post_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
@@ -55,6 +58,9 @@ describe('bounded nearby reads', () => {
 
   it('stops scheduling on failure and waits for in-flight reads before rejecting', async () => {
     const index = new PostIndex();
+    vi.spyOn(index.redis, 'withCommandOptions').mockReturnValue(
+      index.redis as any,
+    );
     vi.spyOn(index.redis, 'get').mockResolvedValue(null);
     vi.spyOn(index.redis, 'eval').mockResolvedValue([
       1,

@@ -12,6 +12,20 @@ import {
   afterGeoMutation,
 } from './geo-index-state.js';
 
+import {
+  NearbyBudget,
+  NearbySearchError,
+  nearbyLimits,
+  type NearbyContext,
+} from './nearby-budget.js';
+
+type PartitionRead = {
+  promise: Promise<string[]>;
+  budgets: Set<NearbyBudget>;
+  ids: Set<string>;
+  pages: number;
+};
+
 export const POST_STREAM = 'post:events';
 export const POST_GROUP = 'post-map';
 export const DEAD_STREAM = 'map:post:dead';
@@ -182,7 +196,8 @@ async function forEachNearby<T>(
 }
 
 export class PostIndex {
-  private readonly partitionReads = new Map<string, Promise<string[]>>();
+  private readonly limits = nearbyLimits();
+  private readonly partitionReads = new Map<string, PartitionRead>();
 
   private async beginWrite(token: string): Promise<void> {
     this.partitionReads.clear();
@@ -197,33 +212,89 @@ export class PostIndex {
     await this.redis.sRem(GEO_DIRTY, token);
   }
 
-  private readPartition(cell: string, shard: number): Promise<string[]> {
+  private async readPartition(
+    cell: string,
+    shard: number,
+    budget: NearbyBudget,
+  ): Promise<string[]> {
+    budget.check();
     const key = `${cell}:${shard}`;
-    const pending = this.partitionReads.get(key);
-    if (pending) return pending;
-    const read = (async () => {
-      const ids: string[] = [];
-      let pageState: string | undefined;
-      do {
-        const page = await this.db.execute(
-          'SELECT post_id FROM posts_by_cell WHERE cell = ? AND shard = ?',
-          [cell, shard],
-          { prepare: true, pageState, autoPage: false },
-        );
-        for (const row of page.rows) ids.push(row.get('post_id'));
-        pageState = page.pageState;
-      } while (pageState);
-      return ids;
-    })();
-    // 완료 결과는 캐시하지 않는다. 실패도 공유하되 다음 요청에서는 재시도한다.
-    if (this.partitionReads.size < 1024) this.partitionReads.set(key, read);
-    void read
-      .finally(() => {
-        if (this.partitionReads.get(key) === read)
-          this.partitionReads.delete(key);
-      })
-      .catch(() => {});
-    return read;
+    let entry = this.partitionReads.get(key);
+    if (!entry || entry.budgets.size === 0) {
+      const shared: PartitionRead = {
+        promise: undefined!,
+        budgets: new Set(),
+        ids: new Set(),
+        pages: 0,
+      };
+      // 첫 대기자를 등록한 뒤 microtask에서 조회를 시작한다.
+      shared.promise = Promise.resolve().then(async () => {
+        let pageState: string | undefined;
+        const forWaiters = (action: (b: NearbyBudget) => void) => {
+          for (const waiter of shared.budgets) {
+            try {
+              action(waiter);
+            } catch {
+              shared.budgets.delete(waiter);
+            }
+          }
+          if (shared.budgets.size === 0)
+            throw new NearbySearchError('CANCELLED');
+        };
+        do {
+          // 공유 페이지도 각 요청의 논리 조회 예산에 포함한다. 한 요청의 종료가 다른 요청을 중단시키지 않는다.
+          forWaiters((b) => b.chargeQuery());
+          shared.pages++;
+          const page = await this.db.execute(
+            'SELECT post_id FROM posts_by_cell WHERE cell = ? AND shard = ?',
+            [cell, shard],
+            {
+              prepare: true,
+              pageState,
+              autoPage: false,
+              fetchSize: 100,
+              readTimeout: this.limits.readTimeoutMs,
+              retry: new cassandra.policies.retry.FallthroughRetryPolicy(),
+            },
+          );
+          const ids = page.rows.map((row) => row.get('post_id') as string);
+          forWaiters((b) => b.addCandidates(ids));
+          for (const id of ids) shared.ids.add(id);
+          pageState = page.pageState;
+        } while (pageState);
+        return [...shared.ids];
+      });
+      if (this.partitionReads.size < 1024) this.partitionReads.set(key, shared);
+      void shared.promise
+        .finally(() => {
+          if (this.partitionReads.get(key) === shared)
+            this.partitionReads.delete(key);
+        })
+        .catch(() => {});
+      entry = shared;
+    }
+    // 늦게 참여한 요청에도 이미 읽은 페이지와 후보의 예산을 적용한다.
+    budget.chargeQuery(entry.pages);
+    budget.addCandidates(entry.ids);
+    entry.budgets.add(budget);
+    try {
+      return await budget.wait(entry.promise);
+    } finally {
+      entry.budgets.delete(budget);
+      if (entry.budgets.size === 0 && this.partitionReads.get(key) === entry)
+        this.partitionReads.delete(key);
+    }
+  }
+
+  private async nearbyRead(sql: string, id: string, budget: NearbyBudget) {
+    budget.chargeQuery();
+    return budget.wait(
+      this.db.execute(sql, [id], {
+        prepare: true,
+        readTimeout: Math.min(budget.remaining(), this.limits.readTimeoutMs),
+        retry: new cassandra.policies.retry.FallthroughRetryPolicy(),
+      }),
+    );
   }
 
   readonly db = new cassandra.Client({
@@ -359,29 +430,64 @@ export class PostIndex {
     );
   }
 
-  async nearby(query: NearbyQuery): Promise<NearbyResult> {
+  async nearby(
+    query: NearbyQuery,
+    context: NearbyContext = {},
+  ): Promise<NearbyResult> {
+    const budget = new NearbyBudget(this.limits, context);
+    try {
+      return await this.searchNearby(query, budget);
+    } catch (error) {
+      if (error instanceof NearbySearchError && error.code !== 'CANCELLED')
+        console.warn({
+          event: 'map_nearby_budget_exceeded',
+          code: error.code,
+          ...budget.snapshot(),
+        });
+      throw error;
+    } finally {
+      budget.close();
+    }
+  }
+
+  private async searchNearby(
+    query: NearbyQuery,
+    budget: NearbyBudget,
+  ): Promise<NearbyResult> {
+    budget.check();
     const center = { latitude: query.latitude, longitude: query.longitude };
     let candidates: string[] = [];
     let trusted = false;
     if (Math.abs(query.latitude) <= GEO_LATITUDE_LIMIT) {
       try {
-        const result = (await this.redis.eval(inspectGeo, {
-          keys: [ACTIVE_KEY, REBUILD_KEY, GEO_STATE, GEO_DIRTY],
-          arguments: [
-            DEFAULT_GEO,
-            String(query.longitude),
-            String(query.latitude),
-            String(query.radiusM),
-          ],
-        })) as [number, string[]];
+        const result = (await budget.wait(
+          this.redis
+            .withCommandOptions({
+              timeout: budget.remaining(),
+              abortSignal: budget.controller.signal,
+            })
+            .eval(inspectGeo, {
+              keys: [ACTIVE_KEY, REBUILD_KEY, GEO_STATE, GEO_DIRTY],
+              arguments: [
+                DEFAULT_GEO,
+                String(query.longitude),
+                String(query.latitude),
+                String(query.radiusM),
+                String(this.limits.maxCandidates + 1),
+              ],
+            }),
+        )) as [number, string[]];
         trusted = result[0] === 1;
         candidates = result[1];
-      } catch {
+      } catch (error) {
+        if (error instanceof NearbySearchError) throw error;
+        budget.check();
         // Redis 장애·검증 실패에서는 Cassandra로 검색한다.
       }
     }
+    budget.addCandidates(candidates);
     let items = trusted
-      ? await this.filterCandidates(candidates, center, query.radiusM)
+      ? await this.filterCandidates(candidates, center, query.radiusM, budget)
       : [];
     if (!trusted) {
       const ids = new Set<string>(candidates);
@@ -392,10 +498,17 @@ export class PostIndex {
         Array.from({ length: 16 }, (_, shard) => ({ cell, shard })),
       );
       await forEachNearby(partitions, async ({ cell, shard }) => {
-        for (const id of await this.readPartition(cell, shard)) ids.add(id);
+        for (const id of await this.readPartition(cell, shard, budget))
+          ids.add(id);
       });
-      items = await this.filterCandidates([...ids], center, query.radiusM);
+      items = await this.filterCandidates(
+        [...ids],
+        center,
+        query.radiusM,
+        budget,
+      );
     }
+    budget.check();
     items.sort(
       (a, b) => a.distanceM - b.distanceM || a.postId.localeCompare(b.postId),
     );
@@ -426,6 +539,7 @@ export class PostIndex {
           (item.distanceM === cursor.distanceM && item.postId > cursor.postId),
       );
     }
+    budget.check();
     const page = items.slice(0, query.limit);
     const last = page.at(-1);
     return {
@@ -448,17 +562,26 @@ export class PostIndex {
     ids: string[],
     center: { latitude: number; longitude: number },
     radiusM: number,
+    budget: NearbyBudget,
   ): Promise<NearbyResult['items']> {
     const items: NearbyResult['items'] = [];
     await forEachNearby([...new Set(ids)], async (id) => {
       const row = (
-        await this.db.execute(
+        await this.nearbyRead(
           'SELECT latitude, longitude, expires_at FROM post_locations WHERE post_id = ?',
-          [id],
-          { prepare: true },
+          id,
+          budget,
         )
       ).first();
-      if (!row || (await this.getStatus(id)) !== 'ACTIVE') return;
+      if (!row) return;
+      const statusRow = (
+        await this.nearbyRead(
+          'SELECT status FROM post_status WHERE post_id = ?',
+          id,
+          budget,
+        )
+      ).first();
+      if (statusRow?.get('status') !== 'ACTIVE') return;
       const expiresAt = row.get('expires_at') as Date | null;
       if (expiresAt && expiresAt.getTime() <= Date.now()) return;
       const distance = distanceM(center, {

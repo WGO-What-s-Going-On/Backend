@@ -182,9 +182,11 @@ suite('GEO completeness and shared fallback', () => {
     execute.mockRestore();
     expect((await index.nearby(query)).items).toEqual([]);
     await index.rebuild();
-    vi.spyOn(index.redis, 'eval').mockRejectedValueOnce(
-      new Error('Redis unavailable'),
-    );
+    vi.spyOn(index.redis, 'withCommandOptions').mockReturnValueOnce({
+      eval: async () => {
+        throw new Error('Redis unavailable');
+      },
+    } as any);
     const fallback = vi.spyOn(index.db, 'execute');
     expect((await index.nearby(query)).items).toEqual([]);
     expect(fallback).toHaveBeenCalledTimes(304);

@@ -153,7 +153,7 @@ jobs:
         env:
           RUN_INTEGRATION: '1'
           RUN_WS_INTEGRATION: '1'
-        run: pnpm exec vitest run test/post.integration.test.ts test/ws-lifecycle.integration.test.ts
+        run: pnpm exec vitest run test/post.integration.test.ts test/ws-lifecycle.integration.test.ts test/map-budget.integration.test.ts
       - if: always()
         run: node scripts/ci-dependencies.mjs stop post-service
 

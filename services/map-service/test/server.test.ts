@@ -10,6 +10,7 @@ import { loadSync } from '@grpc/proto-loader';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createGrpcServer, createHttpServer } from '../src/server.js';
 import { InvalidCursorError } from '../src/post-index.js';
+import { NearbySearchError } from '../src/nearby-budget.js';
 import type { Location, LocationStore } from '../src/location.js';
 import { serviceCaller, trustedKeys } from '../src/service-auth.js';
 
@@ -84,6 +85,10 @@ describe('Map HTTP and gRPC contract', () => {
     nearby: async (query) => {
       if (query.cursor) throw new InvalidCursorError();
       if (query.latitude === 1) throw new Error('Cassandra unavailable');
+      if (query.latitude === 2)
+        throw new NearbySearchError('RESOURCE_EXHAUSTED');
+      if (query.latitude === 3)
+        throw new NearbySearchError('DEADLINE_EXCEEDED');
       return {
         items: [
           { postId: 'post_00000000-0000-0000-0000-000000000001', distanceM: 0 },
@@ -294,6 +299,18 @@ describe('Map HTTP and gRPC contract', () => {
     expect(
       Object.keys(document.paths['/api/v1/location'].put.responses),
     ).toEqual(['200', '400', '403', '503']);
+  });
+
+  it.each([
+    [2, 503, 'RESOURCE_EXHAUSTED'],
+    [3, 504, 'DEADLINE_EXCEEDED'],
+  ])('maps HTTP budget failure %s', async (latitude, expected, code) => {
+    const response = await fetch(
+      `${base}/internal/v1/posts/nearby?latitude=${latitude}&longitude=127&radiusM=150`,
+      { headers: { authorization: `Bearer ${token(secret, true)}` } },
+    );
+    expect(response.status).toBe(expected);
+    expect(await response.json()).toEqual({ code });
   });
 
   it('requires a gateway JWT and validates nearby parameters', async () => {

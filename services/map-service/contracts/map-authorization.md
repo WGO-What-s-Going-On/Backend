@@ -1,5 +1,15 @@
 # MapAuthorization 내부 gRPC 계약
 
+## 검색 처리 예산 및 취소
+
+SearchNearbyPosts는 호출자의 gRPC deadline과 MAP_NEARBY_TIMEOUT_MS 중 짧은 값을 적용한다. 시간 초과는 DEADLINE_EXCEEDED, 논리 Cassandra 조회/고유 후보 예산 초과는 RESOURCE_EXHAUSTED, 요청 취소는 CANCELLED다. 저장소 실패는 기존 UNAVAILABLE이다. 예산 초과를 items/truncated/nextCursor가 있는 성공 응답으로 반환하지 않는다. Post 클라이언트는 오류를 전파하고 유사도 유스케이스는 SIMILARITY_CHECK_UNAVAILABLE로 처리한다.
+
+MAP_NEARBY_MAX_QUERIES는 검색 전체의 파티션 페이지+위치+상태 조회를 합산한다. 공유 파티션에 늦게 참여해도 이미 읽은 페이지를 논리 비용에 포함하며, 실제 DB 호출은 공유될 수 있다. MAP_NEARBY_MAX_CANDIDATES는 검색 전체의 고유 후보 ID 상한이다. GEO는 상한+1까지만 반환하도록 요청해 초과를 판별한다. Cassandra 페이지는 fetchSize=100이며 상한 초과 페이지를 읽었다면 오류를 반환하고 후속 페이지를 시작하지 않는다.
+
+요청 종료 시 새 조회·후속 페이지 배정을 중단한다. 공유 조회는 남은 대기자가 있을 때만 이어 읽는다. 이미 보낸 Cassandra 쿼리의 서버 실행을 강제로 취소하는 보장은 없으며, 드라이버 readTimeout과 retry 비활성화로 클라이언트 대기를 제한한다. HTTP 연결 해제도 검색 취소로 전달한다. 인스턴스 전체 동시성 제한은 별도다.
+
+이 제한은 위치 인가 RPC의 timeout이나 사용자 JWT 계약을 변경하지 않는다. proto 필드 변경은 없다.
+
 전송 형식과 메서드는 [map-authorization.proto](./map-authorization.proto)가 정의한다. 이 서비스는 Post Service에서만 호출하는 읽기 전용 내부 API다. Swagger/OpenAPI의 HTTP 경로에 포함하지 않는다.
 
 | 메서드 | 입력 | 허용 조건 |

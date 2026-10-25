@@ -17,7 +17,7 @@ if not active or redis.call('HGET', KEYS[3], 'key') ~= key or
   redis.call('HSET', KEYS[3], 'ready', '0')
 end
 if redis.call('EXISTS', KEYS[2]) == 1 or redis.call('SCARD', KEYS[4]) > 0 then ready = false end
-local ids = redis.call('GEOSEARCH', key, 'FROMLONLAT', ARGV[2], ARGV[3], 'BYRADIUS', ARGV[4], 'm')
+local ids = redis.call('GEOSEARCH', key, 'FROMLONLAT', ARGV[2], ARGV[3], 'BYRADIUS', ARGV[4], 'm', 'COUNT', ARGV[5] or '2000000000')
 return {ready and 1 or 0, ids}
 `;
 
