@@ -3,6 +3,14 @@ import cassandra from 'cassandra-driver';
 import { gridDisk, latLngToCell } from 'h3-js';
 import { createClient } from 'redis';
 import { distanceM, validCoordinates } from './location.js';
+import {
+  GEO_STATE,
+  GEO_DIRTY,
+  beginGeoWrite,
+  inspectGeo,
+  beforeGeoMutation,
+  afterGeoMutation,
+} from './geo-index-state.js';
 
 export const POST_STREAM = 'post:events';
 export const POST_GROUP = 'post-map';
@@ -174,6 +182,50 @@ async function forEachNearby<T>(
 }
 
 export class PostIndex {
+  private readonly partitionReads = new Map<string, Promise<string[]>>();
+
+  private async beginWrite(token: string): Promise<void> {
+    this.partitionReads.clear();
+    // Redis에 미완료 쓰기를 기록하지 못하면 Cassandra 쓰기도 시작하지 않는다.
+    await this.redis.eval(beginGeoWrite, {
+      keys: [GEO_STATE, GEO_DIRTY],
+      arguments: [token],
+    });
+  }
+  private async finishWrite(token: string): Promise<void> {
+    this.partitionReads.clear();
+    await this.redis.sRem(GEO_DIRTY, token);
+  }
+
+  private readPartition(cell: string, shard: number): Promise<string[]> {
+    const key = `${cell}:${shard}`;
+    const pending = this.partitionReads.get(key);
+    if (pending) return pending;
+    const read = (async () => {
+      const ids: string[] = [];
+      let pageState: string | undefined;
+      do {
+        const page = await this.db.execute(
+          'SELECT post_id FROM posts_by_cell WHERE cell = ? AND shard = ?',
+          [cell, shard],
+          { prepare: true, pageState, autoPage: false },
+        );
+        for (const row of page.rows) ids.push(row.get('post_id'));
+        pageState = page.pageState;
+      } while (pageState);
+      return ids;
+    })();
+    // 완료 결과는 캐시하지 않는다. 실패도 공유하되 다음 요청에서는 재시도한다.
+    if (this.partitionReads.size < 1024) this.partitionReads.set(key, read);
+    void read
+      .finally(() => {
+        if (this.partitionReads.get(key) === read)
+          this.partitionReads.delete(key);
+      })
+      .catch(() => {});
+    return read;
+  }
+
   readonly db = new cassandra.Client({
     contactPoints: [process.env.CASSANDRA_HOST ?? 'localhost'],
     localDataCenter: process.env.CASSANDRA_DATACENTER ?? 'datacenter1',
@@ -193,6 +245,7 @@ export class PostIndex {
   }
 
   async write(post: PostCreated): Promise<void> {
+    await this.beginWrite(post.eventId);
     // 생성 이벤트가 늦게 도착해도 이미 기록한 만료·삭제 상태를 되살리지 않는다.
     await this.db.execute(
       'INSERT INTO post_status (post_id, status) VALUES (?, ?) IF NOT EXISTS',
@@ -222,6 +275,7 @@ export class PostIndex {
       (!post.expiresAt || post.expiresAt.getTime() > Date.now())
     )
       await this.writeGeo(post);
+    await this.finishWrite(post.eventId);
   }
 
   async getStatus(postId: string): Promise<PostStatus | null> {
@@ -236,6 +290,8 @@ export class PostIndex {
   }
 
   async transition(event: PostStatusEvent): Promise<void> {
+    const token = `${event.postId}:${event.status}:${event.occurredAt.toISOString()}`;
+    await this.beginWrite(token);
     // 상태 행이 아직 없어도 비활성 상태를 먼저 기록해 늦은 PostCreated를 막는다.
     await this.db.execute(
       'INSERT INTO post_status (post_id, status, occurred_at) VALUES (?, ?, ?) IF NOT EXISTS',
@@ -252,16 +308,17 @@ export class PostIndex {
       );
     // ACK 전에 현재 키와 재구축 키 모두에서 제거한다. 실패 시 Pending에서 재시도한다.
     await this.redis.eval(
-      `local active = redis.call('GET', KEYS[1]) or ARGV[1]
+      `${beforeGeoMutation}
        redis.call('ZREM', active, ARGV[2])
        local staging = redis.call('GET', KEYS[2])
        if staging and staging ~= active then redis.call('ZREM', staging, ARGV[2]) end
-       return 1`,
+       ${afterGeoMutation}`,
       {
-        keys: [ACTIVE_KEY, REBUILD_KEY],
+        keys: [ACTIVE_KEY, REBUILD_KEY, GEO_STATE],
         arguments: [DEFAULT_GEO, event.postId],
       },
     );
+    await this.finishWrite(token);
   }
 
   async writeCell(post: PostCreated): Promise<void> {
@@ -285,13 +342,13 @@ export class PostIndex {
     if (Math.abs(post.latitude) > GEO_LATITUDE_LIMIT) return;
     // 단일 Redis 명령에서 현재 GEO와 재구축 키에 함께 쓴다. 전환과 경합해도 새 게시물이 빠지지 않는다.
     await this.redis.eval(
-      `local active = redis.call('GET', KEYS[1]) or ARGV[1]
+      `${beforeGeoMutation}
        redis.call('GEOADD', active, ARGV[2], ARGV[3], ARGV[4])
        local staging = redis.call('GET', KEYS[2])
        if staging and staging ~= active then redis.call('GEOADD', staging, ARGV[2], ARGV[3], ARGV[4]) end
-       return 1`,
+       ${afterGeoMutation}`,
       {
-        keys: [ACTIVE_KEY, REBUILD_KEY],
+        keys: [ACTIVE_KEY, REBUILD_KEY, GEO_STATE],
         arguments: [
           DEFAULT_GEO,
           String(post.longitude),
@@ -305,26 +362,29 @@ export class PostIndex {
   async nearby(query: NearbyQuery): Promise<NearbyResult> {
     const center = { latitude: query.latitude, longitude: query.longitude };
     let candidates: string[] = [];
+    let trusted = false;
     if (Math.abs(query.latitude) <= GEO_LATITUDE_LIMIT) {
       try {
-        const key = (await this.redis.get(ACTIVE_KEY)) ?? DEFAULT_GEO;
-        candidates = (await this.redis.sendCommand([
-          'GEOSEARCH',
-          key,
-          'FROMLONLAT',
-          String(query.longitude),
-          String(query.latitude),
-          'BYRADIUS',
-          String(query.radiusM),
-          'm',
-        ])) as string[];
+        const result = (await this.redis.eval(inspectGeo, {
+          keys: [ACTIVE_KEY, REBUILD_KEY, GEO_STATE, GEO_DIRTY],
+          arguments: [
+            DEFAULT_GEO,
+            String(query.longitude),
+            String(query.latitude),
+            String(query.radiusM),
+          ],
+        })) as [number, string[]];
+        trusted = result[0] === 1;
+        candidates = result[1];
       } catch {
-        /* Cassandra H3 조회로 복구한다. */
+        // Redis 장애·검증 실패에서는 Cassandra로 검색한다.
       }
     }
-    let items = await this.filterCandidates(candidates, center, query.radiusM);
-    if (items.length === 0) {
-      const ids = new Set<string>();
+    let items = trusted
+      ? await this.filterCandidates(candidates, center, query.radiusM)
+      : [];
+    if (!trusted) {
+      const ids = new Set<string>(candidates);
       const partitions = gridDisk(
         latLngToCell(query.latitude, query.longitude, 8),
         2,
@@ -332,18 +392,7 @@ export class PostIndex {
         Array.from({ length: 16 }, (_, shard) => ({ cell, shard })),
       );
       await forEachNearby(partitions, async ({ cell, shard }) => {
-        // pageState는 같은 Cell·Shard 안에서만 이어 쓴다. 후속 페이지 실패는
-        // 상위로 전파하여 일부 후보만 읽은 결과를 정상 응답으로 반환하지 않는다.
-        let pageState: string | undefined;
-        do {
-          const page = await this.db.execute(
-            'SELECT post_id FROM posts_by_cell WHERE cell = ? AND shard = ?',
-            [cell, shard],
-            { prepare: true, pageState, autoPage: false },
-          );
-          for (const row of page.rows) ids.add(row.get('post_id'));
-          pageState = page.pageState;
-        } while (pageState);
+        for (const id of await this.readPartition(cell, shard)) ids.add(id);
       });
       items = await this.filterCandidates([...ids], center, query.radiusM);
     }
@@ -426,7 +475,11 @@ export class PostIndex {
     if (!(await this.redis.set(REBUILD_KEY, staging, { NX: true })))
       throw new Error('Rebuild already active; inspect map:posts:geo:rebuild');
     let count = 0;
+    let geoCount = 0;
     try {
+      // 완료 전까지 기존 인덱스도 미확인 상태다. 스캔 중 쓰기가 있으면 인증을 보류한다.
+      await this.redis.hSet(GEO_STATE, 'ready', '0');
+      const revision = (await this.redis.hGet(GEO_STATE, 'revision')) ?? '0';
       let pageState: string | undefined;
       do {
         const page = await this.db.execute(
@@ -457,12 +510,14 @@ export class PostIndex {
             (await this.getStatus(post.postId)) === 'ACTIVE' &&
             Math.abs(post.latitude) <= GEO_LATITUDE_LIMIT &&
             (!post.expiresAt || post.expiresAt.getTime() > Date.now())
-          )
+          ) {
             await this.redis.geoAdd(staging, {
               longitude: post.longitude,
               latitude: post.latitude,
               member: post.postId,
             });
+            geoCount++;
+          }
           count++;
         }
         pageState = page.pageState;
@@ -471,8 +526,15 @@ export class PostIndex {
       await this.redis.eval(
         `if redis.call('GET', KEYS[2]) ~= ARGV[1] then return redis.error_reply('Rebuild ownership lost') end
          local old = redis.call('GET', KEYS[1]) or ARGV[2]
-         redis.call('SET', KEYS[1], ARGV[1]); redis.call('DEL', KEYS[2]); return old`,
-        { keys: [ACTIVE_KEY, REBUILD_KEY], arguments: [staging, DEFAULT_GEO] },
+         redis.call('SET', KEYS[1], ARGV[1]); redis.call('DEL', KEYS[2]);
+         local ready = '0'
+         if (redis.call('HGET', KEYS[3], 'revision') or '0') == ARGV[3] and redis.call('SCARD', KEYS[4]) == 0 and redis.call('ZCARD', ARGV[1]) == tonumber(ARGV[4]) then ready = '1' end
+         redis.call('HSET', KEYS[3], 'key', ARGV[1], 'count', redis.call('ZCARD', ARGV[1]), 'ready', ready)
+         return old`,
+        {
+          keys: [ACTIVE_KEY, REBUILD_KEY, GEO_STATE, GEO_DIRTY],
+          arguments: [staging, DEFAULT_GEO, revision, String(geoCount)],
+        },
       );
       return count;
     } catch (error) {

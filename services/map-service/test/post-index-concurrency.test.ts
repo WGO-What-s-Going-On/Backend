@@ -22,9 +22,10 @@ describe('bounded nearby reads', () => {
         (_, n) => `post_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
       );
       vi.spyOn(index.redis, 'get').mockResolvedValue(null);
-      vi.spyOn(index.redis, 'sendCommand').mockResolvedValue(
+      vi.spyOn(index.redis, 'eval').mockResolvedValue([
+        fallback ? 0 : 1,
         fallback ? [] : ids,
-      );
+      ]);
       let active = 0;
       let peak = 0;
       vi.spyOn(index.db, 'execute').mockImplementation((async (sql: string) => {
@@ -55,9 +56,10 @@ describe('bounded nearby reads', () => {
   it('stops scheduling on failure and waits for in-flight reads before rejecting', async () => {
     const index = new PostIndex();
     vi.spyOn(index.redis, 'get').mockResolvedValue(null);
-    vi.spyOn(index.redis, 'sendCommand').mockResolvedValue(
+    vi.spyOn(index.redis, 'eval').mockResolvedValue([
+      1,
       Array.from({ length: 100 }, (_, n) => String(n)),
-    );
+    ]);
     let active = 0;
     let locations = 0;
     vi.spyOn(index.db, 'execute').mockImplementation((async (
