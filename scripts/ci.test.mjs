@@ -25,7 +25,11 @@ test('service implementation deploys only its owner but validates affected consu
     'services/user-service/src/auth/auth.service.ts',
   ]);
   assert.deepEqual(names(selected.deploy_matrix), ['user-service']);
-  assert.deepEqual(names(selected.matrix), ['http-gateway', 'user-service']);
+  assert.deepEqual(names(selected.matrix), [
+    'http-gateway',
+    'user-service',
+    'ws-gateway',
+  ]);
   assert.equal(selected.integration_user_gateway, true);
 });
 test('tests do not deploy and unrelated docs do not run service jobs', () => {
@@ -193,6 +197,10 @@ test('WS source and Map participation policy run the cross-service regression', 
   for (const file of [
     'gateways/ws-gateway/src/app.ts',
     'services/map-service/src/location.ts',
+    'gateways/ws-gateway/test/post-lifecycle.integration.test.ts',
+    'gateways/ws-gateway/test/post-events.integration.test.ts',
+    'services/post-service/test/ws-lifecycle.integration.test.ts',
+    'services/post-service/contracts/post-events.md',
   ]) {
     assert.equal(selectChanges([file]).integration_ws_post, true);
   }
@@ -208,4 +216,14 @@ test('Moderation lifecycle changes validate the Post consumer and Map terminatio
     'post-service',
   ]);
   assert.deepEqual(names(selected.deploy_matrix), ['moderation-service']);
+});
+
+test('WS user authentication changes run actual User-token contract integration', () => {
+  const selected = selectChanges([
+    'gateways/ws-gateway/src/realtime/authentication.ts',
+  ]);
+  assert.equal(selected.integration_user_gateway, true);
+  assert.ok(names(selected.matrix).includes('user-service'));
+  assert.ok(names(selected.matrix).includes('http-gateway'));
+  assert.deepEqual(names(selected.deploy_matrix), ['ws-gateway']);
 });

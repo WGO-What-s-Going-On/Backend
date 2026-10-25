@@ -35,6 +35,9 @@ suite('distributed post events', () => {
         eventId,
         eventType: 'PostCreated',
         aggregateId: 'post-recovery',
+        producer: 'post-service',
+        schemaVersion: 1,
+        occurredAt: new Date().toISOString(),
       }),
     });
     await redis.xReadGroup(
@@ -186,12 +189,16 @@ suite('distributed post events', () => {
           eventId,
           eventType,
           aggregateId: 'post-1',
+          producer: 'post-service',
+          schemaVersion: 1,
+          occurredAt: new Date().toISOString(),
           ...(eventType === 'PostCommentCreated'
             ? {
                 comment: {
                   commentId: randomUUID(),
                   postId: 'post-1',
                   content: 'hello',
+                  createdAt: new Date().toISOString(),
                 },
               }
             : {}),

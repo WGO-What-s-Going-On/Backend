@@ -1,3 +1,4 @@
+import type { PostRealtimeMessage } from './post-event-contract.js';
 export const protocolVersion = 1 as const;
 
 export interface ClientCommand {
@@ -47,18 +48,7 @@ export type ServerMessage =
       result: unknown;
       timestamp: string;
     }
-  | {
-      version: typeof protocolVersion;
-      type:
-        | 'comment.created'
-        | 'post.created'
-        | 'post.reaction.created'
-        | 'post.participant.joined';
-      eventId: string;
-      postId: string;
-      boardId: string;
-      comment?: unknown;
-    };
+  | PostRealtimeMessage;
 
 export class ProtocolError extends Error {
   constructor(

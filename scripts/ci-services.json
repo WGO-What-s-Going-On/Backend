@@ -47,6 +47,16 @@
     },
     {
       "prefixes": [
+        "gateways/ws-gateway/test/post-lifecycle.integration.test.ts",
+        "gateways/ws-gateway/test/post-events.integration.test.ts",
+        "services/post-service/test/ws-lifecycle.integration.test.ts",
+        "services/post-service/contracts/post-events.md"
+      ],
+      "services": ["post-service", "ws-gateway"],
+      "integration": "ws-post"
+    },
+    {
+      "prefixes": [
         "services/user-service/contracts/",
         "services/post-service/contracts/user.proto"
       ],
@@ -92,9 +102,12 @@
         "gateways/http-gateway/src/",
         "services/user-service/test/auth.integration.test.ts",
         "services/user-service/src/swagger.ts",
-        "services/user-service/src/config/"
+        "services/user-service/src/config/",
+        "gateways/ws-gateway/src/realtime/authentication.ts",
+        "gateways/ws-gateway/src/config.ts",
+        "gateways/ws-gateway/test/authentication.test.ts"
       ],
-      "services": ["user-service", "http-gateway"],
+      "services": ["user-service", "http-gateway", "ws-gateway"],
       "integration": "user-gateway"
     },
     {

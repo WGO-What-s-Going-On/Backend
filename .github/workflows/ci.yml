@@ -113,13 +113,15 @@ jobs:
         with:
           node-version: 24
       - run: npm install --global pnpm@10.33.0
-      - name: Install contract participants and build Gateway artifact
+      - name: Install contract participants and build both Gateway artifacts
         run: |
           node scripts/ci-run.mjs http-gateway install
           node scripts/ci-run.mjs http-gateway build
+          node scripts/ci-run.mjs ws-gateway install
+          node scripts/ci-run.mjs ws-gateway build
           node scripts/ci-run.mjs user-service install
       - run: node scripts/ci-dependencies.mjs start user-service
-      - name: Exercise actual Gateway to User authentication flow
+      - name: Exercise User token authentication through HTTP and production WS
         working-directory: services/user-service
         env:
           RUN_GATEWAY_INTEGRATION: '1'
@@ -146,12 +148,12 @@ jobs:
           node scripts/ci-run.mjs map-service build
           node scripts/ci-run.mjs post-service install
       - run: node scripts/ci-dependencies.mjs start post-service
-      - name: Exercise actual WS to Post participation and Map policy
+      - name: Exercise WS participation, Map policy, and Post lifecycle delivery
         working-directory: services/post-service
         env:
           RUN_INTEGRATION: '1'
           RUN_WS_INTEGRATION: '1'
-        run: pnpm exec vitest run test/post.integration.test.ts
+        run: pnpm exec vitest run test/post.integration.test.ts test/ws-lifecycle.integration.test.ts
       - if: always()
         run: node scripts/ci-dependencies.mjs stop post-service
 

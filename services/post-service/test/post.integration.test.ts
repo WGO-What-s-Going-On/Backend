@@ -1248,7 +1248,17 @@ suite('post creation integration', () => {
           .expect(201);
         const boardId = created.body.postId;
         await app.listen(0, '127.0.0.1');
-        const config = loadConfig();
+        const jwtEnv = { ...process.env };
+        let config;
+        try {
+          process.env.JWT_ACCESS_SECRET =
+            'ws-participation-test-secret-at-least-32-bytes';
+          process.env.JWT_ACCESS_ISSUER = 'wgo-user-service';
+          process.env.JWT_ACCESS_AUDIENCE = 'wgo-api';
+          config = loadConfig();
+        } finally {
+          process.env = jwtEnv;
+        }
         config.postService.url = await app.getUrl();
         config.postService.servicePrivateJwk = JSON.stringify({
           ...keys.privateKey.export({ format: 'jwk' }),

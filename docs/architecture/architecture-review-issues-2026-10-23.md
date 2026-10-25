@@ -7,7 +7,7 @@
 - 최초 검토 기준 커밋: `4104986a7a9f12f13cd451043a78cb561d7b1f75`
 - 범위: HTTP Gateway, WS Gateway, User, Post, Map, Notification, Moderation 및 관련 계약·CI
 - 최신화: 2026-10-24, 구현 확인 기준 `ab8c792` (인증 `3e284a1`, WS·CI/CD `57a558f`, Post CI 의존성 보완 `ab8c792`).
-- 상태: 01·02는 해결(구현·로컬 검증 완료), 05·11은 진행 중이며 나머지는 미해결. 이 문서의 ID는 내부 추적용이며 GitHub Issue 생성이나 담당자 배정을 의미하지 않는다.
+- 상태: 01·02는 해결(구현·로컬 검증 완료), 03·05·11은 진행 중이며 나머지는 미해결. 이 문서의 ID는 내부 추적용이며 GitHub Issue 생성이나 담당자 배정을 의미하지 않는다.
 - 기준: [전체 아키텍처](../../ARCHITECTURE.md), [프로젝트 지침](../../AGENTS.md), [서비스 인증 계약](../contracts/service-authentication.md)
 
 ## 우선순위와 완료 관리
@@ -26,10 +26,10 @@ Critical과 High는 관련 기능의 병합·운영 공개 전 차단 이슈로 
 | ----------- | ---------- | -------- | ---------------------------------------------- | ----------------------------------- | ------ |
 | WGO-ARCH-01 | Critical   | P0       | 공개 사용자 API의 신원 헤더 신뢰 제거          | HTTP Gateway, User                  | 해결 |
 | WGO-ARCH-02 | High       | P0       | WS 참여와 댓글 작성의 도메인 인가 연결         | WS Gateway, Post, Map               | 해결 |
-| WGO-ARCH-03 | High       | P1       | 사용자 JWT 발급과 운영 WS 검증 계약 통일       | User, HTTP Gateway, WS Gateway      | 미해결 |
+| WGO-ARCH-03 | High       | P1       | 사용자 JWT 발급과 운영 WS 검증 계약 통일       | User, HTTP Gateway, WS Gateway      | 진행 중 |
 | WGO-ARCH-04 | High       | P1       | Map 검색의 페이지 누락과 과도한 순차 조회 수정 | Map, Post                           | 미해결 |
 | WGO-ARCH-05 | High       | P1       | Moderation 결정의 Post 원본 적용 연결          | Moderation, Post, Map, Notification | 진행 중 |
-| WGO-ARCH-06 | High       | P1       | 삭제·만료·댓글 삭제의 실시간 상태 반영         | WS Gateway, Post                    | 미해결 |
+| WGO-ARCH-06 | High       | P1       | 삭제·만료·댓글 삭제의 실시간 상태 반영         | WS Gateway, Post                    | 진행 중 |
 | WGO-ARCH-07 | Medium     | P1       | Notification 전송 재시도의 전체 스캔 제거      | Notification                        | 미해결 |
 | WGO-ARCH-08 | Medium     | P1       | Moderation 전체 평가와 단일 JSON 증가 제한     | Moderation                          | 미해결 |
 | WGO-ARCH-09 | Medium     | P1       | WS 수신 큐와 송신 버퍼 상한 적용               | WS Gateway                          | 미해결 |
@@ -103,17 +103,24 @@ Post 129개 및 WS 18개 테스트가 통과했으며 실제 WS→Post→Map RPC
 
 **심각도 High · 우선순위 P1 · 로그인과 운영 WS 연동 공개 차단**
 
-User는 HS256 Access Token을 발급한다. 운영 WS는 JWKS를 필수로 요구하고 RS256 또는 ES256만 허용한다. issuer와 audience를 맞춰도 서명 알고리즘이 호환되지 않는다. 실제 User 발급 토큰이 로컬 WS 검증은 통과하고 JWKS 검증 경로에서는 거부되는 것을 재현했다.
+**최초 발견:** User는 HS256 Access Token을 발급한다. 운영 WS는 JWKS를 필수로 요구하고 RS256 또는 ES256만 허용한다. issuer와 audience를 맞춰도 서명 알고리즘이 호환되지 않는다. 실제 User 발급 토큰이 로컬 WS 검증은 통과하고 JWKS 검증 경로에서는 거부되는 것을 재현했다.
 
 근거: [User 토큰 발급](../../services/user-service/src/auth/access-token.service.ts) 22행, [WS 토큰 검증](../../gateways/ws-gateway/src/realtime/authentication.ts) 47행, [WS 운영 설정](../../gateways/ws-gateway/src/config.ts).
 
 사용자 토큰의 알고리즘·issuer·audience·필수 claim·키 배포 및 교체 계약을 통일한다. 사용자 인증과 서비스 간 호출자 인증은 구분한다. WGO-ARCH-01과 함께 설계하되, 계약 변경 시 기존 토큰의 전환 정책도 정한다.
 
-- [ ] 실제 로그인으로 발급한 토큰으로 운영 설정의 WS 연결에 성공한다.
-- [ ] HTTP Gateway도 동일한 사용자 토큰 계약을 검증한다.
+- [x] 실제 로그인으로 발급한 토큰으로 운영 설정의 WS 연결에 성공한다.
+- [x] HTTP Gateway도 동일한 사용자 토큰 계약을 검증한다.
 - [ ] 키 교체 중 신·구 토큰의 허용 기간과 만료 동작을 검증한다.
-- [ ] 잘못된 알고리즘·issuer·audience·만료 토큰을 거부한다.
+- [x] 잘못된 알고리즘·issuer·audience·만료 토큰을 거부한다.
 - [ ] 계정 정지·탈퇴와 이미 연결된 소켓의 처리 정책을 명시한다.
+
+**2026-10-25 사용자 JWT 계약 통일:** User의 기존 HS256 발급 로직과 HTTP Gateway 검증은 유지하고,
+WS도 HS256·typ=JWT·sub/sid/iat/exp·동일 issuer/audience를 검증하도록 변경했다.
+개발·운영 모두 JWT_ACCESS_SECRET/ISSUER/AUDIENCE를 명시하며 원격 JWKS를 사용하지 않는다.
+실제 User 로그인 토큰으로 HTTP API와 운영 설정 WS의 Bearer·쿠키 접속을 검증했다.
+서비스 간 ES256 인증은 별도로 유지한다. 연결 중 만료·즉시 세션 철회·키 교체 및 AWS 검증은
+이번 범위에서 제외했으므로 03 전체를 해결 처리하지 않는다.
 
 ### WGO-ARCH-04 Map 검색의 페이지 누락과 과도한 순차 조회 수정
 
@@ -178,15 +185,27 @@ Moderation 생산자 endpoint/DB 설정이 필요하다. [수신 계약](../../s
 
 **심각도 High · 우선순위 P1 · 실시간 상태 동기화 차단**
 
-WS 이벤트 소비자는 생성 계열 4종을 전달하고 그 밖의 이벤트는 ACK한다. Post 삭제·만료·댓글 삭제가 기존 Room과 클라이언트 상태에 반영되지 않는다. 이것이 Post의 종료 후 쓰기 검증까지 모두 우회한다는 뜻은 아니지만, 연결 중 화면과 구독 상태는 오래된 상태로 남는다.
+최초 점검 당시 WS 이벤트 소비자는 생성 계열 4종만 전달하고 Post 삭제·만료·댓글 삭제를 ACK하여 버렸다.
+2026-10-25 현재 브랜치에서 세 종료·삭제 이벤트 처리를 구현했다. 다른 Room은 유지하고 종료된 Room만 해제한다.
+참여 인가 중 종료되는 경쟁 조건을 차단하고, Redis 소비자 처리 상태로 중복·역순 이벤트와 Gateway 재시작을 보호한다.
 
-근거: [WS 이벤트 분기](../../gateways/ws-gateway/src/realtime/post-events.ts) 150행, [Room 관리](../../gateways/ws-gateway/src/realtime/subscription-manager.ts).
+근거: [WS 이벤트 처리](../../gateways/ws-gateway/src/realtime/post-events.ts),
+[메시지 계약과 배포 절차](../../gateways/ws-gateway/README.md),
+[실제 Post Outbox 연결 검증](../../services/post-service/test/ws-lifecycle.integration.test.ts).
 
-- [ ] 삭제·만료·댓글 삭제 및 필요한 반응 취소의 WS 메시지 계약을 정의한다.
-- [ ] 종료 게시물의 기존 Room 처리와 클라이언트 통지 정책을 구현한다.
-- [ ] 삭제 후 늦게 도착한 생성 이벤트가 클라이언트 상태를 되살리지 않도록 버전을 처리한다.
-- [ ] 여러 Gateway 인스턴스에서 동일하게 반영되는지 검증한다.
-- [ ] 재연결 후 원본 상태 조회로 누락 이벤트를 복구한다.
+- [x] 삭제·만료·댓글 삭제의 WS 메시지 계약을 정의한다. 삭제된 본문·제재 감사 정보는 전달하지 않는다.
+- [x] 종료 게시물의 기존 Room 처리와 클라이언트 통지 정책을 구현한다.
+- [x] 삭제 후 늦게 도착한 생성 이벤트가 상태를 되살리지 않도록 버전·삭제 표식을 처리한다.
+- [x] 두 Gateway 인스턴스와 Gateway 재시작에서 동일하게 반영되는지 검증한다.
+- [x] Pub/Sub 단절 시 1012로 재연결을 유도하고, 새 연결에서 종료 게시물 재참여가 거부됨을 검증한다.
+- [ ] 프런트엔드의 재연결 → 참여 → 원본 조회와 화면 갱신을 실제 클라이언트에서 확인한다.
+- [ ] 필요한 반응 취소의 실시간 계약·처리는 별도 범위로 정한다.
+
+로컬 검증: WS 테스트 51개, 실제 Post·Outbox·Redis·WS 통합 테스트를 포함한 교차 서비스 테스트 21개 통과.
+새 lifecycle 통합 테스트는 위치 인가를 fixture로 대체하며 기존 교차 서비스 테스트의 Map 정책 검증과 구분한다.
+Moderation 구현·버전 계약은 변경하지 않았다. AWS 운영 배포와 실제 프런트엔드 검증 완료를 뜻하지 않는다.
+최초 전환은 기존 Consumer를 모두 중지한 뒤 교체해야 하며, 이미 ACK된 종료 이벤트는 보존 이벤트 재생 또는
+원본 대조가 필요하다. Redis 처리 상태 전체 유실의 자동 복구·표식 보존 정책은 후속 운영 작업이다.
 
 ## 성능과 검증 개선 이슈
 

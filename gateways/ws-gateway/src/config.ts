@@ -17,7 +17,6 @@ export interface AppConfig {
     issuer: string;
     audience: string;
     cookieName: string;
-    jwksUrl?: string;
   };
   postService: {
     url: string;
@@ -67,24 +66,14 @@ export function loadConfig(): AppConfig {
     throw new Error('NODE_ENV must be development, test, or production');
   }
 
-  const jwtSecret =
-    process.env.JWT_SECRET ??
-    (nodeEnv === 'production' ? '' : 'local-development-secret-change-me');
-  if (
-    nodeEnv === 'production' &&
-    (!process.env.JWT_JWKS_URL ||
-      !process.env.JWT_ISSUER ||
-      !process.env.JWT_AUDIENCE)
-  ) {
-    throw new Error(
-      'JWT_JWKS_URL, JWT_ISSUER and JWT_AUDIENCE are required in production',
-    );
-  }
-  if (nodeEnv !== 'production' && jwtSecret.length < 32) {
-    throw new Error(
-      'JWT_SECRET must contain at least 32 characters in development',
-    );
-  }
+  // 개발·운영 모두 User 발급 설정을 사용한다. 암묵적인 로컬 키는 인증 불일치를 숨긴다.
+  const jwtSecret = process.env.JWT_ACCESS_SECRET ?? '';
+  const jwtIssuer = process.env.JWT_ACCESS_ISSUER ?? '';
+  const jwtAudience = process.env.JWT_ACCESS_AUDIENCE ?? '';
+  if (!jwtSecret.trim() || Buffer.byteLength(jwtSecret) < 32)
+    throw new Error('JWT_ACCESS_SECRET must contain at least 32 bytes');
+  if (!jwtIssuer.trim() || !jwtAudience.trim())
+    throw new Error('JWT_ACCESS_ISSUER and JWT_ACCESS_AUDIENCE are required');
   const serviceSecret =
     process.env.WS_SERVICE_JWT_SECRET ??
     (nodeEnv === 'production'
@@ -130,12 +119,9 @@ export function loadConfig(): AppConfig {
     },
     jwt: {
       secret: jwtSecret,
-      issuer: process.env.JWT_ISSUER ?? 'wgo-user-service',
-      audience: process.env.JWT_AUDIENCE ?? 'wgo-realtime-gateway',
+      issuer: jwtIssuer,
+      audience: jwtAudience,
       cookieName: process.env.JWT_COOKIE_NAME ?? 'wgo_access_token',
-      ...(process.env.JWT_JWKS_URL
-        ? { jwksUrl: process.env.JWT_JWKS_URL }
-        : {}),
     },
     postService: {
       url: process.env.POST_SERVICE_URL ?? 'http://127.0.0.1:3002',
