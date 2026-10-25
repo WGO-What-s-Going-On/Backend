@@ -52,7 +52,7 @@ Set `REDIS_URL` to the **same Redis instance as Post Service** so Map can consum
 
 For `PostCreated`, Stream fields are `eventId`, `eventType`, and `data`. `data` is JSON with `eventId`, `eventType: "PostCreated"`, `schemaVersion: 1`, `producer: "post-service"`, `aggregateId`, and `post: { postId, authorId, latitude, longitude, radiusM, category, expiresAt }`. IDs in the Stream fields and JSON must match. `expiresAt` is an ISO date or `null`. The [event contract](./contracts/post-events.md) defines the complete shape and Dead Letter fields. Invalid events go to `map:post:dead`; other event types are ACKed. After five failed deliveries, the original Stream ID, event ID, payload and error are written to that Dead Letter Stream before ACK. Check the logged `post-map metrics` every 30 seconds for Pending count, oldest idle time, processing failures, and Dead Letter count.
 
-Cassandra `post_locations` is Map's location recovery source and records `event_id`; `post_status` is its local status projection. `posts_by_cell` is an H3 cell and 16 shard lookup table. H3 resolution is fixed at **8**; changing it requires rebuilding the cell index. A successful creation delivery initializes status, writes the source and cell rows, writes eligible coordinates to Redis GEO, then ACKs. Status events update the projection and remove the ID from current and rebuilding GEO keys before ACK. Redis GEO is a derived index; reads always confirm Cassandra status.
+Cassandra `post_locations` is Map's location recovery source and records `event_id`; `post_status` is its local status projection. `posts_by_cell` is an H3 cell and 16 shard lookup table. H3 resolution is fixed at **8**; changing it requires rebuilding the cell index. Creation initializes status and writes the source, then indexes only ACTIVE, unexpired posts in Cell and eligible GEO coordinates. A status recheck after index writes compensates concurrent termination. Status events update the projection, remove current and rebuilding GEO entries, look up cell/shard in the source and delete that exact Cell row before ACK. Missing source locations are tolerated when termination precedes creation; late creation performs cleanup. Location and status source rows are retained. Cross-store updates are not atomic; failures are repaired through Pending replay or DLQ recovery. Redis GEO is a derived index; reads always confirm Cassandra status.
 
 ### 게시물 생성부터 공간 인덱스까지
 
@@ -73,7 +73,7 @@ sequenceDiagram
     S->>M: XREADGROUP PostCreated 전달
     Note over M: 계약 검증 후 좌표로 H3 cell(해상도 8) 계산<br/>postId 해시로 shard(0~15) 계산
     M->>C: 1. post_locations 원본 저장
-    M->>C: 2. posts_by_cell(cell, shard) 갱신
+    M->>C: 2. ACTIVE·미만료인 경우 posts_by_cell 갱신
     M->>G: 3. 활성 GEO 키에 GEOADD
     M->>S: 4. XACK
     Note over M,S: 1~3단계 실패 시 Pending 유지<br/>XAUTOCLAIM 후 같은 이벤트 재처리
@@ -83,7 +83,7 @@ H3는 좌표를 cell ID로 변환하는 계산이며 별도의 저장소가 아�
 
 Outbox 발행 실패 시 Worker는 **같은 Outbox 행과 같은 `eventId`**로 재시도한다. 새 도메인 이벤트를 만들지 않는다. `XADD`는 성공했지만 `PUBLISHED` 기록이 실패하면 같은 `eventId`가 다른 Stream ID로 다시 발행될 수 있다. Map은 게시물 ID의 동일한 값을 재기록해 이 중복을 처리한다. Map의 저장 실패는 Post Outbox를 다시 생성하지 않으며, Map Consumer의 Pending 회수와 제한된 재시도로 복구한다. 이미 `PUBLISHED`로 기록한 뒤 Stream 데이터 자체가 유실된 경우에는 자동 재발행되지 않으며 Post 원본 대조와 재발행이 별도로 필요하다.
 
-To restore a lost GEO index or repair cell rows, run `pnpm rebuild:posts` with the same Cassandra and Redis settings while consumers remain running. It pages through `post_locations`, upserts cell rows and builds a separate `map:posts:geo:build:*` key. Consumer GEO writes go to both current and build keys during the scan. A Redis script switches `map:posts:geo:active` after the scan; readers must resolve that pointer, falling back to `map:posts:geo:v1` if absent. The old GEO key may then be removed. Only one rebuild runs at a time. If the command is killed, inspect `map:posts:geo:rebuild` and remove that marker after confirming no rebuild is running; then rerun the command. Startup does not scan Cassandra. If the Stream event was lost before Map consumed it, reconcile against Post Service's source data and republish separately.
+To restore a lost GEO index or repair cell rows, run `pnpm rebuild:posts` with the same Cassandra and Redis settings while consumers remain running. It pages through `post_locations`, upserts active/unexpired cell rows, deletes terminal or expired cell rows, and builds a separate `map:posts:geo:build:*` key. Consumer GEO writes go to both current and build keys during the scan. A Redis script switches `map:posts:geo:active` after the scan; readers must resolve that pointer, falling back to `map:posts:geo:v1` if absent. The old GEO key may then be removed. Only one rebuild runs at a time. If the command is killed, inspect `map:posts:geo:rebuild` and remove that marker after confirming no rebuild is running; then rerun the command. Startup does not scan Cassandra. Run rebuild after rollout to clean legacy terminal Cell rows. This source-based scan cannot find orphan Cell rows whose location source is missing. No new expiration timer is added: cleanup happens during event processing or rebuild; searches always filter expiry. Source retention remains a separate policy. If the Stream event was lost before Map consumed it, reconcile against Post Service's source data and republish separately.
 
 ```mermaid
 flowchart LR

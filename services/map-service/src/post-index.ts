@@ -340,12 +340,7 @@ export class PostIndex {
       ],
       { prepare: true },
     );
-    await this.writeCell(post);
-    if (
-      (await this.getStatus(post.postId)) === 'ACTIVE' &&
-      (!post.expiresAt || post.expiresAt.getTime() > Date.now())
-    )
-      await this.writeGeo(post);
+    await this.refreshSpatial(post);
     await this.finishWrite(post.eventId);
   }
 
@@ -377,7 +372,26 @@ export class PostIndex {
         [event.status, event.occurredAt, event.postId, status],
         { prepare: true },
       );
-    // ACK 전에 현재 키와 재구축 키 모두에서 제거한다. 실패 시 Pending에서 재시도한다.
+    // GEO를 먼저 제거하고 Cell 삭제까지 성공한 뒤에만 미완료 토큰을 해제한다.
+    await this.removeGeo(event.postId);
+    const location = (
+      await this.db.execute(
+        'SELECT cell, shard FROM post_locations WHERE post_id = ?',
+        [event.postId],
+        { prepare: true },
+      )
+    ).first();
+    // 종료 이벤트가 생성보다 먼저 왔다면 위치가 없다. 늦은 생성의 refreshSpatial이 정리한다.
+    if (location)
+      await this.removeCell({
+        postId: event.postId,
+        cell: location.get('cell'),
+        shard: location.get('shard'),
+      });
+    await this.finishWrite(token);
+  }
+
+  private async removeGeo(postId: string): Promise<void> {
     await this.redis.eval(
       `${beforeGeoMutation}
        redis.call('ZREM', active, ARGV[2])
@@ -386,10 +400,44 @@ export class PostIndex {
        ${afterGeoMutation}`,
       {
         keys: [ACTIVE_KEY, REBUILD_KEY, GEO_STATE],
-        arguments: [DEFAULT_GEO, event.postId],
+        arguments: [DEFAULT_GEO, postId],
       },
     );
-    await this.finishWrite(token);
+  }
+
+  private async removeCell(
+    post: Pick<PostCreated, 'postId' | 'cell' | 'shard'>,
+  ): Promise<void> {
+    await this.db.execute(
+      'DELETE FROM posts_by_cell WHERE cell = ? AND shard = ? AND post_id = ?',
+      [post.cell, post.shard, post.postId],
+      { prepare: true },
+    );
+  }
+
+  private async refreshSpatial(
+    post: PostCreated,
+    staging?: string,
+  ): Promise<boolean> {
+    const active = async () =>
+      (await this.getStatus(post.postId)) === 'ACTIVE' &&
+      (!post.expiresAt || post.expiresAt.getTime() > Date.now());
+    if (await active()) {
+      await this.writeCell(post);
+      if (staging) {
+        if (Math.abs(post.latitude) <= GEO_LATITUDE_LIMIT)
+          await this.redis.geoAdd(staging, {
+            longitude: post.longitude,
+            latitude: post.latitude,
+            member: post.postId,
+          });
+      } else await this.writeGeo(post);
+      // 상태 확인과 인덱스 쓰기는 원자적이지 않다. 중간에 종료됐다면 쓰기 후 다시 제거한다.
+      if (await active()) return Math.abs(post.latitude) <= GEO_LATITUDE_LIMIT;
+    }
+    await this.removeGeo(post.postId);
+    await this.removeCell(post);
+    return false;
   }
 
   async writeCell(post: PostCreated): Promise<void> {
@@ -623,24 +671,12 @@ export class PostIndex {
             cell: row.get('cell'),
             shard: row.get('shard'),
           };
-          await this.writeCell(post);
           await this.db.execute(
             'INSERT INTO post_status (post_id, status) VALUES (?, ?) IF NOT EXISTS',
             [post.postId, 'ACTIVE'],
             { prepare: true },
           );
-          if (
-            (await this.getStatus(post.postId)) === 'ACTIVE' &&
-            Math.abs(post.latitude) <= GEO_LATITUDE_LIMIT &&
-            (!post.expiresAt || post.expiresAt.getTime() > Date.now())
-          ) {
-            await this.redis.geoAdd(staging, {
-              longitude: post.longitude,
-              latitude: post.latitude,
-              member: post.postId,
-            });
-            geoCount++;
-          }
+          if (await this.refreshSpatial(post, staging)) geoCount++;
           count++;
         }
         pageState = page.pageState;

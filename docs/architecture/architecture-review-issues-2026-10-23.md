@@ -155,7 +155,9 @@ WS도 HS256·typ=JWT·sub/sid/iat/exp·동일 issuer/audience를 검증하도록
 [실제 DB 호출 수 비교](../performance/map-fallback-sharing-2026-10-25/README.md)에 검증 범위를 기록했다.
 요청별 총 예산과 gRPC deadline/취소 전달을 구현했고, 공유 조회의 남은 대기자를 보호한다.
 [밀집 지역 예산 측정](../performance/map-budget-2026-10-25/README.md)에 실제 DB 호출 수와 중단 결과를 기록했다.
-전역 동시성·Cell 보존 정책과 동일 개수의 임의 데이터 변조 탐지는 아직 미해결이다.
+삭제·만료 이벤트의 현재/재구축 Redis GEO 및 Cassandra Cell 행 정리를 구현했다. 늦은 생성·재구축과 종료의 경합은 기록 후 상태 재확인으로 보상하고, 정리 실패는 재처리한다. `rebuild:posts`는 기존 종료·만료 Cell 행도 정리한다. 위치 원본과 상태는 유지한다.
+
+전역 동시성, 원본 보존 및 원본 없는 orphan Cell 정리 정책, 동일 개수의 임의 데이터 변조 탐지는 아직 미해결이다.
 따라서 이 항목 전체를 해결 처리하지 않는다.
 
 ### WGO-ARCH-05 Moderation 결정의 Post 원본 적용 연결

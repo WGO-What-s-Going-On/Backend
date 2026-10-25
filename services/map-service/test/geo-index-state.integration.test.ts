@@ -12,7 +12,13 @@ import {
   it,
   vi,
 } from 'vitest';
-import { PostIndex, type PostCreated } from '../src/post-index.js';
+import {
+  PostIndex,
+  POST_GROUP,
+  POST_STREAM,
+  type PostCreated,
+} from '../src/post-index.js';
+import { PostConsumer } from '../src/post-consumer.js';
 import { GEO_STATE, GEO_DIRTY } from '../src/geo-index-state.js';
 
 const suite = process.env.RUN_INTEGRATION === '1' ? describe : describe.skip;
@@ -73,6 +79,194 @@ suite('GEO completeness and shared fallback', () => {
     await admin.shutdown();
     vi.unstubAllEnvs();
   });
+
+  const cellRows = async (p: PostCreated) =>
+    (
+      await index.db.execute(
+        'SELECT post_id FROM posts_by_cell WHERE cell = ? AND shard = ? AND post_id = ?',
+        [p.cell, p.shard, p.postId],
+        { prepare: true },
+      )
+    ).rowLength;
+  const expectRemoved = async (p: PostCreated) => {
+    expect(await cellRows(p)).toBe(0);
+    const key =
+      (await index.redis.get('map:posts:geo:active')) ?? 'map:posts:geo:v1';
+    expect(await index.redis.geoPos(key, p.postId)).toEqual([null]);
+    expect(
+      (
+        await index.db.execute(
+          'SELECT post_id FROM post_locations WHERE post_id = ?',
+          [p.postId],
+          { prepare: true },
+        )
+      ).rowLength,
+    ).toBe(1);
+  };
+
+  it.each(['DELETED', 'EXPIRED'] as const)(
+    'cleans Cell and both GEO keys for %s, duplicates and late creation',
+    async (status) => {
+      const p = post(),
+        keep = post();
+      await index.redis.set('map:posts:geo:rebuild', 'map:posts:test-staging');
+      await index.write(p);
+      await index.write(keep);
+      const event = { postId: p.postId, status, occurredAt: new Date() };
+      await other.transition(event);
+      await other.transition(event);
+      await index.write(p);
+      await expectRemoved(p);
+      expect(
+        await index.redis.geoPos('map:posts:test-staging', p.postId),
+      ).toEqual([null]);
+      expect(await cellRows(keep)).toBe(1);
+      expect(await index.getStatus(p.postId)).toBe(status);
+    },
+  );
+
+  it('handles termination before the source location exists', async () => {
+    const p = post();
+    await other.transition({
+      postId: p.postId,
+      status: 'DELETED',
+      occurredAt: new Date(),
+    });
+    await index.write(p);
+    await expectRemoved(p);
+  });
+
+  it.each(['cell', 'geo'] as const)(
+    'repairs termination before the concurrent %s write',
+    async (stage) => {
+      const p = post();
+      const original = (
+        stage === 'cell' ? index.writeCell : index.writeGeo
+      ).bind(index);
+      const method = stage === 'cell' ? 'writeCell' : 'writeGeo';
+      vi.spyOn(index, method).mockImplementation(async (value) => {
+        await other.transition({
+          postId: p.postId,
+          status: 'EXPIRED',
+          occurredAt: new Date(),
+        });
+        await original(value);
+      });
+      await index.write(p);
+      await expectRemoved(p);
+    },
+  );
+
+  it('rebuild removes legacy terminal and expired Cell rows while keeping active rows', async () => {
+    const terminal = post(),
+      expired = post(),
+      active = post();
+    for (const p of [terminal, expired, active]) await index.write(p);
+    await other.transition({
+      postId: terminal.postId,
+      status: 'DELETED',
+      occurredAt: new Date(),
+    });
+    await index.writeCell(terminal); // Simulate an old version retaining the terminal row.
+    await index.db.execute(
+      'UPDATE post_locations SET expires_at = ? WHERE post_id = ?',
+      [new Date(Date.now() - 1000), expired.postId],
+      { prepare: true },
+    );
+    await index.rebuild();
+    await expectRemoved(terminal);
+    await expectRemoved(expired);
+    expect(await cellRows(active)).toBe(1);
+    expect((await index.nearby(query)).items.map((p) => p.postId)).toEqual([
+      active.postId,
+    ]);
+  });
+
+  it('rebuild compensates a terminal event arriving before staging GEO insertion', async () => {
+    const p = post();
+    await index.write(p);
+    const add = index.redis.geoAdd.bind(index.redis);
+    let transitioned = false;
+    vi.spyOn(index.redis, 'geoAdd').mockImplementation((async (
+      ...args: Parameters<typeof add>
+    ) => {
+      if (!transitioned) {
+        transitioned = true;
+        await other.transition({
+          postId: p.postId,
+          status: 'DELETED',
+          occurredAt: new Date(),
+        });
+      }
+      return add(...args);
+    }) as any);
+    await index.rebuild();
+    await expectRemoved(p);
+    expect(await index.redis.hGet(GEO_STATE, 'ready')).toBe('0');
+  });
+
+  it.each(['cell', 'geo'] as const)(
+    'keeps Pending on %s cleanup failure and repairs by replay',
+    async (stage) => {
+      const p = post();
+      await index.write(p);
+      const consumer = new PostConsumer(index);
+      await consumer.initialize();
+      const eventId = `evt_${randomUUID()}`;
+      await index.redis.xAdd(POST_STREAM, '*', {
+        eventId,
+        eventType: 'PostDeleted',
+        data: JSON.stringify({
+          eventId,
+          eventType: 'PostDeleted',
+          schemaVersion: 1,
+          producer: 'post-service',
+          aggregateId: p.postId,
+          occurredAt: new Date().toISOString(),
+        }),
+      });
+      const batches = (await index.redis.xReadGroup(
+        POST_GROUP,
+        'cell-cleanup',
+        { key: POST_STREAM, id: '>' },
+        { COUNT: 1 },
+      )) as any;
+      const entry = batches[0].messages[0];
+      const execute = index.db.execute.bind(index.db),
+        evalRedis = index.redis.eval.bind(index.redis);
+      const spy =
+        stage === 'cell'
+          ? vi.spyOn(index.db, 'execute').mockImplementation((async (
+              ...args: Parameters<typeof execute>
+            ) => {
+              if (args[0].startsWith('DELETE FROM posts_by_cell'))
+                throw new Error('cell delete unavailable');
+              return execute(...args);
+            }) as any)
+          : vi.spyOn(index.redis, 'eval').mockImplementation((async (
+              ...args: Parameters<typeof evalRedis>
+            ) => {
+              if (String(args[0]).includes("redis.call('ZREM'"))
+                throw new Error('geo removal unavailable');
+              return evalRedis(...args);
+            }) as any);
+      await consumer.process(entry);
+      expect((await consumer.metrics()).pending).toBe(1);
+      expect(await index.redis.sCard(GEO_DIRTY)).toBe(1);
+      spy.mockRestore();
+      const claimed = await index.redis.xAutoClaim(
+        POST_STREAM,
+        POST_GROUP,
+        'cell-recovery',
+        0,
+        '0-0',
+      );
+      await consumer.process(claimed.messages[0]!);
+      expect((await consumer.metrics()).pending).toBe(0);
+      expect(await index.redis.sCard(GEO_DIRTY)).toBe(0);
+      await expectRemoved(p);
+    },
+  );
 
   it('shares in-flight partition reads, but repeats a later independent request', async () => {
     const execute = vi.spyOn(index.db, 'execute');
