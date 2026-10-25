@@ -144,6 +144,35 @@ export function parsePostCreated(
   };
 }
 
+// 요청당 동시에 검증하는 후보/파티션 수다. 총 조회량을 잘라 결과를 누락시키지는 않는다.
+const NEARBY_READ_CONCURRENCY = 8;
+async function forEachNearby<T>(
+  values: T[],
+  visit: (value: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  let failed = false;
+  let failure: unknown;
+  await Promise.all(
+    Array.from(
+      { length: Math.min(values.length, NEARBY_READ_CONCURRENCY) },
+      async () => {
+        while (!failed && next < values.length) {
+          const value = values[next++]!;
+          try {
+            await visit(value);
+          } catch (error) {
+            if (!failed) failure = error;
+            failed = true;
+          }
+        }
+      },
+    ),
+  );
+  // 실패 후 새 작업은 시작하지 않되 진행 중인 작업은 정리한 뒤 오류를 전파한다.
+  if (failed) throw failure;
+}
+
 export class PostIndex {
   readonly db = new cassandra.Client({
     contactPoints: [process.env.CASSANDRA_HOST ?? 'localhost'],
@@ -296,24 +325,26 @@ export class PostIndex {
     let items = await this.filterCandidates(candidates, center, query.radiusM);
     if (items.length === 0) {
       const ids = new Set<string>();
-      for (const cell of gridDisk(
+      const partitions = gridDisk(
         latLngToCell(query.latitude, query.longitude, 8),
         2,
-      ))
-        for (let shard = 0; shard < 16; shard++) {
-          // pageState는 같은 Cell·Shard 안에서만 이어 쓴다. 후속 페이지 실패는
-          // 상위로 전파하여 일부 후보만 읽은 결과를 정상 응답으로 반환하지 않는다.
-          let pageState: string | undefined;
-          do {
-            const page = await this.db.execute(
-              'SELECT post_id FROM posts_by_cell WHERE cell = ? AND shard = ?',
-              [cell, shard],
-              { prepare: true, pageState, autoPage: false },
-            );
-            for (const row of page.rows) ids.add(row.get('post_id'));
-            pageState = page.pageState;
-          } while (pageState);
-        }
+      ).flatMap((cell) =>
+        Array.from({ length: 16 }, (_, shard) => ({ cell, shard })),
+      );
+      await forEachNearby(partitions, async ({ cell, shard }) => {
+        // pageState는 같은 Cell·Shard 안에서만 이어 쓴다. 후속 페이지 실패는
+        // 상위로 전파하여 일부 후보만 읽은 결과를 정상 응답으로 반환하지 않는다.
+        let pageState: string | undefined;
+        do {
+          const page = await this.db.execute(
+            'SELECT post_id FROM posts_by_cell WHERE cell = ? AND shard = ?',
+            [cell, shard],
+            { prepare: true, pageState, autoPage: false },
+          );
+          for (const row of page.rows) ids.add(row.get('post_id'));
+          pageState = page.pageState;
+        } while (pageState);
+      });
       items = await this.filterCandidates([...ids], center, query.radiusM);
     }
     items.sort(
@@ -370,7 +401,7 @@ export class PostIndex {
     radiusM: number,
   ): Promise<NearbyResult['items']> {
     const items: NearbyResult['items'] = [];
-    for (const id of new Set(ids)) {
+    await forEachNearby([...new Set(ids)], async (id) => {
       const row = (
         await this.db.execute(
           'SELECT latitude, longitude, expires_at FROM post_locations WHERE post_id = ?',
@@ -378,15 +409,15 @@ export class PostIndex {
           { prepare: true },
         )
       ).first();
-      if (!row || (await this.getStatus(id)) !== 'ACTIVE') continue;
+      if (!row || (await this.getStatus(id)) !== 'ACTIVE') return;
       const expiresAt = row.get('expires_at') as Date | null;
-      if (expiresAt && expiresAt.getTime() <= Date.now()) continue;
+      if (expiresAt && expiresAt.getTime() <= Date.now()) return;
       const distance = distanceM(center, {
         latitude: row.get('latitude'),
         longitude: row.get('longitude'),
       });
       if (distance <= radiusM) items.push({ postId: id, distanceM: distance });
-    }
+    });
     return items;
   }
 
