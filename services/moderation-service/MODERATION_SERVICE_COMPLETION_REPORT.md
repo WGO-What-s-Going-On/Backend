@@ -104,7 +104,7 @@ Tests refuse nonempty DBs and delete only owned keys. No FLUSH command is used.
 
 | Check | Result |
 | --- | --- |
-| Unit/adapter/consumer/scheduler/health | 49 passed |
+| Unit/adapter/consumer/scheduler/health | 50 passed |
 | Regular real Redis integration | 50 passed, opt-in restart excluded from ordinary run |
 | Explicit checkpointed Redis restart | 1 passed: SAVE/restart/projection/dedup/PEL recovery |
 | Actual Post consumer parser | Real lifecycle Stream messages accepted; content output remains separate |
@@ -113,7 +113,8 @@ Tests refuse nonempty DBs and delete only owned keys. No FLUSH command is used.
 | Typecheck/build | Passed |
 | Docker | Frozen-lockfile build and production liveness/readiness smoke validated |
 | Formatting | Root npm run format executed; unrelated formatting restored; repository PR-diff formatter run in Linux |
-| Real OpenAI | Smoke skipped: OPENAI_API_KEY not supplied; SDK response handling is mock verified |
+| Real OpenAI | Passed after user supplied the local key: three live requests, safe=false, threat=true, actual comment → Redis result → evaluation Stream → lifecycle → ACK |
+| Missing OpenAI key | No remote SDK client/request is constructed; explicit configuration error, no successful evaluation |
 | Post MongoDB application / production E2E | Not run; parser compatibility does not prove cloud/application completion |
 
 Performance fixture: 270 tracked/250 due, hard batch 100, disjoint worker claims;
@@ -124,10 +125,13 @@ ENDED assessment are still proportional to history.
 
 Operational status: content output/recovery, lifecycle CAS/leases/terminal handling,
 local Redis integration and build are **complete locally**. Monitoring is
-**partial** (logs/collection contract). Real OpenAI, AWS/Redis production durability,
+**partial** (logs/collection contract). Real OpenAI smoke is **complete**; AWS/Redis production durability,
 live migration, deployment, full E2E/load/chaos and rollback drills are
 **incomplete**. Post body inspection and approved cross-service decision/application
 workflow remain **unimplemented** pending the listed contracts/policies.
 
 Implementation commits: `c260741` (content evaluation output/recovery), `c2459dd` (due scheduling/lifecycle recovery).
 Local .env files were subsequently created from examples with secret fields empty; validation above used isolated explicitly supplied test endpoints.
+The user then populated the Moderation key locally. It was loaded only for the authorized live smoke test and was neither printed nor committed. Live model: omni-moderation-latest; observed request durations approximately 1.34–1.63 seconds (three requests). Unit health tests explicitly clear runtime Redis/key settings to avoid loading real consumers from local .env files.
+
+Local integration: Post and Notification .env files now use redis://localhost:6383, matching Moderation. Post's existing lifecycle-consumer opt-in remains unchanged. The source stream had zero entries before starting the real Moderation process. FCM credentials and Notification trusted Gateway JWKS are still absent; live device push and client HTTP integration are not complete.

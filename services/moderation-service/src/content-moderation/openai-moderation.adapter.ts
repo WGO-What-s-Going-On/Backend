@@ -13,24 +13,32 @@ export const OPENAI_CLIENT = Symbol('OPENAI_CLIENT');
 @Injectable()
 export class OpenAiModerationAdapter implements ModerationProvider {
   private readonly logger = new Logger(OpenAiModerationAdapter.name);
-  private readonly client: OpenAI;
+  private readonly client: OpenAI | undefined;
 
   constructor(
     config: ConfigService,
     @Optional() @Inject(OPENAI_CLIENT) client?: OpenAI,
   ) {
+    const apiKey = config.get<string>('openai.apiKey')?.trim();
     this.client =
       client ??
-      new OpenAI({
-        apiKey: config.get<string>('openai.apiKey') ?? 'missing',
-        timeout: 10_000,
-        maxRetries: 2,
-      });
+      (apiKey
+        ? new OpenAI({
+            apiKey,
+            timeout: 10_000,
+            maxRetries: 2,
+          })
+        : undefined);
   }
 
   async moderate(content: string): Promise<ModerationResult> {
     const started = performance.now();
     try {
+      if (!this.client)
+        throw new ModerationProviderError(
+          'OpenAI moderation is not configured',
+          false,
+        );
       const response = await this.client.moderations.create({
         model: 'omni-moderation-latest',
         input: content,

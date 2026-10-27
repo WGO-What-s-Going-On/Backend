@@ -69,6 +69,9 @@ OpenAI credential validity or remote API health. Provider health must be verifie
 with the authorized smoke test. Redis repository commands have 2s timeouts and
 bounded queues; consumer commands have 3s timeouts (BLOCK is 1s). Connection
 single-flight prevents initial/reconnect races; future polls retry failed work.
+With no OpenAI key, the adapter returns an explicit configuration error before
+constructing a remote client or issuing requests. Test provider/SDK doubles are
+injected explicitly; normal runtime has no successful mock fallback.
 
 Structured logs expose service, source/output IDs, transition version/reason,
 correlation, retry attempts and scan/provider duration; no content or secrets.

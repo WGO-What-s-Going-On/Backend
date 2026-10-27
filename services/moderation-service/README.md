@@ -138,3 +138,5 @@ pnpm test:openai-smoke
 `pnpm lifecycle:migrate-due --cursor=0`으로 페이지 dry-run, `--apply`로 적용하고
 보고된 nextCursor를 이어갑니다. 결과 재발행은 build 후 `pnpm content:republish <sourceEventId>`를
 사용하며, REDIS_URL을 명시하고 원래 ID를 유지합니다. 자동 제재·Push는 수행하지 않습니다.
+
+통합 로컬 실행에서는 Post 발행자와 Moderation/Notification 소비자가 같은 Redis endpoint/DB를 사용해야 합니다. 이번 로컬 .env는 localhost:6383으로 맞췄습니다. 서비스별 compose의 서로 다른 기본 포트는 자동으로 이벤트를 복제하지 않습니다. 실제 OpenAI smoke는 제공된 로컬 키로 통과했으며, 키가 없으면 외부 호출 전에 미설정 오류를 반환합니다.
