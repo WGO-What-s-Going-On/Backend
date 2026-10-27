@@ -218,7 +218,7 @@ User → Map → Post → Notification → Moderation → HTTP Gateway → WS Ga
 - [ ] 실행의 `release.json`에 서비스별 image digest가 남는지 확인한다.
 - [ ] 아래 비즈니스 검증을 통과하기 전 production 배포를 승인하지 않는다.
 
-단순 push, dev 병합, PR 닫기만으로 CD는 실행되지 않는다. 현재 workflow에는 수동 신규 실행용 `workflow_dispatch`도 없다. Secret·Task 설정만 변경했을 때는 두 환경에 같은 `CD_FORCE_SERVICES`를 설정하고 main으로 변경 안내 PR을 병합한 뒤, 성공 후 값을 비운다.
+main push(PR 병합 포함)가 CD를 실행한다. dev push, 태그 push, PR 닫기만으로는 실행되지 않는다. main 직접 push도 실행되므로 PR·필수 CI 보호 규칙을 유지하고 우회를 제한한다. 현재 workflow에는 수동 신규 실행용 `workflow_dispatch`도 없다. Secret·Task 설정만 변경했을 때는 두 환경에 같은 `CD_FORCE_SERVICES`를 설정하고 main으로 변경 안내 PR을 병합한 뒤, 성공 후 값을 비운다.
 
 ## 11. staging 비즈니스 검증 후 production 승인
 

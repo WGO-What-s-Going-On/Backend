@@ -1,9 +1,8 @@
 name: CD
 
 on:
-  # Use base-repository credentials only AFTER a reviewed PR has actually merged.
-  pull_request_target:
-    types: [closed]
+  # Require reviewed PRs and successful CI through main branch protection.
+  push:
     branches: [main]
 
 permissions:
@@ -17,23 +16,22 @@ concurrency:
 
 jobs:
   verify:
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      # No PR head checkout: only the immutable commit already merged into main is trusted.
+      # Validate the push before checkout or access to environment credentials.
       - name: Reject untrusted release source before checkout
         env:
-          CD_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          CD_SHA: ${{ github.sha }}
         run: |
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs';
           const e = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
-          const pr = e.pull_request;
-          if (process.env.GITHUB_EVENT_NAME !== 'pull_request_target' || e.action !== 'closed' ||
-              pr?.merged !== true || pr.base?.ref !== 'main' ||
-              pr.base?.repo?.full_name !== process.env.GITHUB_REPOSITORY ||
-              !/^[a-f0-9]{40}$/.test(pr.merge_commit_sha ?? '') ||
-              pr.merge_commit_sha !== process.env.CD_SHA) throw new Error('Only a merged PR into main can deploy');
+          if (process.env.GITHUB_EVENT_NAME !== 'push' ||
+              process.env.GITHUB_REF !== 'refs/heads/main' || e.ref !== 'refs/heads/main' ||
+              e.deleted !== false || e.repository?.full_name !== process.env.GITHUB_REPOSITORY ||
+              !/^[a-f0-9]{40}$/.test(e.after ?? '') || /^0{40}$/.test(e.after) ||
+              e.after !== process.env.GITHUB_SHA || e.after !== process.env.CD_SHA)
+            throw new Error('Only a non-deletion push to main with a matching commit SHA can deploy');
           JS
 
   staging:
@@ -44,7 +42,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      CD_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      CD_SHA: ${{ github.sha }}
       CD_FORCE_SERVICES: ${{ secrets.CD_FORCE_SERVICES }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -57,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -80,7 +78,7 @@ jobs:
       - name: Save tested immutable release (no task definitions or secret values)
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ github.event.pull_request.merge_commit_sha }}
+          name: release-${{ github.sha }}
           path: release.json
           if-no-files-found: error
           overwrite: true
@@ -98,7 +96,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      CD_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      CD_SHA: ${{ github.sha }}
       CD_FORCE_SERVICES: ${{ secrets.CD_FORCE_SERVICES }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -111,7 +109,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -119,7 +117,7 @@ jobs:
           node-version: 24
       - uses: actions/download-artifact@v4
         with:
-          name: release-${{ github.event.pull_request.merge_commit_sha }}
+          name: release-${{ github.sha }}
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
