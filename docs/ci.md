@@ -62,3 +62,20 @@ main Ruleset/branch protection에서 `ci` 체크 성공과 PR을 통한 병합�
 별도의 push CI를 기다리지 않는다. merge queue는 현재 트리거 범위에 포함하지 않는다.
 
 The WS/Post cross-service job also runs `test/map-budget.integration.test.ts` after building Map. It exercises the real Post client, ES256 authentication and Map gRPC/search-budget implementation with controlled DB responses to verify resource errors, the existing 500ms caller deadline and cancellation. Actual Cassandra load measurements are recorded separately in docs/performance/map-budget-2026-10-25.
+
+## 의존성 시작 실패 진단
+
+`ci-dependencies.mjs start`가 컨테이너 시작 또는 MongoDB replica set/Cassandra schema 등
+초기화 도중 실패하면, 해당 Actions 시작 step에 `CI dependency diagnostics:` 로그 그룹을 남긴다.
+
+- 선택한 Compose 프로젝트의 컨테이너 상태와 서비스별 마지막 300줄 로그
+- 컨테이너 이미지 ID 및 `.State`: ExitCode, OOMKilled, Error, healthcheck 결과
+- 러너 `free -h`와 `df -h` 결과
+
+실패한 `Start only selected service dependencies` 또는 `Run node scripts/ci-dependencies.mjs start post-service`
+step을 펼쳐 확인한다. MongoDB 자체 오류는 container logs, OOM 여부는 exit / OOM / health state 그룹에서 확인한다.
+전체 inspect나 환경변수 목록은 출력하지 않는다. 수집 대상은 CI 전용 DB 컨테이너뿐이며 앱/운영 로그는 수집하지 않는다.
+각 진단 명령은 최대 10초, 출력 버퍼 2MiB로 제한하고 실패하더라도 다음 진단을 계속한다.
+원래 의존성 명령의 종료 코드를 유지하며, 기존 workflow의 `always()` stop step이 수집 후 컨테이너를 정리한다.
+성공 시에는 추가 진단을 실행하지 않는다. 변경 반영 전의 과거 실행을 재시도하면 이전 스크립트가 사용되므로,
+PR에 변경을 반영한 새 CI 실행에서 확인해야 한다.

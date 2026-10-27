@@ -23,11 +23,13 @@ function docker(args, input) {
     input,
   });
   if (result.error) throw result.error;
-  if (result.status !== 0)
-    throw new Error(`CI dependency command failed (${result.status})`);
+  if (result.status !== 0) {
+    const error = new Error(`CI dependency command failed (${result.status})`);
+    error.exitCode = result.status ?? 1;
+    throw error;
+  }
 }
-if (command === 'stop') docker(['down', '--volumes', '--remove-orphans']);
-else {
+async function start() {
   docker(['up', '-d', '--wait', '--wait-timeout', '360', ...dependencies]);
   if (service.dependencies === 'post') {
     docker([
@@ -59,5 +61,81 @@ else {
       }
     }
     if (!ready) throw new Error('DynamoDB Local did not start');
+  }
+}
+
+// 진단 실패나 Docker daemon 응답 지연이 원래 오류와 후속 정리 작업을 가리지 않게 한다.
+function diagnostic(label, executable, args) {
+  console.log(`::group::CI dependency diagnostics: ${label}`);
+  try {
+    const result = spawnSync(executable, args, {
+      encoding: 'utf8',
+      timeout: 10000,
+      killSignal: 'SIGKILL',
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    if (result.stdout) console.log(result.stdout);
+    if (result.stderr) console.error(result.stderr);
+    if (result.error || result.status !== 0)
+      console.error(
+        `Diagnostic unavailable: ${label} (${result.error?.code ?? result.status})`,
+      );
+    return result.stdout ?? '';
+  } catch (error) {
+    console.error(
+      `Diagnostic unavailable: ${label} (${error.code ?? 'unknown'})`,
+    );
+    return '';
+  } finally {
+    console.log('::endgroup::');
+  }
+}
+
+function collectDiagnostics() {
+  diagnostic('container status', 'docker', [
+    ...compose,
+    'ps',
+    '-a',
+    ...dependencies,
+  ]);
+  diagnostic('container logs (last 300 lines per service)', 'docker', [
+    ...compose,
+    'logs',
+    '--no-color',
+    '--timestamps',
+    '--tail',
+    '300',
+    ...dependencies,
+  ]);
+  const ids = diagnostic('container IDs', 'docker', [
+    ...compose,
+    'ps',
+    '-a',
+    '-q',
+    ...dependencies,
+  ])
+    .split(/\s+/)
+    .filter((id) => /^[a-f0-9]{12,64}$/.test(id));
+  if (ids.length) {
+    // 전체 inspect에는 환경변수가 포함된다. 종료·OOM·healthcheck 상태와 이미지 ID만 출력한다.
+    diagnostic('exit / OOM / health state', 'docker', [
+      'inspect',
+      '--format',
+      '{{.Name}} image={{.Image}} state={{json .State}}',
+      ...ids,
+    ]);
+  }
+  diagnostic('runner memory', 'free', ['-h']);
+  diagnostic('runner disk', 'df', ['-h']);
+}
+
+if (command === 'stop') docker(['down', '--volumes', '--remove-orphans']);
+else {
+  try {
+    await start();
+  } catch (error) {
+    console.error(error);
+    collectDiagnostics();
+    process.exitCode = error.exitCode ?? 1;
   }
 }
