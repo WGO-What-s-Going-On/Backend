@@ -1,0 +1,196 @@
+import { ConfigService } from '@nestjs/config';
+import type OpenAI from 'openai';
+import { describe, expect, it, vi } from 'vitest';
+
+import { CommentModerationService } from '../src/content-moderation/comment-moderation.service.js';
+import {
+  ModerationProviderError,
+  type ModerationProvider,
+} from '../src/content-moderation/moderation-provider.js';
+import type { ModerationResultRepository } from '../src/content-moderation/moderation-result.repository.js';
+import type { StoredModerationResult } from '../src/content-moderation/moderation-result.js';
+import { OpenAiModerationAdapter } from '../src/content-moderation/openai-moderation.adapter.js';
+
+class MemoryResults implements ModerationResultRepository {
+  values = new Map<string, StoredModerationResult>();
+  async find(eventId: string) {
+    return this.values.get(eventId) ?? null;
+  }
+  async save(result: StoredModerationResult) {
+    if (this.values.has(result.eventId)) return false;
+    this.values.set(result.eventId, result);
+    return true;
+  }
+}
+
+describe('CommentModerationService', () => {
+  it.each([false, true])(
+    'stores safe and flagged results (flagged=%s)',
+    async (flagged) => {
+      const provider: ModerationProvider = {
+        moderate: vi.fn().mockResolvedValue({
+          flagged,
+          categories: { violence: flagged },
+          categoryScores: { violence: flagged ? 0.9 : 0.01 },
+          model: 'omni-moderation-latest',
+        }),
+      };
+      const repository = new MemoryResults();
+      const service = new CommentModerationService(provider, repository);
+      await expect(
+        service.moderate({
+          eventId: 'evt_1',
+          postId: 'post_1',
+          commentId: 'comment_1',
+          content: 'text',
+        }),
+      ).resolves.toMatchObject({ flagged });
+    },
+  );
+
+  it('does not call OpenAI again for a duplicate event', async () => {
+    const moderate = vi.fn().mockResolvedValue({
+      flagged: false,
+      categories: {},
+      categoryScores: {},
+      model: 'omni-moderation-latest',
+    });
+    const service = new CommentModerationService(
+      { moderate },
+      new MemoryResults(),
+    );
+    const input = {
+      eventId: 'evt_1',
+      postId: 'post_1',
+      commentId: 'comment_1',
+      content: 'text',
+    };
+    await service.moderate(input);
+    await service.moderate(input);
+    expect(moderate).toHaveBeenCalledOnce();
+  });
+
+  it('does not persist provider failures as successful decisions', async () => {
+    const repository = new MemoryResults();
+    const service = new CommentModerationService(
+      {
+        moderate: vi
+          .fn()
+          .mockRejectedValue(new ModerationProviderError('timeout', true)),
+      },
+      repository,
+    );
+    await expect(
+      service.moderate({
+        eventId: 'failed',
+        postId: 'post_1',
+        commentId: 'comment_1',
+        content: 'hello',
+      }),
+    ).rejects.toThrow('timeout');
+    expect(await repository.find('failed')).toBeNull();
+  });
+});
+
+describe('OpenAiModerationAdapter', () => {
+  it('rejects missing credentials locally without constructing a remote client', async () => {
+    const adapter = new OpenAiModerationAdapter(
+      new ConfigService({ openai: { apiKey: '' } }),
+    );
+    await expect(adapter.moderate('private fixture')).rejects.toMatchObject({
+      message: 'OpenAI moderation is not configured',
+      retryable: false,
+    });
+  });
+  it.each([
+    {
+      flagged: 'true',
+      categories: { violence: true },
+      category_scores: { violence: 0.1 },
+    },
+    {
+      flagged: false,
+      categories: { violence: false },
+      category_scores: { violence: 1.5 },
+    },
+  ])('rejects malformed provider output %s', async (result) => {
+    const adapter = new OpenAiModerationAdapter(new ConfigService(), {
+      moderations: {
+        create: vi
+          .fn()
+          .mockResolvedValue({ model: 'fixture', results: [result] }),
+      },
+    } as unknown as OpenAI);
+    await expect(adapter.moderate('private fixture')).rejects.toMatchObject({
+      retryable: false,
+    });
+  });
+  it('maps the official SDK response into the internal result', async () => {
+    const create = vi.fn().mockResolvedValue({
+      model: 'omni-moderation-latest',
+      results: [
+        {
+          flagged: true,
+          categories: { violence: true },
+          category_scores: { violence: 0.9 },
+        },
+      ],
+    });
+    const adapter = new OpenAiModerationAdapter(new ConfigService(), {
+      moderations: { create },
+    } as unknown as OpenAI);
+    await expect(adapter.moderate('content')).resolves.toMatchObject({
+      flagged: true,
+      model: 'omni-moderation-latest',
+      categories: { violence: true },
+      categoryScores: { violence: 0.9 },
+    });
+    expect(create).toHaveBeenCalledWith({
+      model: 'omni-moderation-latest',
+      input: 'content',
+    });
+  });
+
+  it('rejects empty moderation results instead of saving a safe decision', async () => {
+    const adapter = new OpenAiModerationAdapter(new ConfigService(), {
+      moderations: {
+        create: vi
+          .fn()
+          .mockResolvedValue({ model: 'omni-moderation-latest', results: [] }),
+      },
+    } as unknown as OpenAI);
+    await expect(adapter.moderate('content')).rejects.toMatchObject({
+      retryable: false,
+      message: 'OpenAI returned no moderation result',
+    });
+  });
+
+  it('surfaces OpenAI failures and marks transport errors retryable', async () => {
+    const adapter = new OpenAiModerationAdapter(new ConfigService(), {
+      moderations: { create: vi.fn().mockRejectedValue(new Error('timeout')) },
+    } as unknown as OpenAI);
+    const error = await adapter
+      .moderate('content')
+      .catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(ModerationProviderError);
+    expect((error as ModerationProviderError).retryable).toBe(true);
+  });
+
+  it.each([
+    [429, true],
+    [500, true],
+    [400, false],
+  ])('classifies HTTP %s retryability as %s', async (status, retryable) => {
+    const adapter = new OpenAiModerationAdapter(new ConfigService(), {
+      moderations: {
+        create: vi
+          .fn()
+          .mockRejectedValue(Object.assign(new Error('API error'), { status })),
+      },
+    } as unknown as OpenAI);
+    const error = await adapter
+      .moderate('content')
+      .catch((value: unknown) => value);
+    expect((error as ModerationProviderError).retryable).toBe(retryable);
+  });
+});

@@ -1,0 +1,223 @@
+import { MediaResponse } from '../media/media.openapi.js';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { CommentReactionType, PostReactionType } from '../domain/post.js';
+
+// 이 클래스들은 OpenAPI 스키마 전용이다. 실제 요청 검증은 post.input.ts와 post-query.input.ts에서 수행한다.
+
+const postIdExample = 'post_123e4567-e89b-12d3-a456-426614174000';
+const dateTime = {
+  type: String,
+  format: 'date-time',
+  example: '2026-09-26T04:00:00.000Z',
+} as const;
+
+export class CreatePostBody {
+  @ApiPropertyOptional({
+    type: [String],
+    maxItems: 5,
+    uniqueItems: true,
+    description:
+      '본인 READY 이미지·동영상 ID, 합계 최대 5개. 배열 순서로 표시.',
+  })
+  mediaIds?: string[];
+  @ApiProperty({ maxLength: 120, example: '현장 상황' }) title!: string;
+  @ApiProperty({ maxLength: 5000, example: '현재 교통 상황을 공유합니다.' })
+  content!: string;
+  @ApiProperty({
+    maxLength: 40,
+    pattern: '^[A-Z][A-Z_]*$',
+    example: 'INCIDENT',
+  })
+  category!: string;
+  @ApiProperty({ minimum: -90, maximum: 90, example: 37.4979 })
+  latitude!: number;
+  @ApiProperty({ minimum: -180, maximum: 180, example: 127.0276 })
+  longitude!: number;
+  @ApiProperty({ minimum: 1, maximum: 10000, example: 250 }) radiusM!: number;
+}
+
+export class CreateCommentBody {
+  @ApiPropertyOptional({
+    type: [String],
+    maxItems: 5,
+    uniqueItems: true,
+    description:
+      '본인 READY 이미지·동영상 ID, 합계 최대 5개. 배열 순서로 표시.',
+  })
+  mediaIds?: string[];
+  @ApiProperty({ maxLength: 2000, example: '현장 확인했습니다.' })
+  content!: string;
+}
+
+export class InternalCreateCommentBody extends CreateCommentBody {
+  @ApiProperty({
+    minLength: 1,
+    maxLength: 128,
+    pattern: '^[A-Za-z0-9_-]+$',
+    example: 'client-mutation-1',
+  })
+  mutationId!: string;
+}
+
+export class CreateReactionBody {
+  @ApiProperty({ enum: PostReactionType, example: PostReactionType.CURIOUS })
+  type!: PostReactionType;
+}
+
+export class CreateCommentReactionBody {
+  @ApiProperty({
+    enum: CommentReactionType,
+    example: CommentReactionType.HELPFUL,
+  })
+  type!: CommentReactionType;
+}
+
+export class CommentReactionResponse {
+  @ApiProperty({ example: postIdExample }) postId!: string;
+  @ApiProperty({ example: 'comment_123e4567-e89b-12d3-a456-426614174000' })
+  commentId!: string;
+  @ApiProperty({ example: 123 }) userId!: number;
+  @ApiProperty({ enum: CommentReactionType }) type!: CommentReactionType;
+  @ApiProperty(dateTime) createdAt!: string;
+}
+
+export class CommentReactionCountsResponse {
+  @ApiProperty({ example: 0 }) HELPFUL!: number;
+  @ApiProperty({ example: 0 }) AGREE!: number;
+  @ApiProperty({ example: 0 }) DIFFERENT!: number;
+}
+
+export class JoinPostBody {}
+
+export class BatchGetBody {
+  @ApiProperty({ type: [String], maxItems: 100, example: [postIdExample] })
+  postIds!: string[];
+}
+
+export class LocationResponse {
+  @ApiProperty({ example: 37.4979 }) latitude!: number;
+  @ApiProperty({ example: 127.0276 }) longitude!: number;
+}
+
+export class CountersResponse {
+  @ApiProperty({ example: 0 }) viewCount!: number;
+  @ApiProperty({ example: 2 }) commentCount!: number;
+  @ApiProperty({ example: 1 }) reactionCount!: number;
+  @ApiProperty({ example: 3 }) participantCount!: number;
+}
+
+export class PostResponse {
+  @ApiPropertyOptional({ type: [String], maxItems: 5 }) mediaIds?: string[];
+  @ApiPropertyOptional({
+    type: [MediaResponse],
+    description: '조회 응답에서 제공. 만료 시 media 조회 API로 갱신.',
+  })
+  media?: MediaResponse[];
+  @ApiProperty({ example: postIdExample }) postId!: string;
+  @ApiProperty({ example: 123 }) authorId!: number;
+  @ApiProperty({ example: 'INCIDENT' }) category!: string;
+  @ApiProperty({ example: '현장 상황' }) title!: string;
+  @ApiProperty({ example: '현재 교통 상황을 공유합니다.' }) content!: string;
+  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED'], example: 'ACTIVE' })
+  status!: string;
+  @ApiProperty({ type: () => LocationResponse })
+  locationSnapshot!: LocationResponse;
+  @ApiProperty({ example: 250 }) radiusM!: number;
+  @ApiProperty({ type: () => CountersResponse }) counters!: CountersResponse;
+  @ApiProperty(dateTime) createdAt!: string;
+  @ApiProperty(dateTime) updatedAt!: string;
+  @ApiProperty({ ...dateTime, nullable: true, example: null }) expiresAt!:
+    | string
+    | null;
+}
+
+export class CommentResponse {
+  @ApiPropertyOptional({ type: [String], maxItems: 5 }) mediaIds?: string[];
+  @ApiPropertyOptional({
+    type: [MediaResponse],
+    description: '조회 응답에서 제공. 만료 시 media 조회 API로 갱신.',
+  })
+  media?: MediaResponse[];
+  @ApiProperty({ example: 'comment_123e4567-e89b-12d3-a456-426614174000' })
+  commentId!: string;
+  @ApiProperty({ example: postIdExample }) postId!: string;
+  @ApiProperty({ example: 123 }) authorId!: number;
+  @ApiProperty({ example: '현장 확인했습니다.' }) content!: string;
+  @ApiProperty({
+    enum: ['ACTIVE', 'DELETED'],
+    example: 'ACTIVE',
+    description:
+      '삭제 후 같은 mutationId로 재시도하면 DELETED인 기존 댓글을 반환할 수 있습니다.',
+  })
+  status!: string;
+  @ApiPropertyOptional({
+    type: () => CommentReactionCountsResponse,
+    description:
+      '댓글 목록 조회에서 제공하며, 기존 댓글의 누락된 값은 0입니다.',
+  })
+  reactionCounts?: CommentReactionCountsResponse;
+  @ApiProperty(dateTime) createdAt!: string;
+  @ApiProperty({ ...dateTime, nullable: true, example: null }) updatedAt!:
+    | string
+    | null;
+}
+
+export class CommentPageResponse {
+  @ApiProperty({ type: () => [CommentResponse] }) comments!: CommentResponse[];
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: '다음 페이지가 없으면 null',
+  })
+  nextCursor!: string | null;
+}
+
+export class ReactionResponse {
+  @ApiProperty({ example: postIdExample }) postId!: string;
+  @ApiProperty({ example: 123 }) userId!: number;
+  @ApiProperty({ enum: PostReactionType }) type!: PostReactionType;
+  @ApiProperty(dateTime) createdAt!: string;
+}
+
+export class ParticipantResponse {
+  @ApiProperty({ example: postIdExample }) postId!: string;
+  @ApiProperty({ example: 123 }) userId!: number;
+  @ApiProperty(dateTime) joinedAt!: string;
+  @ApiProperty(dateTime) lastSeenAt!: string;
+  @ApiProperty({ ...dateTime, nullable: true, example: null }) leftAt!:
+    | string
+    | null;
+}
+
+export class PostSummaryResponse {
+  @ApiProperty({ example: postIdExample }) postId!: string;
+  @ApiProperty({ example: '현장 상황' }) title!: string;
+  @ApiProperty({ example: 'INCIDENT' }) category!: string;
+  @ApiProperty({ enum: ['ACTIVE'] }) status!: string;
+  @ApiProperty(dateTime) createdAt!: string;
+}
+
+export class BatchGetResponse {
+  @ApiProperty({ type: () => [PostSummaryResponse] })
+  posts!: PostSummaryResponse[];
+}
+
+export class PostMetaResponse {
+  @ApiProperty({ example: postIdExample }) postId!: string;
+  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED'] }) status!: string;
+  @ApiProperty({ example: 'INCIDENT' }) category!: string;
+  @ApiProperty({ type: () => LocationResponse })
+  locationSnapshot!: LocationResponse;
+  @ApiProperty({ example: 250 }) radiusM!: number;
+  @ApiProperty({ ...dateTime, nullable: true, example: null }) expiresAt!:
+    | string
+    | null;
+}
+
+export class PostStatusResponse {
+  @ApiProperty({ example: postIdExample }) postId!: string;
+  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED'] }) status!: string;
+  @ApiProperty({ ...dateTime, nullable: true, example: null }) expiresAt!:
+    | string
+    | null;
+}

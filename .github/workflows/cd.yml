@@ -1,0 +1,129 @@
+name: CD
+
+on:
+  # Use base-repository credentials only AFTER a reviewed PR has actually merged.
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A queued run may be replaced by a newer one. Per-service last-success state catches up skipped changes.
+# Never cancel a deployment or approval already in progress.
+concurrency:
+  group: wgo-cd
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      # No PR head checkout: only the immutable commit already merged into main is trusted.
+      - name: Reject untrusted release source before checkout
+        env:
+          CD_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          const e = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          const pr = e.pull_request;
+          if (process.env.GITHUB_EVENT_NAME !== 'pull_request_target' || e.action !== 'closed' ||
+              pr?.merged !== true || pr.base?.ref !== 'main' ||
+              pr.base?.repo?.full_name !== process.env.GITHUB_REPOSITORY ||
+              !/^[a-f0-9]{40}$/.test(pr.merge_commit_sha ?? '') ||
+              pr.merge_commit_sha !== process.env.CD_SHA) throw new Error('Only a merged PR into main can deploy');
+          JS
+
+  staging:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CD_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      CD_FORCE_SERVICES: ${{ secrets.CD_FORCE_SERVICES }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+      ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+      CD_IMAGE_PLATFORM: ${{ secrets.CD_IMAGE_PLATFORM }}
+      CD_STATE_PREFIX: ${{ secrets.CD_STATE_PREFIX }}
+      CD_SERVICES_JSON: ${{ secrets.CD_SERVICES_JSON }}
+      CD_RUNTIME_SECRETS_JSON: ${{ secrets.CD_RUNTIME_SECRETS_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          mask-aws-account-id: true
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Authenticate to ECR without logging credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+      - name: Build changed images and deploy staging
+        run: node scripts/cd.mjs staging
+      - name: Save tested immutable release (no task definitions or secret values)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ github.event.pull_request.merge_commit_sha }}
+          path: release.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+      - name: Remove registry credentials
+        if: always()
+        run: docker logout "$ECR_REGISTRY"
+
+  production:
+    needs: staging
+    runs-on: ubuntu-latest
+    # Configure required reviewers and branch restrictions in this GitHub Environment.
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CD_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      CD_FORCE_SERVICES: ${{ secrets.CD_FORCE_SERVICES }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+      ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+      CD_IMAGE_PLATFORM: ${{ secrets.CD_IMAGE_PLATFORM }}
+      CD_STATE_PREFIX: ${{ secrets.CD_STATE_PREFIX }}
+      CD_SERVICES_JSON: ${{ secrets.CD_SERVICES_JSON }}
+      CD_RUNTIME_SECRETS_JSON: ${{ secrets.CD_RUNTIME_SECRETS_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ github.event.pull_request.merge_commit_sha }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          mask-aws-account-id: true
+      - name: Promote exact staging digests and verify production
+        run: node scripts/cd.mjs production

@@ -1,0 +1,17 @@
+.DS_Store
+**/node_modules/
+**/dist/
+**/.pnpm-store/
+**/coverage/
+**/.vitest/
+
+
+# Locally collected Gateway OpenAPI artifact
+gateways/http-gateway/generated/
+
+# Keep QA reports in Git; retain harnesses and raw evidence only locally.
+/qa/artifacts/**
+!/qa/artifacts/**/
+!/qa/artifacts/**/*.md
+/qa/artifacts/**/node_modules/
+/qa/artifacts/**/dist/

@@ -1,0 +1,182 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.changes.outputs.matrix }}
+      has_services: ${{ steps.changes.outputs.has_services }}
+      deploy_matrix: ${{ steps.changes.outputs.deploy_matrix }}
+      has_deploy: ${{ steps.changes.outputs.has_deploy }}
+      integration_user_gateway: ${{ steps.changes.outputs.integration_user_gateway }}
+      integration_ws_post: ${{ steps.changes.outputs.integration_ws_post }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Find changed services and affected contracts
+        id: changes
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/ci.mjs detect "$PR_BASE_SHA" HEAD --pr
+
+  pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test CI and CD selection and deployment helpers
+        run: node --test scripts/*.test.mjs
+      - name: Check duplicated Map RPC contract
+        run: diff -u services/map-service/contracts/map-authorization.proto services/post-service/contracts/map-authorization.proto
+
+  format:
+    needs: detect
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Check changed files with Prettier
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/ci.mjs format "$PR_BASE_SHA" HEAD --pr
+
+  test:
+    needs: detect
+    if: needs.detect.outputs.has_services == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
+    name: Test ${{ matrix.name }}
+    # MongoDB 8.0 rejects affected 6.19+ host kernels (SERVER-121912).
+    # Temporary runner pin; revisit before ubuntu-22.04 retirement.
+    runs-on: ${{ matrix.name == 'post-service' && 'ubuntu-22.04' || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@10.33.0
+      - name: Install selected service
+        env:
+          SERVICE: ${{ matrix.name }}
+        run: node scripts/ci-run.mjs "$SERVICE" install
+      - name: Start only selected service dependencies
+        env:
+          SERVICE: ${{ matrix.name }}
+        run: node scripts/ci-dependencies.mjs start "$SERVICE"
+      - name: Typecheck, lint, unit/integration tests and build
+        env:
+          SERVICE: ${{ matrix.name }}
+        run: node scripts/ci-run.mjs "$SERVICE"
+      - name: Build changed runtime image
+        if: matrix.build_image
+        env:
+          SERVICE_PATH: ${{ matrix.path }}
+          SERVICE: ${{ matrix.name }}
+        run: docker build --tag "wgo-ci/$SERVICE:${GITHUB_SHA}" "$SERVICE_PATH"
+      - name: Stop isolated dependencies
+        if: always()
+        env:
+          SERVICE: ${{ matrix.name }}
+        run: node scripts/ci-dependencies.mjs stop "$SERVICE"
+
+  user-gateway:
+    needs: detect
+    if: needs.detect.outputs.integration_user_gateway == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@10.33.0
+      - name: Install contract participants and build both Gateway artifacts
+        run: |
+          node scripts/ci-run.mjs http-gateway install
+          node scripts/ci-run.mjs http-gateway build
+          node scripts/ci-run.mjs ws-gateway install
+          node scripts/ci-run.mjs ws-gateway build
+          node scripts/ci-run.mjs user-service install
+      - run: node scripts/ci-dependencies.mjs start user-service
+      - name: Exercise User token authentication through HTTP and production WS
+        working-directory: services/user-service
+        env:
+          RUN_GATEWAY_INTEGRATION: '1'
+        run: pnpm exec vitest run test/auth.integration.test.ts
+      - if: always()
+        run: node scripts/ci-dependencies.mjs stop user-service
+
+  ws-post:
+    needs: detect
+    if: needs.detect.outputs.integration_ws_post == 'true'
+    # Same MongoDB host-kernel constraint as Test post-service.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@10.33.0
+      - name: Build WS and Map contract participants
+        run: |
+          node scripts/ci-run.mjs ws-gateway install
+          node scripts/ci-run.mjs ws-gateway build
+          node scripts/ci-run.mjs map-service install
+          node scripts/ci-run.mjs map-service build
+          node scripts/ci-run.mjs post-service install
+      - run: node scripts/ci-dependencies.mjs start post-service
+      - name: Exercise WS participation, Map policy, and Post lifecycle delivery
+        working-directory: services/post-service
+        env:
+          RUN_INTEGRATION: '1'
+          RUN_WS_INTEGRATION: '1'
+        run: pnpm exec vitest run test/post.integration.test.ts test/ws-lifecycle.integration.test.ts test/map-budget.integration.test.ts
+      - if: always()
+        run: node scripts/ci-dependencies.mjs stop post-service
+
+  ci:
+    if: always()
+    needs: [detect, pipeline, format, test, user-gateway, ws-post]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check CI results
+        env:
+          DETECT_RESULT: ${{ needs.detect.result }}
+          PIPELINE_RESULT: ${{ needs.pipeline.result }}
+          FORMAT_RESULT: ${{ needs.format.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          CONTRACT_RESULT: ${{ needs.user-gateway.result }}
+          WS_CONTRACT_RESULT: ${{ needs.ws-post.result }}
+        run: |
+          test "$DETECT_RESULT" = success
+          test "$PIPELINE_RESULT" = success
+          test "$FORMAT_RESULT" = success
+          test "$TEST_RESULT" = success -o "$TEST_RESULT" = skipped
+          test "$CONTRACT_RESULT" = success -o "$CONTRACT_RESULT" = skipped
+          test "$WS_CONTRACT_RESULT" = success -o "$WS_CONTRACT_RESULT" = skipped

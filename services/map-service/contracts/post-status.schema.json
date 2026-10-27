@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PostExpired or PostDeleted version 1 data",
+  "type": "object",
+  "required": [
+    "eventId",
+    "eventType",
+    "schemaVersion",
+    "producer",
+    "aggregateId",
+    "occurredAt"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "pattern": "^evt_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "eventType": { "enum": ["PostExpired", "PostDeleted"] },
+    "schemaVersion": { "const": 1 },
+    "producer": { "const": "post-service" },
+    "aggregateId": {
+      "type": "string",
+      "pattern": "^post_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "occurredAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

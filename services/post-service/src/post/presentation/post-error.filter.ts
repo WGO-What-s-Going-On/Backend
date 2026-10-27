@@ -1,0 +1,71 @@
+import { InvalidMediaError } from '../media/media.policy.js';
+import { SimilarityUnavailableError } from '../semantic/policy.js';
+import { VoteUnavailableError } from '../application/vote.js';
+import {
+  ArgumentsHost,
+  BadRequestException,
+  Catch,
+  ExceptionFilter,
+  ForbiddenException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import {
+  LocationDeniedError,
+  ParticipationUnavailableError,
+} from '../application/errors.js';
+import {
+  InvalidPostError,
+  PostInactiveError,
+  PostNotFoundError,
+  PostOwnershipError,
+  ReactionConflictError,
+} from '../domain/post.js';
+
+@Catch(
+  InvalidMediaError,
+  SimilarityUnavailableError,
+  PostNotFoundError,
+  PostOwnershipError,
+  PostInactiveError,
+  InvalidPostError,
+  ParticipationUnavailableError,
+  LocationDeniedError,
+  ReactionConflictError,
+  VoteUnavailableError,
+)
+export class PostErrorFilter implements ExceptionFilter {
+  catch(error: Error, host: ArgumentsHost): void {
+    const response = host
+      .switchToHttp()
+      .getResponse<{ status(code: number): { json(body: unknown): void } }>();
+    if (error instanceof SimilarityUnavailableError) {
+      response
+        .status(503)
+        .json({ statusCode: 503, code: error.message, message: error.message });
+      return;
+    }
+    if (error instanceof ReactionConflictError) {
+      response.status(409).json({
+        statusCode: 409,
+        code: 'REACTION_ALREADY_EXISTS',
+        message: error.message,
+      });
+      return;
+    }
+    const httpError =
+      error instanceof PostNotFoundError
+        ? new NotFoundException(error.message)
+        : error instanceof VoteUnavailableError ||
+            error instanceof PostInactiveError ||
+            error instanceof PostOwnershipError
+          ? new ForbiddenException(error.message)
+          : error instanceof InvalidPostError ||
+              error instanceof InvalidMediaError
+            ? new BadRequestException(error.message)
+            : error instanceof LocationDeniedError
+              ? new ForbiddenException(error.message)
+              : new ServiceUnavailableException(error.message);
+    response.status(httpError.getStatus()).json(httpError.getResponse());
+  }
+}

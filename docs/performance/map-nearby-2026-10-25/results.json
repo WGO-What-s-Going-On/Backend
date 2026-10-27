@@ -1,0 +1,149 @@
+[
+  {
+    "count": 0,
+    "mode": "empty-fallback",
+    "samples": 10,
+    "variants": [
+      {
+        "name": "sequential",
+        "medianMs": 464.96,
+        "p95Ms": 574.18,
+        "calls": [304],
+        "maxInFlight": 1
+      },
+      {
+        "name": "parallel8",
+        "medianMs": 42.99,
+        "p95Ms": 52.72,
+        "calls": [304],
+        "maxInFlight": 8
+      }
+    ]
+  },
+  {
+    "count": 20,
+    "mode": "geo",
+    "samples": 10,
+    "variants": [
+      {
+        "name": "sequential",
+        "medianMs": 52.88,
+        "p95Ms": 64.1,
+        "calls": [40],
+        "maxInFlight": 1
+      },
+      {
+        "name": "parallel8",
+        "medianMs": 6.98,
+        "p95Ms": 11.06,
+        "calls": [40],
+        "maxInFlight": 8
+      }
+    ]
+  },
+  {
+    "count": 20,
+    "mode": "fallback",
+    "samples": 10,
+    "variants": [
+      {
+        "name": "sequential",
+        "medianMs": 567.21,
+        "p95Ms": 693.53,
+        "calls": [344],
+        "maxInFlight": 1
+      },
+      {
+        "name": "parallel8",
+        "medianMs": 49.1,
+        "p95Ms": 55.91,
+        "calls": [344],
+        "maxInFlight": 8
+      }
+    ]
+  },
+  {
+    "count": 200,
+    "mode": "geo",
+    "samples": 10,
+    "variants": [
+      {
+        "name": "sequential",
+        "medianMs": 630.94,
+        "p95Ms": 866.3,
+        "calls": [400],
+        "maxInFlight": 1
+      },
+      {
+        "name": "parallel8",
+        "medianMs": 53.94,
+        "p95Ms": 79.67,
+        "calls": [400],
+        "maxInFlight": 8
+      }
+    ]
+  },
+  {
+    "count": 200,
+    "mode": "fallback",
+    "samples": 10,
+    "variants": [
+      {
+        "name": "sequential",
+        "medianMs": 1195,
+        "p95Ms": 1414.14,
+        "calls": [704],
+        "maxInFlight": 1
+      },
+      {
+        "name": "parallel8",
+        "medianMs": 94.78,
+        "p95Ms": 224.23,
+        "calls": [704],
+        "maxInFlight": 8
+      }
+    ]
+  },
+  {
+    "count": 1000,
+    "mode": "geo",
+    "samples": 10,
+    "variants": [
+      {
+        "name": "sequential",
+        "medianMs": 3916.75,
+        "p95Ms": 4365.71,
+        "calls": [2000],
+        "maxInFlight": 1
+      },
+      {
+        "name": "parallel8",
+        "medianMs": 274.26,
+        "p95Ms": 338.82,
+        "calls": [2000],
+        "maxInFlight": 8
+      }
+    ]
+  },
+  {
+    "count": 1000,
+    "mode": "fallback",
+    "samples": 10,
+    "variants": [
+      {
+        "name": "sequential",
+        "medianMs": 4564.95,
+        "p95Ms": 5055.39,
+        "calls": [2304],
+        "maxInFlight": 1
+      },
+      {
+        "name": "parallel8",
+        "medianMs": 327.63,
+        "p95Ms": 383.49,
+        "calls": [2304],
+        "maxInFlight": 8
+      }
+    ]
+  }
+]

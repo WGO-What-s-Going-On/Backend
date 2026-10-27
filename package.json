@@ -1,0 +1,11 @@
+{
+  "name": "wgo-backend-ci",
+  "private": true,
+  "scripts": {
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,json,jsonc,yaml,yml,css,scss,html}\" \".github/workflows/*.{yml,yaml}\" .prettierrc.json",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,json,jsonc,yaml,yml,css,scss,html}\" \".github/workflows/*.{yml,yaml}\" .prettierrc.json"
+  },
+  "devDependencies": {
+    "prettier": "3.6.2"
+  }
+}

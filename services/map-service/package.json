@@ -1,0 +1,35 @@
+{
+  "name": "@wgo/map-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25",
+    "pnpm": ">=10 <11"
+  },
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "rebuild:posts": "tsx src/rebuild-post-index.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@aws-sdk/credential-provider-node": "3.972.89",
+    "@grpc/grpc-js": "1.14.5",
+    "@grpc/proto-loader": "0.8.1",
+    "aws-sigv4-auth-cassandra-plugin": "1.0.5",
+    "cassandra-driver": "4.8.0",
+    "h3-js": "4.3.0",
+    "redis": "^5.12.1",
+    "swagger-ui-dist": "5.33.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.2",
+    "tsx": "^4.20.0",
+    "typescript": "6.0.3",
+    "vitest": "5.0.1"
+  },
+  "packageManager": "pnpm@10.33.0"
+}

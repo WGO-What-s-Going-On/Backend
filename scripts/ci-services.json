@@ -1,0 +1,138 @@
+{
+  "services": [
+    {
+      "name": "http-gateway",
+      "path": "gateways/http-gateway",
+      "dependencies": "http"
+    },
+    {
+      "name": "ws-gateway",
+      "path": "gateways/ws-gateway",
+      "dependencies": "ws"
+    },
+    {
+      "name": "user-service",
+      "path": "services/user-service",
+      "dependencies": "user"
+    },
+    {
+      "name": "post-service",
+      "path": "services/post-service",
+      "dependencies": "post"
+    },
+    {
+      "name": "map-service",
+      "path": "services/map-service",
+      "dependencies": "map"
+    },
+    {
+      "name": "notification-service",
+      "path": "services/notification-service",
+      "dependencies": "notification"
+    },
+    {
+      "name": "moderation-service",
+      "path": "services/moderation-service",
+      "dependencies": "moderation"
+    }
+  ],
+  "contractRules": [
+    {
+      "prefixes": [
+        "services/map-service/contracts/",
+        "services/post-service/contracts/map-authorization.proto"
+      ],
+      "services": ["post-service", "map-service"],
+      "integration": "ws-post"
+    },
+    {
+      "prefixes": [
+        "gateways/ws-gateway/test/post-lifecycle.integration.test.ts",
+        "gateways/ws-gateway/test/post-events.integration.test.ts",
+        "services/post-service/test/ws-lifecycle.integration.test.ts",
+        "services/post-service/test/map-budget.integration.test.ts",
+        "services/post-service/contracts/post-events.md"
+      ],
+      "services": ["post-service", "ws-gateway"],
+      "integration": "ws-post"
+    },
+    {
+      "prefixes": [
+        "services/user-service/contracts/",
+        "services/post-service/contracts/user.proto"
+      ],
+      "services": ["user-service", "post-service"]
+    },
+    {
+      "prefixes": [
+        "services/post-service/src/post/application/event.ts",
+        "services/post-service/src/post/infrastructure/post-event-envelope.ts",
+        "docs/contracts/post-events"
+      ],
+      "services": [
+        "post-service",
+        "map-service",
+        "ws-gateway",
+        "notification-service",
+        "moderation-service"
+      ]
+    },
+    {
+      "prefixes": [
+        "services/post-service/src/post/presentation/",
+        "services/post-service/src/post/application/",
+        "gateways/ws-gateway/src/realtime/post-client.ts",
+        "gateways/ws-gateway/src/realtime/protocol.ts",
+        "services/post-service/src/post/post.controller.ts",
+        "services/post-service/src/post/internal.controller.ts",
+        "services/post-service/src/post/http.openapi.ts",
+        "gateways/ws-gateway/src/",
+        "services/post-service/test/post.integration.test.ts",
+        "services/map-service/src/location.ts",
+        "services/map-service/src/server.ts",
+        "services/map-service/src/post-index.ts",
+        "services/map-service/src/nearby-budget.ts",
+        "services/map-service/src/geo-index-state.ts"
+      ],
+      "services": ["post-service", "ws-gateway", "map-service"],
+      "integration": "ws-post"
+    },
+    {
+      "prefixes": [
+        "services/user-service/src/auth/",
+        "services/user-service/src/http-auth/",
+        "services/user-service/src/users/",
+        "services/user-service/src/http.openapi.ts",
+        "gateways/http-gateway/src/",
+        "services/user-service/test/auth.integration.test.ts",
+        "services/user-service/src/swagger.ts",
+        "services/user-service/src/config/",
+        "gateways/ws-gateway/src/realtime/authentication.ts",
+        "gateways/ws-gateway/src/config.ts",
+        "gateways/ws-gateway/test/authentication.test.ts"
+      ],
+      "services": ["user-service", "http-gateway", "ws-gateway"],
+      "integration": "user-gateway"
+    },
+    {
+      "prefixes": ["docs/contracts/service-authentication.md"],
+      "services": [
+        "http-gateway",
+        "ws-gateway",
+        "user-service",
+        "post-service",
+        "map-service"
+      ]
+    },
+    {
+      "prefixes": [
+        "services/moderation-service/src/lifecycle/",
+        "services/moderation-service/contracts/",
+        "services/post-service/src/post/application/moderation.ts",
+        "services/post-service/src/post/infrastructure/moderation-",
+        "services/post-service/test/moderation"
+      ],
+      "services": ["moderation-service", "post-service", "map-service"]
+    }
+  ]
+}

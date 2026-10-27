@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package wgo.map.v1;
+
+service MapAuthorization {
+  rpc CheckPostCreation (LocationCheck) returns (LocationDecision);
+  rpc CheckPostParticipation (ParticipationCheck) returns (LocationDecision);
+}
+
+message LocationCheck {
+  int64 user_id = 1;
+  double latitude = 2;
+  double longitude = 3;
+  double radius_m = 4;
+}
+
+message ParticipationCheck {
+  int64 user_id = 1;
+  string post_id = 2;
+  double latitude = 3;
+  double longitude = 4;
+  double radius_m = 5;
+}
+
+message LocationDecision {
+  bool allowed = 1;
+  string reason = 2; // LOCATION_MISSING, LOCATION_STALE, OUTSIDE_RADIUS
+}
+
+service MapPostQuery {
+  rpc SearchNearbyPosts (NearbyPostsRequest) returns (NearbyPostsResponse);
+}
+message NearbyPostsRequest {
+  double latitude = 1;
+  double longitude = 2;
+  int32 radius_m = 3;
+  int32 limit = 4;
+  string cursor = 5; // Empty for the first page; reuse with the same center and radius.
+}
+message NearbyPost {
+  string post_id = 1;
+  double distance_m = 2;
+}
+message NearbyPostsResponse {
+  repeated NearbyPost items = 1;
+  bool truncated = 2;
+  string next_cursor = 3; // Empty when no further page exists.
+}

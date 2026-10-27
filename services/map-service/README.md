@@ -1,0 +1,115 @@
+# WGO Map Service
+
+Map Service records every accepted `PUT /api/v1/location` in Cassandra `user_location_history`, including repeated coordinates and HTTP retries. The request accepts `{ "latitude": 37.5, "longitude": 127 }` with `X-User-Id` in local and test environments. Production returns 503 until Gateway user authentication is integrated. Cassandra history is the source of truth; Redis caches the latest location for up to five minutes. Location decisions read the cache first and fall back to Cassandra when Redis is unavailable or the entry is missing.
+
+The location endpoint returns 200 with `latitude`, `longitude`, and server assigned `updatedAt` after the history write succeeds; invalid input returns 400, missing local identity 403, and unavailable storage 503. Redis is updated after Cassandra succeeds; concurrent cache writes keep the newest timeuuid. A Redis write failure does not discard a successful Cassandra history write. Apply `schema.cql` before rolling out the new Map code. History uses a UTC day bucket, descending server timeuuid, seven-day TTL, and six-hour time-window compaction. TTL expiry removes rows from reads; physical space is reclaimed by later compaction. Old `user_locations` rows are not migrated as history. Since production updates remain blocked, users may have no location until their first new accepted update. After verifying the rollout, retire the old table; old cache entries without an update ID are ignored and replaced.
+
+위치 갱신 요청 이력의 보존·전환 범위와 후속 조사 계약은 [위치 갱신 이력 계획](./LOCATION_HISTORY_PLAN.md)에 기록했다.
+
+`MapAuthorization.CheckPostCreation` and `CheckPostParticipation` are read-only gRPC calls on port 50051. Only Post Service may call them. Initial `authorization` metadata must contain exactly one `Bearer` token. ES256 tokens use `typ=wgo-service+jwt`, a registered `kid`, issuer `wgo-post-service`, audience `wgo-map-service`, subject `post-service`, and a lifetime of at most 60 seconds. Map also accepts the existing HS256 Post tokens during migration. Invalid tokens return `UNAUTHENTICATED`; an authenticated caller without RPC permission gets `PERMISSION_DENIED`. Decisions return `allowed` and `reason` (`LOCATION_MISSING`, `LOCATION_STALE`, `OUTSIDE_RADIUS`). Checks use a location updated within five minutes and exact great-circle distance. Participation uses the post center and radius supplied by Post Service; the post ID is validated. The post spatial index is updated later by `PostCreated`.
+
+Set `MAP_SERVICE_TRUSTED_JWKS` to a JSON object with a `keys` array of public P-256 JWKs. Each entry needs `iss=wgo-post-service`, `kid`, `alg=ES256`, `kty=EC`, `crv=P-256`, `x`, and `y`. Map validates this configuration before connecting to its stores. The deployment order, checks, rollback, key rotation, TLS work, and later HS256 removal are tracked in the [Post→Map authentication rollout checklist](./POST_MAP_AUTH_ROLLOUT.md).
+
+Start local stores with `docker compose up -d`, wait for Cassandra's health check, then apply `docker cp schema.cql map-service-cassandra-1:/tmp/schema.cql` and `docker compose exec -T cassandra cqlsh -f /tmp/schema.cql`. Set variables from `.env.example` and run `pnpm dev`. `pnpm test`, `pnpm typecheck`, and `pnpm build` verify the service.
+
+## Interface and API documentation
+
+| Feature | Boundary | Contract |
+| --- | --- | --- |
+| `PUT /api/v1/location` | HTTP Gateway routes to Map; local/test only, production returns 503 | [OpenAPI](./contracts/map-http.openapi.json), Swagger UI at `http://localhost:3003/docs` and JSON at `/docs/openapi.json` |
+| `MapAuthorization` creation and participation checks | Internal Post Service → Map gRPC | [Protocol Buffers](./contracts/map-authorization.proto), [auth and error semantics](./contracts/map-authorization.md) |
+| `PostCreated`, `PostExpired`, `PostDeleted` projection | Internal Redis Stream `post:events` → Map Consumer | [event contract](./contracts/post-events.md), [creation schema](./contracts/post-created.schema.json), [status schema](./contracts/post-status.schema.json) |
+| `GET /internal/v1/posts/nearby` | HTTP Gateway → Map | [OpenAPI](./contracts/map-http.openapi.json) |
+| Cassandra/H3/Redis GEO index and `pnpm rebuild:posts` | Map internal storage and operator command | [schema](./schema.cql), rebuild procedure below |
+
+Swagger documents HTTP only. `/docs` is served directly by Map Service and is not routed through HTTP Gateway. Nearby search is an internal Map endpoint; Gateway issuance of its JWT and public response composition are follow-up work.
+
+## Nearby ACTIVE posts
+
+`GET /internal/v1/posts/nearby?latitude=37.4979&longitude=127.0276&radiusM=250` requires `authorization: Bearer <JWT>` in every environment. Set a separate `MAP_GATEWAY_JWT_SECRET` of at least 32 characters. The HS256 JWT must have issuer `wgo-http-gateway`, audience `wgo-map-service`, subject `http-gateway`, and a lifetime of at most 60 seconds. Radius is 150, 250, or 350m; `limit` defaults to 20 and is at most 100; `cursor` is optional. Response is `{ "items": [{ "postId": "...", "distanceM": 42 }], "nextCursor": null }`, ordered by exact center distance and then post ID. The cursor is bound to the search coordinates and radius. Invalid JWT is 401, invalid query or cursor 400, and required Cassandra read failure 503.
+
+Map reads candidates from Redis GEO and confirms location, ACTIVE status and expiry in Cassandra. GEO is trusted only after a completed rebuild certifies its active key and member count, no index writes remain unfinished, and no rebuild is in progress. Unknown or degraded GEO falls back to Cassandra even when some GEO candidates remain, merging both candidate sets. A trusted empty GEO result does not scan Cassandra. Polar coordinates continue to use Cassandra because Redis GEO does not cover them. This is consistency with Map's local projection, not a guarantee that every Post event has already arrived.
+
+Cassandra fallback consumes every page of each Cell/Shard before applying the existing distance order and API cursor/limit. In-flight reads for the same Cell/Shard are shared within one PostIndex instance, including their subsequent pages and failures. The sharing map holds at most 1,024 entries; requests beyond that use independent reads. Completed results are removed rather than cached. Each request independently validates candidates, distance, radius, expiry, sorting and cursor. Different ECS tasks do not share in-flight promises. Creation/status writes clear local sharing references before and after application to avoid retaining pre-write work for later requests.
+
+Candidate validation and Cell/Shard exploration use at most eight workers per request. Pages within a partition remain sequential. A read failure stops assignment of new work, waits for in-flight work and fails the request rather than returning incomplete results. Nearby searches enforce request-wide time/query/candidate budgets and propagate cancellation. Process-wide/cluster-wide DB concurrency limits remain follow-up work.
+
+### GEO health and recovery
+
+- `map:posts:geo:state`: `key`, `count`, `ready` and mutation `revision`; `map:posts:geo:dirty`: unfinished event tokens. These are operational metadata, not domain source data.
+- Before changing Cassandra, the consumer records the event as unfinished in Redis and advances the revision. If this fails, it does not start the Cassandra write. Successful Cassandra and GEO updates remove the token. Failed or interrupted events remain dirty until successful replay of the same event; they are not silently forgotten when sent to DLQ.
+- Lua checks the active pointer, certified key and ZCARD atomically with GEOSEARCH. A missing/mismatching pointer, metadata or member count invalidates certification. Partial member loss therefore triggers fallback even if remaining candidates are nonempty. Writes update the expected count atomically with GEO changes and never restore invalid certification by themselves.
+- Rebuild invalidates readiness first. It certifies only after a full scan with unchanged write revision, no unfinished writes, and a staging cardinality matching the scanned GEO-eligible rows. If writes overlap the scan, switching the rebuilt index is allowed but certification remains false; retry rebuild in a quiet interval. The rebuild CLI prints `ready` and `unfinishedWrites`.
+- Deploy all writers using this protocol before enabling certification, then run `pnpm rebuild:posts`. Until then searches conservatively fall back. Do not manually set `ready=1`, clear dirty tokens, or edit GEO/state keys. Resolve failed/Pending/DLQ events by replay before rebuilding; stale rebuild ownership after a process crash still requires the existing operational recovery procedure.
+- The request path automatically detects the described failures and falls back; it does not launch rebuild scans or a new background recovery scheduler. Operators run rebuild after restoring the cause. Redis key loss/eviction can invalidate certification; configure durable storage and a suitable no-eviction policy for metadata and event Streams.
+- Cardinality is not a content checksum: same-count member replacement, coordinate corruption, out-of-band Cassandra changes, or inconsistent Redis snapshot restoration are not detected comprehensively. Those require source reconciliation/rebuild. Full arbitrary-corruption detection and unseen Post events are not claimed.
+
+See [DB-call reduction measurements](../../docs/performance/map-fallback-sharing-2026-10-25/README.md) for the scope and measured limits.
+
+## Post spatial index
+
+Set `REDIS_URL` to the **same Redis instance as Post Service** so Map can consume `post:events`. The local Map compose Redis uses port 6381; when running Post Service's Redis on port 6380, set `REDIS_URL=redis://localhost:6380` instead. Redis also holds the latest user location cache and rebuildable post GEO index. Apply the updated `schema.cql` before starting the service. The `post-map` Consumer Group starts at Stream ID `0` when first created, uses `XREADGROUP`, and reclaims idle Pending entries with `XAUTOCLAIM`. Multiple Map instances share the group.
+
+For `PostCreated`, Stream fields are `eventId`, `eventType`, and `data`. `data` is JSON with `eventId`, `eventType: "PostCreated"`, `schemaVersion: 1`, `producer: "post-service"`, `aggregateId`, and `post: { postId, authorId, latitude, longitude, radiusM, category, expiresAt }`. IDs in the Stream fields and JSON must match. `expiresAt` is an ISO date or `null`. The [event contract](./contracts/post-events.md) defines the complete shape and Dead Letter fields. Invalid events go to `map:post:dead`; other event types are ACKed. After five failed deliveries, the original Stream ID, event ID, payload and error are written to that Dead Letter Stream before ACK. Check the logged `post-map metrics` every 30 seconds for Pending count, oldest idle time, processing failures, and Dead Letter count.
+
+Cassandra `post_locations` is Map's location recovery source and records `event_id`; `post_status` is its local status projection. `posts_by_cell` is an H3 cell and 16 shard lookup table. H3 resolution is fixed at **8**; changing it requires rebuilding the cell index. Creation initializes status and writes the source, then indexes only ACTIVE, unexpired posts in Cell and eligible GEO coordinates. A status recheck after index writes compensates concurrent termination. Status events update the projection, remove current and rebuilding GEO entries, look up cell/shard in the source and delete that exact Cell row before ACK. Missing source locations are tolerated when termination precedes creation; late creation performs cleanup. Location and status source rows are retained. Cross-store updates are not atomic; failures are repaired through Pending replay or DLQ recovery. Redis GEO is a derived index; reads always confirm Cassandra status.
+
+### 게시물 생성부터 공간 인덱스까지
+
+```mermaid
+sequenceDiagram
+    participant P as Post Service
+    participant O as MongoDB Outbox
+    participant W as Outbox Worker
+    participant S as Redis Stream post:events
+    participant M as Map Consumer post-map
+    participant C as Cassandra
+    participant G as Redis GEO
+
+    P->>O: 게시물과 PostCreated를 같은 트랜잭션에 저장
+    W->>O: 미발행 Outbox 행 선점
+    W->>S: XADD 기존 eventId와 data JSON
+    W->>O: PUBLISHED 기록
+    S->>M: XREADGROUP PostCreated 전달
+    Note over M: 계약 검증 후 좌표로 H3 cell(해상도 8) 계산<br/>postId 해시로 shard(0~15) 계산
+    M->>C: 1. post_locations 원본 저장
+    M->>C: 2. ACTIVE·미만료인 경우 posts_by_cell 갱신
+    M->>G: 3. 활성 GEO 키에 GEOADD
+    M->>S: 4. XACK
+    Note over M,S: 1~3단계 실패 시 Pending 유지<br/>XAUTOCLAIM 후 같은 이벤트 재처리
+```
+
+H3는 좌표를 cell ID로 변환하는 계산이며 별도의 저장소가 아니다. `posts_by_cell`은 GEO 장애·빈 결과에서 주변 후보를 찾기 위한 Cassandra 조회 테이블이다. Redis GEO는 게시물 ID와 좌표를 담는 빠른 거리 후보 인덱스이며 Cassandra 원본에서 다시 만들 수 있다. GEO에 ID가 남아 있어도 검색은 Cassandra의 `ACTIVE` 상태와 만료 시각을 확인한다.
+
+Outbox 발행 실패 시 Worker는 **같은 Outbox 행과 같은 `eventId`**로 재시도한다. 새 도메인 이벤트를 만들지 않는다. `XADD`는 성공했지만 `PUBLISHED` 기록이 실패하면 같은 `eventId`가 다른 Stream ID로 다시 발행될 수 있다. Map은 게시물 ID의 동일한 값을 재기록해 이 중복을 처리한다. Map의 저장 실패는 Post Outbox를 다시 생성하지 않으며, Map Consumer의 Pending 회수와 제한된 재시도로 복구한다. 이미 `PUBLISHED`로 기록한 뒤 Stream 데이터 자체가 유실된 경우에는 자동 재발행되지 않으며 Post 원본 대조와 재발행이 별도로 필요하다.
+
+To restore a lost GEO index or repair cell rows, run `pnpm rebuild:posts` with the same Cassandra and Redis settings while consumers remain running. It pages through `post_locations`, upserts active/unexpired cell rows, deletes terminal or expired cell rows, and builds a separate `map:posts:geo:build:*` key. Consumer GEO writes go to both current and build keys during the scan. A Redis script switches `map:posts:geo:active` after the scan; readers must resolve that pointer, falling back to `map:posts:geo:v1` if absent. The old GEO key may then be removed. Only one rebuild runs at a time. If the command is killed, inspect `map:posts:geo:rebuild` and remove that marker after confirming no rebuild is running; then rerun the command. Startup does not scan Cassandra. Run rebuild after rollout to clean legacy terminal Cell rows. This source-based scan cannot find orphan Cell rows whose location source is missing. No new expiration timer is added: cleanup happens during event processing or rebuild; searches always filter expiry. Source retention remains a separate policy. If the Stream event was lost before Map consumed it, reconcile against Post Service's source data and republish separately.
+
+```mermaid
+flowchart LR
+    C[(Cassandra post_locations)] -->|100행씩 읽기| R[관리 명령 rebuild:posts]
+    R -->|cell 행 대조·복구| H[(Cassandra posts_by_cell)]
+    R -->|기존 게시물 GEOADD| B[(새 Redis GEO 키)]
+    N[Map Consumer의 새 PostCreated] -->|재구축 중 이중 기록| A[(현재 Redis GEO 키)]
+    N -->|재구축 중 이중 기록| B
+    B -->|스캔 완료 후 포인터 전환| P[map:posts:geo:active]
+```
+
+Run the store backed tests with `RUN_INTEGRATION=1 pnpm test` after applying `schema.cql`. Post index tests use Redis database 15; location history tests use the configured `REDIS_URL` (port 6381 by default) and write test rows to Cassandra.
+
+
+### Post 추천 후보 gRPC
+
+`MapPostQuery.SearchNearbyPosts`를 위치 인가와 같은 gRPC 서버에 등록한다. ES256 Post 신원만 허용하고 150/250/350m 내 페이지당 최대 200개 후보 및 truncated·nextCursor를 반환한다. cursor를 보내 기존 주변 조회의 다음 페이지를 요청할 수 있다. Post 유사도 검색은 150m·첫 페이지 최대 200개만 비교한다. 기존 HTTP 최대 100개/커서 및 MapAuthorization HS256 전환 호환성은 유지한다. [계약](contracts/map-authorization.md). Post의 실제 임베딩 모델은 미연결이며 후보 RPC 자체는 모델과 무관하다. 실제 검색 연동 검증은 Post의 `pnpm semantic:fixture`에서 MongoDB·Redis·Cassandra·Map gRPC·ES를 함께 사용한다.
+
+## Nearby request budgets
+
+Defaults: MAP_NEARBY_TIMEOUT_MS=500, MAP_NEARBY_MAX_QUERIES=4500, MAP_NEARBY_MAX_CANDIDATES=2000, MAP_NEARBY_READ_TIMEOUT_MS=250. Values must be positive integers; timeout/read timeout are capped at 10000ms and query/candidate limits at 100000. Invalid settings fail startup. Supply overrides through the map-service runtime secrets map; these do not increase Post location authorization timeout.
+
+The caller deadline can shorten the internal time budget. Query budget counts logical Cassandra page/location/status reads across the entire request, including pages already read by a shared operation. Unique candidate IDs are bounded across GEO and Cassandra. These caps do not imply dense queries will succeed within the deadline. A timed-out/cancelled waiter detaches without cancelling other active waiters. When all waiters leave, no further pages are started and the sharing entry is removed.
+
+Redis waits use the remaining deadline and AbortSignal. Cassandra calls use readTimeout and FallthroughRetryPolicy; shared page reads use the configured per-read timeout so one short-deadline waiter cannot impose its deadline on longer-lived waiters. Actual server-side query cancellation is not guaranteed. Request completion stops scheduling new work and does not await an unresponsive driver indefinitely.
+
+Budget errors log map_nearby_budget_exceeded with code, logicalQueries, candidates and elapsedMs, without coordinates, tokens or content. gRPC and HTTP 503/504 error contracts are documented in contracts/map-authorization.md and map-http.openapi.json. Completed results are never silently truncated because a budget ran out.
+
+[Measurement and validation](../../docs/performance/map-budget-2026-10-25/README.md).
