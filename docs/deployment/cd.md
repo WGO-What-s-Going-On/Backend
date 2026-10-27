@@ -1,5 +1,7 @@
 # ECS Fargate 서비스별 배포
 
+최초 AWS 인프라 준비와 환경별 배포 실행 순서는 [AWS 배포 체크리스트](./aws-deployment-checklist.md)를 따른다.
+
 이 구현은 **이미 생성된 AWS 인프라에 애플리케이션을 배포**한다. VPC·DB·ECS·ECR·IAM·ALB를
 생성하지 않는다. 실제 AWS 호출이나 배포는 로컬 구현 검증에서 실행하지 않는다.
 
