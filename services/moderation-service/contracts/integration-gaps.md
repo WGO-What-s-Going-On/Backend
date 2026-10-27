@@ -26,7 +26,7 @@ Post가 다음 중 하나를 확정해야 한다.
 
 ## 콘텐츠 제재 결정
 
-현재 댓글 결과는 Moderation 내부 Redis 저장이다. `CONTENT_MODERATION_DECIDED`의 합의된 wire/수신 consumer와 자동 조치 API가 없다. Post의 운영 CLI에서 검토된 moderationDecisionId를 사용해 삭제하는 기능이 있다는 사실은 네트워크 결정 소비 계약이 있다는 뜻이 아니다. flagged만으로 자동 삭제하지 않는다.
+현재 댓글 결과는 Moderation Redis에 저장하고 moderation:content-events에 CONTENT_MODERATION_EVALUATED v1로 발행한다. 검사 결과는 확정 제재 결정과 다르다. `CONTENT_MODERATION_DECIDED`의 합의된 wire/수신 consumer와 자동 조치 API가 없다. Post의 운영 CLI에서 검토된 moderationDecisionId를 사용해 삭제하는 기능이 있다는 사실은 네트워크 결정 소비 계약이 있다는 뜻이 아니다. flagged만으로 자동 삭제하지 않는다.
 
 합의할 결정 event 또는 command에는 다음이 필요하다.
 
@@ -71,7 +71,7 @@ Post의 기본 수신·적용 계약은 [Post 이벤트 문서](../../post-servi
 
 Map은 실제 PostDeleted/PostExpired를 소비해 index에서 제외한다. Moderation BOARD_CLOSED를 소비하지 않으므로 Post 원본 상태 적용이 선행되어야 한다.
 
-WS Gateway는 참가 시 Post status가 ACTIVE인지 확인한다. 현재 PostEvents switch는 생성·댓글·공감·참여 생성 4종만 전달하고 삭제/만료 이벤트는 ACK한다. 따라서 상태 적용 뒤 신규 참가 차단과 별개로 기존 socket의 퇴장/쓰기 차단·종료 통지를 위한 확정 Post 이벤트 소비 계약과 구현이 필요하다. Moderation에서 Gateway socket을 직접 제어하지 않는다.
+WS Gateway는 참가 시 Post status가 ACTIVE인지 확인한다. 2026-10-25 dev에는 PostDeleted/PostExpired/PostCommentDeleted 전달과 Room 정리가 추가되어 있다. 기존 4종만 처리한다는 설명은 대체한다. Moderation은 Gateway socket을 직접 제어하지 않으며 실제 Post 적용 결과를 따라야 한다.
 
 ## Issue #31 범위
 
@@ -98,3 +98,13 @@ WS Gateway는 참가 시 Post status가 ACTIVE인지 확인한다. 현재 PostEv
 Post에는 처리 이력·상태 변경·Outbox를 같은 MongoDB 트랜잭션에 저장하는 중복 방어를 구현했다.
 `BOARD_REACTIVATED`로 이미 EXPIRED/DELETED인 게시물을 다시 열지 않는다. WS 종료 알림·Room 정리는
 WGO-ARCH-06이며 이번 lifecycle Consumer 구현의 완료 범위에 포함하지 않는다.
+
+## 2026-10-27 completion 상태
+
+댓글 검사 결과 producer와 동일 ID 복구/재발행은 구현했다.
+[콘텐츠 이벤트 계약](content-moderation-events.md)을 따른다. 결과 소비자의 검토/제재
+정책과 Post 본문 인가, contentVersion, 결정 적용/거부 피드백은 여전히 미완료다.
+Lifecycle v1 payload는 유지하고 사유·버전은 내부 projection/로그에서만 확인한다.
+예정 ID의 bounded lease 스케줄, CLOSED 압축, 실제 XADD 실패 복구와 migration CLI는
+[운영 문서](operations.md)를 따른다. 활성 단일 JSON 성장과 운영 영속성은 남은 과제다.
+Notification 완료 브랜치는 별도 dev 기반 PR이며 이 브랜치로 합치지 않았다.

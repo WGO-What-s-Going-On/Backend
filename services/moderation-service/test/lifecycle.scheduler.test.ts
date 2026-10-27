@@ -5,12 +5,31 @@ import { LifecycleScheduler } from '../src/lifecycle/lifecycle.scheduler.js';
 import type { LifecycleService } from '../src/lifecycle/lifecycle.service.js';
 
 describe('LifecycleScheduler', () => {
+  it('waits for an in-flight batch on shutdown and stops further evaluations', async () => {
+    let release!: (ids: string[]) => void;
+    const due = vi.fn(
+      () =>
+        new Promise<string[]>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const evaluate = vi.fn();
+    const scheduler = new LifecycleScheduler(
+      { due, evaluate } as unknown as LifecycleService,
+      { now: () => new Date() },
+    );
+    const scanning = scheduler.scan();
+    const stopping = scheduler.onModuleDestroy();
+    release(['p']);
+    await Promise.all([scanning, stopping]);
+    expect(evaluate).not.toHaveBeenCalled();
+    await scheduler.scan();
+    expect(due).toHaveBeenCalledOnce();
+  });
   it('uses the injected clock and scans every projection', async () => {
     const evaluate = vi.fn().mockResolvedValue(undefined);
     const lifecycle = {
-      list: vi
-        .fn()
-        .mockResolvedValue([{ postId: 'post_1' }, { postId: 'post_2' }]),
+      due: vi.fn().mockResolvedValue(['post_1', 'post_2']),
       evaluate,
     } as unknown as LifecycleService;
     const now = new Date('2026-01-01T01:00:00.000Z');
@@ -27,7 +46,7 @@ describe('LifecycleScheduler', () => {
       release = resolve;
     });
     const lifecycle = {
-      list: vi.fn().mockImplementation(() => waiting.then(() => [])),
+      due: vi.fn().mockImplementation(() => waiting.then(() => [])),
       evaluate: vi.fn(),
     } as unknown as LifecycleService;
     const scheduler = new LifecycleScheduler(lifecycle, {
@@ -35,7 +54,7 @@ describe('LifecycleScheduler', () => {
     });
     const first = scheduler.scan();
     await scheduler.scan();
-    expect(lifecycle.list).toHaveBeenCalledOnce();
+    expect(lifecycle.due).toHaveBeenCalledOnce();
     release();
     await first;
   });

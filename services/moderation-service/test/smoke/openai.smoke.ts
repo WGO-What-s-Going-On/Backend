@@ -52,12 +52,29 @@ it.skipIf(!process.env.OPENAI_API_KEY)(
           flagged: false,
           postId: id,
         });
+        const published = await h.redis.xRange(
+          'moderation:content-events',
+          '-',
+          '+',
+        );
+        expect(published).toHaveLength(1);
+        expect(JSON.parse(published[0]!.message.data!)).toMatchObject({
+          eventId: published[0]!.message.eventId,
+          eventType: 'CONTENT_MODERATION_EVALUATED',
+          sourceEventId: message.eventId,
+          targetType: 'COMMENT',
+          postId: id,
+          flagged: false,
+        });
         expect(await h.lifecycle.list()).toMatchObject([
           { postId: id, lastMeaningfulActivityAt: '2026-01-01T00:01:00.000Z' },
         ]);
         expect((await h.redis.xPending(stream, group)).pending).toBe(0);
         expect(await h.redis.get(`moderation:dedup:${message.eventId}`)).toBe(
           'done',
+        );
+        console.info(
+          'Live OpenAI → Redis canonical result → content event → lifecycle → ACK: passed',
         );
       } finally {
         await h.cleanup();

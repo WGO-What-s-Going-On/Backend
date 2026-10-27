@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -17,6 +17,7 @@ import {
 
 @Injectable()
 export class LifecycleService {
+  private readonly logger = new Logger(LifecycleService.name);
   constructor(
     @Inject(LIFECYCLE_REPOSITORY)
     private readonly repository: LifecycleRepository,
@@ -82,6 +83,7 @@ export class LifecycleService {
     if (!current) throw new Error(`Lifecycle projection missing: ${postId}`);
     const comment = current.comments?.[commentId];
     return (
+      current.state !== 'CLOSED' &&
       !current.sourceState &&
       !(comment && (comment.deleted || comment.version >= version))
     );
@@ -188,6 +190,11 @@ export class LifecycleService {
     return this.repository.list();
   }
 
+  async due(now: Date, limit = 100): Promise<string[]> {
+    if (this.repository.due) return this.repository.due(now, limit);
+    return (await this.repository.list()).slice(0, limit).map((p) => p.postId);
+  }
+
   private async change(
     postId: string,
     at: Date,
@@ -216,8 +223,22 @@ export class LifecycleService {
           decision.projection,
           event,
         )
-      )
+      ) {
+        if (event)
+          this.logger.log(
+            JSON.stringify({
+              event: 'lifecycle_transition_published',
+              service: 'moderation-service',
+              postId,
+              eventId: event.eventId,
+              eventType: event.eventType,
+              version: decision.projection.version,
+              reason: decision.projection.staleReason,
+              correlationId,
+            }),
+          );
         return;
+      }
     }
     throw new Error(`Lifecycle transition conflict: ${postId}`);
   }

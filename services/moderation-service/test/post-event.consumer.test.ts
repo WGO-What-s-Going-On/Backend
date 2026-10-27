@@ -179,6 +179,38 @@ describe('Post event contract', () => {
 });
 
 describe('PostEventConsumer', () => {
+  it('does not dead-letter a committed event when ACK fails at the retry limit', async () => {
+    const { consumer, redis, process } = setup();
+    redis.xPendingRange.mockResolvedValue([{ deliveriesCounter: 5 }]);
+    redis.xAck.mockRejectedValueOnce(new Error('ACK offline'));
+    const entry = {
+      id: '1-0',
+      message: fields('PostCreated', { post: { postId: 'post_1' } }),
+    };
+    await consumer.process(entry);
+    await consumer.process(entry);
+    expect(process).toHaveBeenCalledOnce();
+    expect(redis.xAdd).not.toHaveBeenCalled();
+    expect(redis.xPendingRange).not.toHaveBeenCalled();
+  });
+  it('continues the reclaim cursor beyond the first pending page', async () => {
+    const { consumer, redis } = setup();
+    redis.xAutoClaim.mockResolvedValueOnce({
+      messages: [],
+      nextId: '42-0',
+    } as never);
+    await consumer.pollOnce();
+    await consumer.pollOnce();
+    expect(redis.xAutoClaim).toHaveBeenNthCalledWith(
+      2,
+      'post:events',
+      'post-moderation',
+      expect.any(String),
+      30_000,
+      '42-0',
+      { COUNT: 20 },
+    );
+  });
   it('ACKs successful processing and deduplicates the same eventId', async () => {
     const { consumer, redis, process } = setup();
     const entry = {
