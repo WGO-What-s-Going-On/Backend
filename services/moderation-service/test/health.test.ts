@@ -26,5 +26,6 @@ describe('health endpoint', () => {
       .get('/health/live')
       .expect(200)
       .expect({ service: 'moderation-service', status: 'ok' });
+    await request(app.getHttpServer()).get('/health/ready').expect(503);
   });
 });

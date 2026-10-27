@@ -6,6 +6,7 @@ export interface LifecycleRepository {
   create(projection: LifecycleProjection): Promise<boolean>;
   find(postId: string): Promise<LifecycleProjection | null>;
   list(): Promise<LifecycleProjection[]>;
+  due?(now: Date, limit: number): Promise<string[]>;
   transition(
     expectedVersion: number,
     next: LifecycleProjection,
