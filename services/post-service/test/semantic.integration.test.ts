@@ -76,6 +76,10 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
     vi.stubEnv('SEMANTIC_WORKER_ENABLED', 'false');
     vi.stubEnv('SEMANTIC_INDEX_ALIAS', `${prefix}-read`);
     vi.stubEnv('MAP_GRPC_TIMEOUT_MS', '10000');
+    // 201개 후보의 실제 저장소/페이징 정확도를 검증한다. 기본 500ms 성능·취소 계약은
+    // map-budget.integration.test.ts에서 별도로 검증하므로 CI 부하와 결합하지 않는다.
+    vi.stubEnv('MAP_NEARBY_TIMEOUT_MS', '5000');
+    vi.stubEnv('MAP_NEARBY_READ_TIMEOUT_MS', '2000');
     // 201개 기존 후보에 두 개를 추가하면 실제 후보 예산을 초과하도록 설정한다.
     vi.stubEnv('MAP_NEARBY_MAX_CANDIDATES', '202');
     const pair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
@@ -428,24 +432,40 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
 
   it('returns HTTP 503 when Map times out instead of reporting a completed empty search', async () => {
     const execute = mapIndex.db.execute.bind(mapIndex.db);
+    const nearby = mapIndex.nearby.bind(mapIndex);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const reads: Promise<any>[] = [];
+    // 이 요청만 짧은 서버 deadline을 적용하고 첫 저장소 응답을 보류한다.
+    // 고정 sleep 길이나 기능 검증용 전역 예산에 의존하지 않는다.
+    const deadline = vi
+      .spyOn(mapIndex, 'nearby')
+      .mockImplementation((query: any, context: any) =>
+        nearby(query, {
+          ...context,
+          deadline: Math.min(context.deadline, Date.now() + 500),
+        }),
+      );
     const slow = vi
       .spyOn(mapIndex.db, 'execute')
       .mockImplementation((...args: any[]) => {
         if (!String(args[0]).startsWith('SELECT')) return execute(...args);
-        const read = new Promise((resolve) => setTimeout(resolve, 600)).then(
-          () => execute(...args),
-        );
+        const read = held.then(() => execute(...args));
         reads.push(read);
         return read;
       });
     try {
       const response = await similar().expect(503);
+      expect(reads.length).toBeGreaterThan(0);
       expect(response.body.code).toBe('SIMILARITY_CHECK_UNAVAILABLE');
       expect(response.body).not.toHaveProperty('items');
     } finally {
-      slow.mockRestore();
+      release();
       await Promise.allSettled(reads);
+      slow.mockRestore();
+      deadline.mockRestore();
     }
   }, 10000);
 
@@ -486,6 +506,11 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
     expect(embedding.embed).not.toHaveBeenCalled();
   });
   it('rebuilds old source outside Stream retention, catches up, switches alias and serializes with worker', async () => {
+    // 앞선 검색 assertion의 성공 여부와 무관하게 rebuild의 삭제 제외 조건을 준비한다.
+    await posts.updateOne(
+      { postId: ids[199] },
+      { $set: { status: 'DELETED' } },
+    );
     const old = await posts.findOne({ postId: ids[0] }).lean();
     const oldId = `post_${randomUUID()}`;
     const { _id: _, ...fields } = old;
