@@ -20,7 +20,10 @@ GitHub Environment의 `AWS_REGION`이 ECS 앱으로 자동 전달되는 것은 �
 | Map `AWS_REGION` | 없음 | Keyspaces 필수, 이 환경은 ap-northeast-2 |
 | Map `CASSANDRA_CA_PATH` | 없음 | Keyspaces 필수, 읽을 수 있는 PEM CA 묶음 |
 | User `DB_TLS_MODE` | disable | 운영 verify-full 필수; require/검증 우회 모드 없음 |
-| User `DB_TLS_CA_PATH` | 없음 | verify-full일 때 필수, disable과 함께 지정하면 오류 |
+| User `DB_AUTH_MODE` | password | iam은 새 연결마다 ECS 자격 증명으로 토큰 발급; DB_PASSWORD 금지 |
+| User `AWS_REGION` | 없음 | DB_AUTH_MODE=iam일 때 필수 |
+| User `DB_TLS_CA_SOURCE` | file | file은 RDS CA 파일, system은 Node의 공개 신뢰 루트(Aurora Express) |
+| User `DB_TLS_CA_PATH` | 없음 | verify-full + file일 때 필수; system 또는 disable과 함께 지정하면 오류 |
 | Post `MONGODB_URI` | 로컬 replica set URI | 운영 TLS/CA/DB 계정은 아래 URI로 명시 |
 | Post `ELASTICSEARCH_URL` | http://localhost:9200 | 운영 HTTPS + 인증서 SAN과 같은 DNS |
 | Post `ELASTICSEARCH_API_KEY` | 없음 | 현재 인증된 ES 운영 연결에는 필수, encoded API key |
@@ -39,6 +42,25 @@ AWS_PROFILE을 넣지 않는다. 공유 credentials 파일도 이미지/볼륨�
 ECS가 제공하는 credential endpoint 환경변수는 SDK가 사용하므로 제거하지 않는다.
 TLS 검증 우회 옵션(NODE_TLS_REJECT_UNAUTHORIZED=0, tlsInsecure, tlsAllowInvalidCertificates,
 tlsAllowInvalidHostnames, rejectUnauthorized:false)을 사용하지 않는다.
+
+### User Aurora Express IAM 인증
+
+Aurora Express의 인터넷 액세스 게이트웨이는 IAM 인증 전용이며 사용자 VPC에 속하지 않는다.
+이 구성을 유지하는 staging에서는 `DB_AUTH_MODE=iam`, `AWS_REGION`, 실제 `DB_HOST`,
+`DB_USER`, `DB_NAME`, `DB_TLS_MODE=verify-full`, `DB_TLS_CA_SOURCE=system`을 지정한다.
+`DB_PASSWORD`와 `DB_TLS_CA_PATH`는 제외한다. 일반 VPC RDS의 파일 CA 설정은 그대로 유지한다.
+
+앱과 TypeORM migration은 동일한 password 콜백을 사용한다. pg가 새 연결을 열 때마다
+AWS SDK Signer가 IAM 토큰을 생성하며 ECS 임시 자격 증명 갱신도 SDK가 처리한다.
+15분짜리 토큰을 환경변수로 고정하거나 DB 연결 풀 시작 시 한 번만 발급하지 않는다.
+DB 역할에는 `LOGIN`, `rds_iam`과 User 소유 DB/스키마에 필요한 권한만 부여한다.
+User task role에는 해당 DB 사용자 ARN
+`arn:aws:rds-db:<region>:<account>:dbuser:<cluster-resource-id>/<DB_USER>`에 대한
+`rds-db:connect`가 필요하다. execution role이나 GitHub 배포 역할의 권한으로 대체되지 않는다.
+기본 AWS 자격 증명 체인을 사용하며 정적 AWS 키를 Secret에 넣지 않는다.
+
+컨테이너에서 실제 TLS·IAM 접속과 migration을 검증해야 배포 준비가 완료된다.
+IAM 토큰 생성 성공만으로 `rds-db:connect` 권한이 검증되는 것은 아니다.
 
 ## 인증서 공급: 이미지에 개인키를 복사하지 않는다
 

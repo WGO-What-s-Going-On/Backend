@@ -1,4 +1,5 @@
 import { databaseTls } from '../database/tls.js';
+import { databasePassword } from '../database/auth.js';
 
 function positiveInteger(
   value: string | undefined,
@@ -15,16 +16,19 @@ function positiveInteger(
 }
 
 export function configuration() {
+  const connection = {
+    host: process.env.DB_HOST ?? 'localhost',
+    port: positiveInteger(process.env.DB_PORT, 5432, 'DB_PORT'),
+    username: process.env.DB_USER ?? 'wgo',
+  };
   return {
     app: {
       port: positiveInteger(process.env.PORT, 3001, 'PORT'),
     },
     database: {
       ssl: databaseTls(),
-      host: process.env.DB_HOST ?? 'localhost',
-      port: positiveInteger(process.env.DB_PORT, 5432, 'DB_PORT'),
-      username: process.env.DB_USER ?? 'wgo',
-      password: process.env.DB_PASSWORD ?? 'wgo',
+      ...connection,
+      password: databasePassword(connection),
       name: process.env.DB_NAME ?? 'wgo_user',
     },
     redis: {

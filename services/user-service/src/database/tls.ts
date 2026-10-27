@@ -4,16 +4,27 @@ import { X509Certificate } from 'node:crypto';
 // 앱과 migration이 같은 검증 정책을 사용해야 배포 중 연결 정책이 달라지지 않는다.
 export function databaseTls(
   env = process.env,
-): false | { ca: string; rejectUnauthorized: true } {
+): false | { ca?: string; rejectUnauthorized: true } {
   const mode = env.DB_TLS_MODE ?? 'disable';
+  const source = env.DB_TLS_CA_SOURCE ?? 'file';
+  if (!['file', 'system'].includes(source))
+    throw new Error('DB_TLS_CA_SOURCE must be file or system');
   if (!['disable', 'verify-full'].includes(mode))
     throw new Error('DB_TLS_MODE must be disable or verify-full');
   if (env.NODE_ENV === 'production' && mode !== 'verify-full')
     throw new Error('DB_TLS_MODE=verify-full is required in production');
   if (mode === 'disable') {
-    if (env.DB_TLS_CA_PATH)
+    if (env.DB_TLS_CA_PATH || env.DB_TLS_CA_SOURCE)
       throw new Error('DB_TLS_CA_PATH requires DB_TLS_MODE=verify-full');
     return false;
+  }
+  // Aurora Express uses public AWS roots, while VPC RDS uses the supplied RDS CA bundle.
+  if (source === 'system') {
+    if (env.DB_TLS_CA_PATH)
+      throw new Error(
+        'DB_TLS_CA_PATH must be omitted with DB_TLS_CA_SOURCE=system',
+      );
+    return { rejectUnauthorized: true };
   }
   if (!env.DB_TLS_CA_PATH?.trim())
     throw new Error('DB_TLS_CA_PATH is required for verify-full');
