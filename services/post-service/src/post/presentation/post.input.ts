@@ -1,3 +1,4 @@
+import { mediaIds } from '../media/media.policy.js';
 import {
   BadRequestException,
   ForbiddenException,
@@ -60,9 +61,13 @@ export function postInput(raw: unknown): PostInput {
     'latitude',
     'longitude',
     'radiusM',
+    'mediaIds',
   ]);
   const category = string(body.category, 'category');
   return {
+    ...(body.mediaIds === undefined
+      ? {}
+      : { mediaIds: mediaIds(body.mediaIds) }),
     title: string(body.title, 'title'),
     content: string(body.content, 'content'),
     category,
@@ -74,7 +79,8 @@ export function postInput(raw: unknown): PostInput {
 
 export function commentInput(raw: unknown): string {
   const body = object(raw);
-  fields(body, ['content']);
+  fields(body, ['content', 'mediaIds']);
+  mediaIds(body.mediaIds);
   return string(body.content, 'content');
 }
 
@@ -127,4 +133,8 @@ export function commentId(value: string): string {
   if (!/^comment_[0-9a-f-]{36}$/.test(value))
     throw new BadRequestException('Invalid commentId');
   return value;
+}
+
+export function commentMediaInput(raw: unknown): string[] {
+  return mediaIds(object(raw).mediaIds);
 }

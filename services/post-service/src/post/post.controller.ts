@@ -1,3 +1,12 @@
+import { Header } from '@nestjs/common';
+import { MediaResponse } from './media/media.openapi.js';
+import { MediaService } from './media/media.service.js';
+import { Inject } from '@nestjs/common';
+import {
+  POST_STATE_QUERIES,
+  type PostStateQueries,
+} from './application/ports.js';
+import { PostNotFoundError } from './domain/post.js';
 import { PostLifecycle } from './application/lifecycle.js';
 import { MongooseVote } from './infrastructure/mongoose-vote.js';
 import { VoteBody, VoteResponse } from './presentation/vote.openapi.js';
@@ -52,6 +61,7 @@ import { ReadPosts } from './application/queries.js';
 import { PostErrorFilter } from './presentation/post-error.filter.js';
 import {
   commentInput,
+  commentMediaInput,
   commentReactionInput,
   commentReactionType,
   commentId,
@@ -108,6 +118,8 @@ export class PostController {
     private readonly findSimilar: FindSimilarPosts,
     private readonly lifecycle: PostLifecycle,
     private readonly votes: MongooseVote,
+    private readonly mediaService: MediaService,
+    @Inject(POST_STATE_QUERIES) private readonly postQueries: PostStateQueries,
   ) {}
 
   @Get(':postId/vote')
@@ -368,7 +380,46 @@ export class PostController {
     return this.findSimilar.execute(similarInput(body), actorId);
   }
 
+  @Get(':postId/media')
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary: '게시물 첨부 조회 URL 갱신',
+    description: '기존 ACTIVE 게시물 공개 조회 정책을 적용합니다.',
+  })
+  @ApiOkResponse({ type: [MediaResponse] })
+  async postMedia(@Param('postId') id: string) {
+    return (await this.readPosts.detail(postId(id))).media;
+  }
+
+  @Get(':postId/comments/:commentId/media')
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary: '댓글 첨부 조회 URL 갱신',
+    description: '부모 게시물과 댓글이 모두 ACTIVE여야 합니다.',
+  })
+  @ApiOkResponse({ type: [MediaResponse] })
+  async commentMedia(
+    @Param('postId') id: string,
+    @Param('commentId') cid: string,
+  ) {
+    const validated = postId(id);
+    const parent = await this.readPosts.status(validated);
+    if (
+      parent.status !== 'ACTIVE' ||
+      (parent.expiresAt && parent.expiresAt <= new Date())
+    )
+      throw new PostNotFoundError('Post not found');
+    const comment = await this.postQueries.findComment(
+      validated,
+      commentId(cid),
+    );
+    if (!comment || comment.status !== 'ACTIVE')
+      throw new PostNotFoundError('Comment not found');
+    return (await this.mediaService.forTargets([comment]))[0]!;
+  }
+
   @Get(':postId')
+  @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary: '게시물 상세 조회',
     description: 'ACTIVE 게시물만 반환합니다.',
@@ -384,6 +435,7 @@ export class PostController {
   }
 
   @Get(':postId/comments')
+  @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary: '댓글 목록 조회',
     description:
@@ -469,7 +521,13 @@ export class PostController {
     @Body() body: unknown,
   ) {
     const authorId = userId(header);
-    return this.createComment.execute(postId(id), commentInput(body), authorId);
+    return this.createComment.execute(
+      postId(id),
+      commentInput(body),
+      authorId,
+      undefined,
+      commentMediaInput(body),
+    );
   }
 
   @Post(':postId/comments/:commentId/reactions')
@@ -646,6 +704,7 @@ export class InternalPostController {
   }
 
   @Get(':postId')
+  @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary: '내부 게시물 상세 조회',
     description: '서비스 JWT가 필요하며 ACTIVE 게시물만 반환합니다.',
@@ -665,6 +724,7 @@ export class InternalPostController {
   }
 
   @Get(':postId/comments')
+  @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary: '내부 댓글 목록 조회',
     description: '서비스 JWT가 필요하며 HTTP 공개 조회와 같은 커서 형식입니다.',
@@ -787,9 +847,10 @@ export class InternalPostController {
       throw new BadRequestException('Invalid mutationId');
     return this.createComment.execute(
       postId(id),
-      commentInput({ content: input.content }),
+      commentInput({ content: input.content, mediaIds: input.mediaIds }),
       authorId,
       input.mutationId,
+      commentMediaInput(input),
     );
   }
 }

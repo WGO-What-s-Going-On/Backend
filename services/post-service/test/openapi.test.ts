@@ -1,3 +1,6 @@
+import { MediaController } from '../src/post/media/media.controller.js';
+import { MediaService } from '../src/post/media/media.service.js';
+import { POST_STATE_QUERIES } from '../src/post/application/ports.js';
 import { PostLifecycle } from '../src/post/application/lifecycle.js';
 import { MongooseVote } from '../src/post/infrastructure/mongoose-vote.js';
 import { FindSimilarPosts } from '../src/post/semantic/search.js';
@@ -26,8 +29,15 @@ describe('OpenAPI document', () => {
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
-      controllers: [HealthController, PostController, InternalPostController],
+      controllers: [
+        MediaController,
+        HealthController,
+        PostController,
+        InternalPostController,
+      ],
       providers: [
+        MediaService,
+        POST_STATE_QUERIES,
         PostLifecycle,
         MongooseVote,
         CreatePost,
@@ -61,6 +71,11 @@ describe('OpenAPI document', () => {
       [
         '/api/v1/posts',
         '/api/v1/posts/similar',
+        '/api/v1/posts/media/uploads',
+        '/api/v1/posts/media/uploads/{mediaId}',
+        '/api/v1/posts/media/uploads/{mediaId}/complete',
+        '/api/v1/posts/{postId}/media',
+        '/api/v1/posts/{postId}/comments/{commentId}/media',
         '/api/v1/posts/{postId}',
         '/api/v1/posts/{postId}/comments',
         '/api/v1/posts/{postId}/comments/{commentId}',
