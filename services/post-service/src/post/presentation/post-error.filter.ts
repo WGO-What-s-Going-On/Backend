@@ -1,3 +1,4 @@
+import { InvalidMediaError } from '../media/media.policy.js';
 import { SimilarityUnavailableError } from '../semantic/policy.js';
 import { VoteUnavailableError } from '../application/vote.js';
 import {
@@ -22,6 +23,7 @@ import {
 } from '../domain/post.js';
 
 @Catch(
+  InvalidMediaError,
   SimilarityUnavailableError,
   PostNotFoundError,
   PostOwnershipError,
@@ -58,7 +60,8 @@ export class PostErrorFilter implements ExceptionFilter {
             error instanceof PostInactiveError ||
             error instanceof PostOwnershipError
           ? new ForbiddenException(error.message)
-          : error instanceof InvalidPostError
+          : error instanceof InvalidPostError ||
+              error instanceof InvalidMediaError
             ? new BadRequestException(error.message)
             : error instanceof LocationDeniedError
               ? new ForbiddenException(error.message)

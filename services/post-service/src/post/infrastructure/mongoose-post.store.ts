@@ -1,3 +1,6 @@
+import { ConflictException } from '@nestjs/common';
+import type { MediaRecord } from '../media/media.schema.js';
+import { mediaIds } from '../media/media.policy.js';
 import type { ModerationLifecycleEvent } from '../application/moderation.js';
 import { Injectable } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
@@ -71,6 +74,7 @@ class MongoQueries implements PostStateQueries {
           postId,
           authorId,
           content: comment.content,
+          mediaIds: comment.mediaIds ?? [],
           status: comment.status,
           createdAt: comment.createdAt,
           updatedAt: comment.updatedAt,
@@ -174,6 +178,7 @@ class MongoCommands implements PostCommands {
     private readonly bucketCount: number,
     private readonly moderationReceipts: Model<any>,
     private readonly session: ClientSession,
+    private readonly media: Model<MediaRecord>,
   ) {}
 
   async recordModerationEvent(
@@ -192,7 +197,40 @@ class MongoCommands implements PostCommands {
     return true;
   }
 
+  private async attachMedia(
+    ids: string[] | undefined,
+    ownerId: number,
+    postId: string,
+    commentId?: string,
+  ) {
+    for (const id of mediaIds(ids)) {
+      // 소유권·미첨부 상태와 대상 저장을 같은 트랜잭션으로 묶어 중복 연결과 취소 경합을 막는다.
+      const result = await this.media.updateOne(
+        {
+          mediaId: id,
+          ownerId,
+          status: 'READY',
+          expiresAt: { $gt: new Date() },
+        },
+        {
+          $set: {
+            status: 'ATTACHED',
+            attachedAt: new Date(),
+            postId,
+            ...(commentId ? { commentId } : {}),
+          },
+        },
+        { session: this.session },
+      );
+      if (result.modifiedCount !== 1)
+        throw new ConflictException(
+          'Media is not ready, owned, or already attached',
+        );
+    }
+  }
+
   async insertPost(post: PostRecord): Promise<void> {
+    await this.attachMedia(post.mediaIds, post.authorId, post.postId);
     await this.posts.create(
       [
         {
@@ -229,6 +267,12 @@ class MongoCommands implements PostCommands {
     comment: CommentRecord & { bucketId: number },
     mutationId?: string,
   ): Promise<void> {
+    await this.attachMedia(
+      comment.mediaIds,
+      comment.authorId,
+      comment.postId,
+      comment.commentId,
+    );
     await this.comments.create(
       [{ ...comment, ...(mutationId ? { mutationId } : {}) }],
       { session: this.session },
@@ -576,6 +620,7 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
     private readonly moderationReceipts: Model<any>,
     private readonly config: ConfigService,
     private readonly outboxWorker: OutboxWorker,
+    @InjectModel('Media') private readonly media: Model<MediaRecord>,
   ) {}
 
   findPost(postId: string): Promise<PostState | null> {
@@ -665,6 +710,7 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
               this.config.getOrThrow<number>('post.bucketCount'),
               this.moderationReceipts,
               session,
+              this.media,
             ),
           }),
         );

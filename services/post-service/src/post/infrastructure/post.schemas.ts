@@ -6,6 +6,7 @@ const options = { versionKey: false, strict: true } as const;
 export const PostSchema = new Schema(
   {
     postId: { type: String, required: true, unique: true },
+    mediaIds: { type: [String], default: [] },
     authorId: { type: Number, required: true },
     category: { type: String, required: true },
     title: { type: String, required: true },
@@ -49,6 +50,7 @@ VoteSelectionSchema.index({ postId: 1, userId: 1 }, { unique: true });
 export const CommentSchema = new Schema(
   {
     commentId: { type: String, required: true, unique: true },
+    mediaIds: { type: [String], default: [] },
     postId: { type: String, required: true },
     bucketId: { type: Number, required: true, default: 0 },
     authorId: { type: Number, required: true },

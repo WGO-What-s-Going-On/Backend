@@ -267,3 +267,7 @@ MongoDB localhost:27017 replica set `rs0`와 Redis localhost:6380을 준비한 �
 함수를 연결한다. 위치 저장소와 WS 사용자 인증만 테스트 fixture로 대체한다.
 위치 없음·만료·반경 밖·Map 장애·정상 참여·재연결·중복 join·댓글 위치 재검증·멱등 재시도를 확인한다.
 기존 WS 이벤트 테스트는 동일 Redis Stream을 사용하므로 Post 테스트와 별도 실행한다.
+
+## S3 이미지·동영상 첨부
+
+게시물·댓글 각각 이미지/동영상 합계 최대 5개를 지원한다. 업로드 예약 → S3 PUT → 완료 검증 → `mediaIds`로 작성 → 조회 시 GET URL 발급 흐름이다. URL은 저장하지 않는다. 기본 비활성이고 운영 공개 쓰기는 기존 인증 정책대로 503이다. API·프론트 예시·환경변수·IAM/CORS/Lifecycle·DB 인덱스·배포 검증은 [미디어 계약](contracts/media.md)을 따른다.

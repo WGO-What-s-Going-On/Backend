@@ -1,3 +1,4 @@
+import { MediaResponse } from '../media/media.openapi.js';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CommentReactionType, PostReactionType } from '../domain/post.js';
 
@@ -11,6 +12,14 @@ const dateTime = {
 } as const;
 
 export class CreatePostBody {
+  @ApiPropertyOptional({
+    type: [String],
+    maxItems: 5,
+    uniqueItems: true,
+    description:
+      '본인 READY 이미지·동영상 ID, 합계 최대 5개. 배열 순서로 표시.',
+  })
+  mediaIds?: string[];
   @ApiProperty({ maxLength: 120, example: '현장 상황' }) title!: string;
   @ApiProperty({ maxLength: 5000, example: '현재 교통 상황을 공유합니다.' })
   content!: string;
@@ -28,6 +37,14 @@ export class CreatePostBody {
 }
 
 export class CreateCommentBody {
+  @ApiPropertyOptional({
+    type: [String],
+    maxItems: 5,
+    uniqueItems: true,
+    description:
+      '본인 READY 이미지·동영상 ID, 합계 최대 5개. 배열 순서로 표시.',
+  })
+  mediaIds?: string[];
   @ApiProperty({ maxLength: 2000, example: '현장 확인했습니다.' })
   content!: string;
 }
@@ -90,6 +107,12 @@ export class CountersResponse {
 }
 
 export class PostResponse {
+  @ApiPropertyOptional({ type: [String], maxItems: 5 }) mediaIds?: string[];
+  @ApiPropertyOptional({
+    type: [MediaResponse],
+    description: '조회 응답에서 제공. 만료 시 media 조회 API로 갱신.',
+  })
+  media?: MediaResponse[];
   @ApiProperty({ example: postIdExample }) postId!: string;
   @ApiProperty({ example: 123 }) authorId!: number;
   @ApiProperty({ example: 'INCIDENT' }) category!: string;
@@ -109,6 +132,12 @@ export class PostResponse {
 }
 
 export class CommentResponse {
+  @ApiPropertyOptional({ type: [String], maxItems: 5 }) mediaIds?: string[];
+  @ApiPropertyOptional({
+    type: [MediaResponse],
+    description: '조회 응답에서 제공. 만료 시 media 조회 API로 갱신.',
+  })
+  media?: MediaResponse[];
   @ApiProperty({ example: 'comment_123e4567-e89b-12d3-a456-426614174000' })
   commentId!: string;
   @ApiProperty({ example: postIdExample }) postId!: string;

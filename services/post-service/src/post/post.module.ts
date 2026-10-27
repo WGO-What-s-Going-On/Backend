@@ -1,3 +1,8 @@
+import { MediaSchema } from './media/media.schema.js';
+import { MediaService } from './media/media.service.js';
+import { S3MediaStorage } from './media/s3-media.storage.js';
+import { MediaCleanupWorker } from './media/media.worker.js';
+import { MediaController } from './media/media.controller.js';
 import { ApplyModerationLifecycle } from './application/moderation.js';
 import { ModerationWorker } from './infrastructure/moderation-consumer.js';
 import { PostLifecycle } from './application/lifecycle.js';
@@ -53,6 +58,7 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
   imports: [
     SemanticModule,
     MongooseModule.forFeature([
+      { name: 'Media', schema: MediaSchema, collection: 'post_media' },
       { name: 'Post', schema: PostSchema, collection: 'posts' },
       {
         name: 'ModerationReceipt',
@@ -84,8 +90,11 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
       { name: 'Outbox', schema: OutboxSchema, collection: 'outbox_events' },
     ]),
   ],
-  controllers: [PostController, InternalPostController],
+  controllers: [MediaController, PostController, InternalPostController],
   providers: [
+    MediaService,
+    S3MediaStorage,
+    MediaCleanupWorker,
     MongoosePostStore,
     MongoosePostRead,
     MongooseVote,
@@ -93,8 +102,9 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
     { provide: POST_READ_QUERIES, useExisting: MongoosePostRead },
     {
       provide: ReadPosts,
-      useFactory: (queries: PostReadQueries) => new ReadPosts(queries),
-      inject: [POST_READ_QUERIES],
+      useFactory: (queries: PostReadQueries, media: MediaService) =>
+        new ReadPosts(queries, media),
+      inject: [POST_READ_QUERIES, MediaService],
     },
     { provide: POST_UNIT_OF_WORK, useExisting: MongoosePostStore },
     { provide: POST_STATE_QUERIES, useExisting: MongoosePostStore },

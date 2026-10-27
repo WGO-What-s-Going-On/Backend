@@ -106,6 +106,7 @@ export class CreateComment {
     content: string,
     authorId: number,
     mutationId?: string,
+    mediaIds: string[] = [],
   ): Promise<CommentRecord> {
     const post = await this.queries.findPost(postId);
     requireActive(post);
@@ -138,6 +139,7 @@ export class CreateComment {
       content,
       `comment_${randomUUID()}`,
       now,
+      mediaIds,
     );
     try {
       return await this.unitOfWork.execute(async (transaction) => {

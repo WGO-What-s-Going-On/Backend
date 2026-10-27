@@ -31,6 +31,7 @@ export class MongoosePostRead implements PostReadQueries {
       category: post.category,
       title: post.title,
       content: post.content,
+      mediaIds: post.mediaIds ?? [],
       status: post.status,
       locationSnapshot: {
         latitude: post.locationSnapshot.latitude,
@@ -99,6 +100,7 @@ export class MongoosePostRead implements PostReadQueries {
         postId: row.postId,
         authorId: row.authorId,
         content: row.content,
+        mediaIds: row.mediaIds ?? [],
         status: row.status,
         reactionCounts: {
           ...emptyCommentReactionCounts(),

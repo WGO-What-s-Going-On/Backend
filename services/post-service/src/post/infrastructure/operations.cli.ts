@@ -1,3 +1,4 @@
+import { MediaSchema } from '../media/media.schema.js';
 import 'reflect-metadata';
 import { createConnection } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
@@ -123,6 +124,7 @@ async function main() {
       ),
       new ConfigService(config),
       { wake() {} } as OutboxWorker,
+      db.model('Media', MediaSchema, 'post_media'),
     );
     const lifecycle = new PostLifecycle(store, new HashPartitionStrategy());
     if (command === 'schedule-expiration')

@@ -1,3 +1,5 @@
+import { MediaService } from '../src/post/media/media.service.js';
+import { POST_STATE_QUERIES } from '../src/post/application/ports.js';
 import { PostLifecycle } from '../src/post/application/lifecycle.js';
 import { MongooseVote } from '../src/post/infrastructure/mongoose-vote.js';
 import { Test } from '@nestjs/testing';
@@ -39,6 +41,8 @@ describe('similar HTTP contract', () => {
       controllers: [PostController],
       providers: [
         ...[
+          MediaService,
+          POST_STATE_QUERIES,
           PostLifecycle,
           MongooseVote,
           CreatePost,

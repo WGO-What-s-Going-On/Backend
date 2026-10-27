@@ -1,3 +1,4 @@
+import { mediaIds as validateMediaIds } from '../media/media.policy.js';
 export type PostStatus = 'ACTIVE' | 'EXPIRED' | 'DELETED';
 
 export interface PostState {
@@ -13,6 +14,7 @@ export interface PostState {
 }
 
 export interface PostInput {
+  mediaIds?: string[];
   title: string;
   content: string;
   category: string;
@@ -22,6 +24,7 @@ export interface PostInput {
 }
 
 export interface PostRecord {
+  mediaIds?: string[];
   postId: string;
   status: PostStatus;
   authorId: number;
@@ -42,6 +45,7 @@ export interface PostRecord {
 }
 
 export interface CommentRecord {
+  mediaIds?: string[];
   commentId: string;
   postId: string;
   authorId: number;
@@ -157,6 +161,7 @@ export function createPost(
   postId: string,
   now: Date,
 ): PostRecord {
+  const attachments = validateMediaIds(input.mediaIds);
   requireText(input.title, 'title', 120);
   requireText(input.content, 'content', 5000);
   requireText(input.category, 'category', 40);
@@ -168,6 +173,7 @@ export function createPost(
   return {
     postId,
     authorId,
+    ...(attachments.length ? { mediaIds: attachments } : {}),
     title: input.title,
     content: input.content,
     category: input.category,
@@ -192,12 +198,15 @@ export function createComment(
   content: string,
   commentId: string,
   now: Date,
+  attachments: string[] = [],
 ): CommentRecord {
+  const ids = validateMediaIds(attachments);
   requireText(content, 'content', 2000);
   return {
     commentId,
     postId,
     authorId,
+    ...(ids.length ? { mediaIds: ids } : {}),
     content,
     status: 'ACTIVE',
     createdAt: now,

@@ -239,3 +239,18 @@ export interface NearbyPostsPage {
 export interface NearbyPostsQueryPort {
   page(query: NearbyPostsQuery): Promise<NearbyPostsPage>;
 }
+
+export interface MediaReadPort {
+  forTargets(
+    targets: { postId: string; commentId?: string; mediaIds?: string[] }[],
+  ): Promise<
+    {
+      mediaId: string;
+      type: 'IMAGE' | 'VIDEO';
+      contentType: string;
+      sizeBytes: number;
+      url: string;
+      expiresAt: string;
+    }[][]
+  >;
+}
