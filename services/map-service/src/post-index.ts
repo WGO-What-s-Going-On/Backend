@@ -1,3 +1,4 @@
+import { cassandraOptions } from './cassandra-config.js';
 import { createHash, randomUUID } from 'node:crypto';
 import cassandra from 'cassandra-driver';
 import { gridDisk, latLngToCell } from 'h3-js';
@@ -297,11 +298,7 @@ export class PostIndex {
     );
   }
 
-  readonly db = new cassandra.Client({
-    contactPoints: [process.env.CASSANDRA_HOST ?? 'localhost'],
-    localDataCenter: process.env.CASSANDRA_DATACENTER ?? 'datacenter1',
-    keyspace: process.env.CASSANDRA_KEYSPACE ?? 'wgo_map',
-  });
+  readonly db = new cassandra.Client(cassandraOptions());
   readonly redis = createClient({
     url: process.env.REDIS_URL ?? 'redis://localhost:6381',
   });

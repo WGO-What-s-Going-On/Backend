@@ -18,6 +18,7 @@ const database = configuration().database;
 
 export default new DataSource({
   type: 'postgres',
+  ssl: database.ssl,
   host: database.host,
   port: database.port,
   username: database.username,

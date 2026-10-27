@@ -1,5 +1,7 @@
 # ECS Fargate 서비스별 배포
 
+최초 AWS 인프라 준비와 환경별 배포 실행 순서는 [AWS 배포 체크리스트](./aws-deployment-checklist.md)를 따른다.
+
 이 구현은 **이미 생성된 AWS 인프라에 애플리케이션을 배포**한다. VPC·DB·ECS·ECR·IAM·ALB를
 생성하지 않는다. 실제 AWS 호출이나 배포는 로컬 구현 검증에서 실행하지 않는다.
 
@@ -99,3 +101,10 @@ SSM 권한 오류, production 미반영 배포 따라잡기와 강제 Secret 회
 [ECS 배포 circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html).
 
 트리거 기준: [GitHub의 PR 병합 이벤트](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#running-your-pull_request_target-workflow-when-a-pull-request-merges).
+
+## 운영 저장소 및 파일 공급
+
+[최초 AWS 저장소 연결](./aws-storage.md)의 변수 표·CA 읽기 전용 볼륨·모델 이미지·IAM·검증 차단 조건을 따른다.
+Post 모델 다운로드는 기존 Docker build 내부에서 고정 revision/체크섬으로 수행하며 runtime Secret을 빌드에 전달하지 않는다.
+인증서는 기존 Task Definition volumes/mountPoints로 공급하고 새 버전 경로를 사용한다.
+Secret VersionId 고정·rollback·production 동일 digest 승격과 최초 ECS Service 생성 제외 범위는 변경하지 않는다.

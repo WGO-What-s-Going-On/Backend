@@ -50,20 +50,22 @@ function boolean(name: string, fallback: boolean): boolean {
   throw new Error(`${name} must be either true or false`);
 }
 
-function url(name: string, fallback: string): string {
+function url(name: string, fallback: string, redis = false): string {
   const value = process.env[name] ?? fallback;
 
   try {
     const parsed = new URL(value);
     if (
-      parsed.protocol !== 'http:' &&
-      parsed.protocol !== 'https:' &&
-      parsed.protocol !== 'redis:'
+      !(redis ? ['redis:', 'rediss:'] : ['http:', 'https:']).includes(
+        parsed.protocol,
+      )
     ) {
       throw new Error('unsupported protocol');
     }
   } catch {
-    throw new Error(`${name} must be a valid HTTP(S) or Redis URL`);
+    throw new Error(
+      `${name} must be a valid ${redis ? 'Redis (redis/rediss)' : 'HTTP(S)'} URL`,
+    );
   }
 
   return value.replace(/\/$/, '');
@@ -102,7 +104,7 @@ export function loadConfig(): AppConfig {
       enabled: boolean('RATE_LIMIT_ENABLED', true),
       max: integer('RATE_LIMIT_MAX', 100, 1),
       windowMs: integer('RATE_LIMIT_WINDOW_MS', 60_000, 1),
-      redisUrl: url('REDIS_URL', 'redis://127.0.0.1:6379'),
+      redisUrl: url('REDIS_URL', 'redis://127.0.0.1:6379', true),
     },
     upstream: {
       requestTimeoutMs: integer('UPSTREAM_REQUEST_TIMEOUT_MS', 5_000, 1),

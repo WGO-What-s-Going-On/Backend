@@ -8,6 +8,7 @@ export function createTypeOrmOptions(
 ): TypeOrmModuleOptions {
   return {
     type: 'postgres',
+    ssl: config.getOrThrow('database.ssl'),
     host: config.getOrThrow<string>('database.host'),
     port: config.getOrThrow<number>('database.port'),
     username: config.getOrThrow<string>('database.username'),
