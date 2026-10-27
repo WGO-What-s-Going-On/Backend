@@ -29,6 +29,7 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
   private readonly redis: ReturnType<typeof createClient>;
   private stopped: boolean;
   private running?: Promise<void>;
+  private pendingCursor = '0-0';
 
   constructor(
     config: ConfigService,
@@ -43,8 +44,21 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
     this.group =
       config.get<string>('redis.moderationConsumerGroup') ?? 'post-moderation';
     this.redis =
-      redis ?? createClient({ url: url ?? 'redis://localhost:6383' });
-    this.redis.on('error', (error) => this.logger.warn(error));
+      redis ??
+      createClient({
+        url: url ?? 'redis://localhost:6383',
+        disableOfflineQueue: true,
+        commandOptions: { timeout: 3000 },
+        socket: { connectTimeout: 2000 },
+      });
+    this.redis.on('error', () =>
+      this.logger.warn(
+        JSON.stringify({
+          event: 'moderation_redis_error',
+          service: 'moderation-service',
+        }),
+      ),
+    );
     this.stopped = !url && !redis;
   }
 
@@ -66,6 +80,14 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
     // 진행 중인 API 결과 저장과 ACK를 마친 뒤 연결을 닫는다. BLOCK은 최대 1초다.
     await this.running?.catch(() => undefined);
     if (this.redis.isOpen) await this.redis.quit();
+  }
+
+  async ready(): Promise<boolean> {
+    return (
+      !this.stopped &&
+      this.redis.isReady &&
+      (await this.redis.ping()) === 'PONG'
+    );
   }
 
   async process(entry: Entry): Promise<void> {
@@ -104,7 +126,19 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
           }
         }
       }
-      await this.redis.xAck(this.stream, this.group, entry.id);
+      try {
+        await this.redis.xAck(this.stream, this.group, entry.id);
+      } catch {
+        // A committed result remains success even when transport ACK fails.
+        this.logger.warn(
+          JSON.stringify({
+            event: 'moderation_ack_failed',
+            service: 'moderation-service',
+            streamId: entry.id,
+            eventId: entry.message.eventId,
+          }),
+        );
+      }
     } catch (error) {
       const pending = await this.redis.xPendingRange(
         this.stream,
@@ -114,6 +148,15 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
         1,
       );
       const attempts = pending[0]?.deliveriesCounter ?? 1;
+      this.logger.warn(
+        JSON.stringify({
+          event: 'moderation_event_retry',
+          service: 'moderation-service',
+          streamId: entry.id,
+          eventId: entry.message.eventId,
+          attempts,
+        }),
+      );
       if (
         (error instanceof Error && error.message.startsWith('Invalid')) ||
         attempts >= 5
@@ -125,6 +168,15 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
           data: entry.message.data ?? '',
         });
         await this.redis.xAck(this.stream, this.group, entry.id);
+        this.logger.warn(
+          JSON.stringify({
+            event: 'moderation_event_dead_lettered',
+            service: 'moderation-service',
+            streamId: entry.id,
+            eventId: entry.message.eventId,
+            attempts,
+          }),
+        );
       }
     }
   }
@@ -175,7 +227,12 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
         await this.pollOnce();
       } catch (error) {
         if (!this.stopped) {
-          this.logger.warn(error);
+          this.logger.warn(
+            JSON.stringify({
+              event: 'moderation_consumer_poll_failed',
+              service: 'moderation-service',
+            }),
+          );
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
       }
@@ -188,9 +245,10 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
       this.group,
       this.consumer,
       30_000,
-      '0-0',
+      this.pendingCursor,
       { COUNT: 20 },
-    )) as unknown as { messages: Entry[] };
+    )) as unknown as { messages: Entry[]; nextId?: string };
+    this.pendingCursor = claimed.nextId ?? '0-0';
     for (const entry of claimed.messages) {
       if (this.stopped) return;
       if (entry) await this.process(entry);

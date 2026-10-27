@@ -17,6 +17,6 @@ import { RedisModerationResultRepository } from './redis-moderation-result.repos
     },
     CommentModerationService,
   ],
-  exports: [CommentModerationService],
+  exports: [CommentModerationService, RedisModerationResultRepository],
 })
 export class ContentModerationModule {}

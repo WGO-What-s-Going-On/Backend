@@ -93,6 +93,29 @@ describe('CommentModerationService', () => {
 });
 
 describe('OpenAiModerationAdapter', () => {
+  it.each([
+    {
+      flagged: 'true',
+      categories: { violence: true },
+      category_scores: { violence: 0.1 },
+    },
+    {
+      flagged: false,
+      categories: { violence: false },
+      category_scores: { violence: 1.5 },
+    },
+  ])('rejects malformed provider output %s', async (result) => {
+    const adapter = new OpenAiModerationAdapter(new ConfigService(), {
+      moderations: {
+        create: vi
+          .fn()
+          .mockResolvedValue({ model: 'fixture', results: [result] }),
+      },
+    } as unknown as OpenAI);
+    await expect(adapter.moderate('private fixture')).rejects.toMatchObject({
+      retryable: false,
+    });
+  });
   it('maps the official SDK response into the internal result', async () => {
     const create = vi.fn().mockResolvedValue({
       model: 'omni-moderation-latest',
