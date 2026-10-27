@@ -20,6 +20,7 @@ export interface LifecycleProjection {
   comments?: Record<string, { version: number; deleted: boolean }> | undefined;
   sourceState?: 'DELETED' | 'EXPIRED';
   postVersion?: number;
+  pendingPublication?: LifecycleEvent;
 }
 
 export type ReactionType =
@@ -215,6 +216,9 @@ export function evaluateLifecycle(
       projection: {
         ...current,
         state: 'CLOSED',
+        // Terminal state replaces relation tombstones; retain decision evidence separately.
+        reactions: undefined,
+        comments: undefined,
         ...(current.staleReason === 'ENDED'
           ? { endedAssessment: assessment }
           : {}),

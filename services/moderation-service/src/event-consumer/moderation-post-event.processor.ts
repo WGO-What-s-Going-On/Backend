@@ -30,13 +30,19 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
             event.comment.commentId,
             event.activityVersion ?? 1,
           ))
-        )
+        ) {
+          // Deletion/duplicate activity must not strand an already computed result.
+          await this.moderation.republishExisting(event.eventId);
           return;
+        }
         await this.moderation.moderate({
           eventId: event.eventId,
           postId: event.aggregateId,
           commentId: event.comment.commentId,
           content: event.comment.content,
+          correlationId: event.correlationId,
+          authorId: event.comment.authorId,
+          activityVersion: event.activityVersion ?? 1,
         });
         await this.lifecycle.recordComment(
           event.aggregateId,

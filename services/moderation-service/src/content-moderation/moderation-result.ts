@@ -10,4 +10,8 @@ export interface StoredModerationResult extends ModerationResult {
   postId: string;
   commentId: string;
   moderatedAt: string;
+  correlationId?: string;
+  authorId?: number;
+  activityVersion?: number;
+  sourceHash?: string;
 }

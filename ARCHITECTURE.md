@@ -455,3 +455,20 @@ Notification=DynamoDB, 공통 Redis=노드 기반 ElastiCache(클러스터 모�
 위의 초기 PostgreSQL 설계와 달리 Notification 실제 영속 어댑터는 DynamoDB이며 이번 작업으로 저장소를 전환한 것은 아니다.
 서비스 데이터 소유권과 동기/비동기 통신 계약은 유지한다. TLS/Task Role/CA 공급 및 미검증 호환성 차단 조건은
 [AWS 저장소 연결](docs/deployment/aws-storage.md)을 따른다. 이 프로파일은 AWS 연결 검증 완료를 뜻하지 않는다.
+실제 모델은 아직 연결하지 않는다. 일반 실행의 추천은 503이며 Worker는 이벤트를 소비하지 않는다. 기존 앱 시작/생존/생성/조회는 ES·모델 준비에 의존하지 않는다. 상세 계약은 [Post 검색 계약](services/post-service/contracts/semantic-search.md)에 있다.
+## Moderation 검사 결과 전달 및 운영 스케줄 (2026-10-27)
+
+현재 Moderation 구현은 Redis 결과·projection과 Streams를 사용하며 이 작업에서
+PostgreSQL로 저장소를 변경하지 않는다. PostCommentCreated의 AI 검사 사실은
+`moderation:content-events`의 CONTENT_MODERATION_EVALUATED v1로 분리한다.
+결과·준비된 이벤트와 발행 receipt를 Lua로 처리하고 XADD 실패는 동일 결과/ID로
+복구한다. flagged는 제재 확정이 아니며 소유 서비스의 원본 DB를 수정하지 않는다.
+기존 `moderation:events` BOARD 이벤트와 Post의 CLOSED → EXPIRED 소비는 유지한다.
+
+Lifecycle은 다음 평가 시각의 Redis sorted set에서 최대 100개 ID를 선점한다.
+전체 projection 조회를 Scheduler에서 제거하며 CAS가 최종 전이/발행을 보호한다.
+발행 실패 시 projection에 보존한 이벤트를 같은 ID로 복구하고, 미발행 CLOSED도
+복구 스케줄에 남긴다. 기존 데이터에는 명시적인 인덱스 백필이 필요하다.
+Redis Cluster hash-tag 전환, 영속성/RPO, 활성 관계 상태의 분리와 감사 보존은
+후속 검토 대상이다. [검사 결과 계약](services/moderation-service/contracts/content-moderation-events.md)과
+[운영·마이그레이션](services/moderation-service/contracts/operations.md)을 따른다.

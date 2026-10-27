@@ -14,6 +14,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "lifecycle:migrate-due": "node scripts/migrate-lifecycle-due.mjs",
+    "content:republish": "node scripts/republish-content-result.mjs",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:openai-smoke": "vitest run --config vitest.smoke.config.ts"
   },

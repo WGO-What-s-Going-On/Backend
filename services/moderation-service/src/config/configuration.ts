@@ -23,6 +23,9 @@ export function configuration() {
       postEventStream: process.env.POST_EVENT_STREAM ?? 'post:events',
       moderationEventStream:
         process.env.MODERATION_EVENT_STREAM ?? 'moderation:events',
+      contentEventStream:
+        process.env.MODERATION_CONTENT_EVENT_STREAM ??
+        'moderation:content-events',
       moderationConsumerGroup:
         process.env.MODERATION_CONSUMER_GROUP ?? 'post-moderation',
     },

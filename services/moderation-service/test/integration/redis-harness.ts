@@ -50,7 +50,14 @@ export async function redisHarness(
     socket: { reconnectStrategy: false },
   });
   const consumer = new PostEventConsumer(config, processor, connection);
-  const keys = new Set([stream, output, dead, 'moderation:lifecycle:posts']);
+  const keys = new Set([
+    stream,
+    output,
+    dead,
+    'moderation:lifecycle:posts',
+    'moderation:lifecycle:due',
+    'moderation:content-events',
+  ]);
 
   function postId() {
     const id = `post_${randomUUID()}`;
@@ -68,6 +75,7 @@ export async function redisHarness(
     const eventId = `evt_${randomUUID()}`;
     keys.add(`moderation:dedup:${eventId}`);
     keys.add(`moderation:content:${eventId}`);
+    keys.add(`moderation:content-published:${eventId}`);
     // dev의 application/commands.ts payload와 outbox.worker.ts의 펼쳐진 envelope를 그대로 따른다.
     const payload =
       type === 'PostCreated'

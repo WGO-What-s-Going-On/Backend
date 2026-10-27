@@ -294,6 +294,20 @@ describe('Moderation production components with real Redis', () => {
       new LifecycleScheduler(h.lifecycle, { now: () => now }),
       new LifecycleScheduler(h.lifecycle, { now: () => now }),
     ];
+    await Promise.all(schedulers.map((s) => s.scan()));
+    await schedulers[0]!.scan();
+    expect(await h.repository.find(young)).toMatchObject({
+      state: 'ACTIVE',
+      version: 0,
+    });
+    expect(await h.repository.find(old)).toMatchObject({
+      state: 'STALE',
+      staleAt: now.toISOString(),
+      version: 1,
+    });
+    expect((await events()).map((e) => e.eventType)).toEqual(['BOARD_STALE']);
+    const later = new Date('2026-01-01T02:10:00.000Z');
+    // 새로운 ACTIVE가 임계점을 넘지 않도록 이 경우는 같은 old post만 CAS 경쟁시킨다.
     // 두 scanner가 같은 version을 읽은 뒤 CAS하도록 순서를 고정한다.
     const find = h.repository.find.bind(h.repository);
     let release!: () => void;
@@ -311,25 +325,6 @@ describe('Moderation production components with real Redis', () => {
         }
         return projection;
       });
-    await Promise.all(schedulers.map((s) => s.scan()));
-    expect(reads).toBe(2);
-    await schedulers[0]!.scan();
-    expect(await h.repository.find(young)).toMatchObject({
-      state: 'ACTIVE',
-      version: 0,
-    });
-    expect(await h.repository.find(old)).toMatchObject({
-      state: 'STALE',
-      staleAt: now.toISOString(),
-      version: 1,
-    });
-    expect((await events()).map((e) => e.eventType)).toEqual(['BOARD_STALE']);
-    const later = new Date('2026-01-01T02:10:00.000Z');
-    // 새로운 ACTIVE가 임계점을 넘지 않도록 이 경우는 같은 old post만 CAS 경쟁시킨다.
-    reads = 0;
-    barrier = new Promise<void>((resolve) => {
-      release = resolve;
-    });
     await Promise.all([
       h.lifecycle.evaluate(old, later),
       h.lifecycle.evaluate(old, later),
