@@ -125,7 +125,7 @@ test('release promotion requires exact source SHA and digest for every entry', (
   );
 });
 
-test('CI is PR-only and CD accepts only merged main PRs before checkout', async () => {
+test('CI is PR-only and CD accepts only main pushes before checkout', async () => {
   const { readFileSync } = await import('node:fs');
   const { runInNewContext } = await import('node:vm');
   const workflow = readFileSync(
@@ -138,14 +138,22 @@ test('CI is PR-only and CD accepts only merged main PRs before checkout', async 
   );
   assert.match(ci, /pull_request:\s+types: \[opened, synchronize, reopened\]/);
   assert.doesNotMatch(ci, /\n  (?:push|workflow_dispatch|workflow_run):/);
-  assert.match(
-    workflow,
-    /pull_request_target:\s+types: \[closed\]\s+branches: \[main\]/,
-  );
-  assert.match(workflow, /if: github.event.pull_request.merged == true/);
+  assert.match(workflow, /push:\s+branches: \[main\]/);
   assert.doesNotMatch(
     workflow,
-    /workflow_run|workflow_dispatch|pull_request.head.sha/,
+    /workflow_run|workflow_dispatch|pull_request_target|merge_commit_sha/,
+  );
+  assert.equal(
+    (workflow.match(/CD_SHA: \$\{\{ github.sha \}\}/g) ?? []).length,
+    3,
+  );
+  assert.equal(
+    (workflow.match(/ref: \$\{\{ github.sha \}\}/g) ?? []).length,
+    2,
+  );
+  assert.equal(
+    (workflow.match(/name: release-\$\{\{ github.sha \}\}/g) ?? []).length,
+    2,
   );
   assert.ok(
     workflow.indexOf('Reject untrusted release source before checkout') <
@@ -157,36 +165,45 @@ test('CI is PR-only and CD accepts only merged main PRs before checkout', async 
   const code = inline.replace(/import \{ readFileSync \} from 'node:fs';/, '');
   const sha = 'a'.repeat(40);
   const event = {
-    action: 'closed',
-    pull_request: {
-      merged: true,
-      merge_commit_sha: sha,
-      base: { ref: 'main', repo: { full_name: 'org/repo' } },
-    },
+    ref: 'refs/heads/main',
+    after: sha,
+    deleted: false,
+    repository: { full_name: 'org/repo' },
   };
-  const check = (value, name = 'pull_request_target') =>
+  const check = (value, overrides = {}) =>
     runInNewContext(code, {
       readFileSync: () => JSON.stringify(value),
       process: {
         env: {
-          GITHUB_EVENT_NAME: name,
+          GITHUB_EVENT_NAME: 'push',
           GITHUB_REPOSITORY: 'org/repo',
+          GITHUB_REF: 'refs/heads/main',
+          GITHUB_SHA: sha,
           CD_SHA: sha,
+          ...overrides,
         },
       },
     });
   assert.doesNotThrow(() => check(event));
-  assert.throws(() => check(event, 'push'));
   for (const patch of [
-    { merged: false },
-    { merge_commit_sha: 'b'.repeat(40) },
-    { base: { ref: 'develop', repo: { full_name: 'org/repo' } } },
-    { base: { ref: 'main', repo: { full_name: 'other/repo' } } },
+    { ref: 'refs/heads/dev' },
+    { ref: 'refs/tags/main' },
+    { deleted: true },
+    { after: 'b'.repeat(40) },
+    { after: '0'.repeat(40) },
+    { after: 'invalid' },
+    { repository: { full_name: 'other/repo' } },
+    { repository: undefined },
   ])
-    assert.throws(() =>
-      check({ ...event, pull_request: { ...event.pull_request, ...patch } }),
-    );
-  assert.throws(() => check({ ...event, action: 'opened' }));
+    assert.throws(() => check({ ...event, ...patch }));
+  for (const overrides of [
+    { GITHUB_EVENT_NAME: 'pull_request_target' },
+    { GITHUB_EVENT_NAME: 'workflow_dispatch' },
+    { GITHUB_REF: 'refs/heads/dev' },
+    { GITHUB_SHA: 'b'.repeat(40) },
+    { CD_SHA: 'b'.repeat(40) },
+  ])
+    assert.throws(() => check(event, overrides));
 });
 
 test('release artifact supports re-running all jobs after a production failure', async () => {

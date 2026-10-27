@@ -26,11 +26,14 @@
 
 ## 파이프라인 흐름
 
-1. `pull_request_target`의 `closed` 이벤트 중 **main으로 실제 병합된 PR만** 배포한다.
-   단순 PR 닫기, main 직접 push, PR 생성/업데이트, 수동 신규 실행은 배포하지 않는다.
-   checkout 전에 이벤트·merged 상태·대상 저장소·main·병합 SHA를 검사한다. fork에서 온 PR도
-   병합 이후에만 처리하며 PR head는 checkout하지 않는다. merge/squash/rebase 방식 모두 이벤트의
-   `merge_commit_sha`로 고정한 병합 결과를 배포한다. CI는 PR 단계에서만 실행한다.
+1. **main 브랜치의 `push` 이벤트**로 배포한다. PR 병합도 main push를 발생시킨다.
+   dev push, 태그 push, PR 닫기만으로는 실행되지 않으며 수동 신규 실행도 지원하지 않는다.
+   checkout 전에 push 이벤트·main ref·대상 저장소·브랜치 삭제 여부·SHA 일치를 검사한다.
+   checkout, `CD_SHA`, release artifact 이름 모두 실행 시점의 `github.sha`로 고정한다.
+   저장소 기본 브랜치가 dev여도 실행 ref는 main이므로 Environment의 main 제한과 일치한다.
+   직접 main push도 트리거되므로 **PR·필수 ci·최신 main 반영을 요구하고 우회를 제한하는
+   main 보호 규칙**이 필요하다. CD 자체는 PR 병합 여부나 CI 성공을 재조회하지 않는다.
+   CI는 기존처럼 PR 단계에서만 실행한다.
 2. staging에서 서비스별 SSM 마지막 성공 SHA와 현재 SHA의 런타임 변경을 비교한다.
    테스트·문서만 변경되면 이미지를 다시 만들지 않는다. 누락된 state는 최초 배포로 간주한다.
    권한/네트워크 오류를 state 없음으로 처리하지 않는다. 삭제되거나 유효하지 않은 과거 Git SHA는
@@ -100,7 +103,10 @@ SSM 권한 오류, production 미반영 배포 따라잡기와 강제 Secret 회
 [AWS ECS update-service](https://docs.aws.amazon.com/cli/latest/reference/ecs/update-service.html),
 [ECS 배포 circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html).
 
-트리거 기준: [GitHub의 PR 병합 이벤트](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#running-your-pull_request_target-workflow-when-a-pull-request-merges).
+트리거 기준: [GitHub의 push 이벤트](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#push).
+
+전환 시 변경된 workflow를 main에 반영해야 한다. 기존 pull_request_target 실패 실행을 재실행해도
+새 트리거로 바뀌지 않는다. 반영 후 생성된 push 실행에서 staging과 production을 검증한다.
 
 ## 운영 저장소 및 파일 공급
 
