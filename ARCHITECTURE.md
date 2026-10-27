@@ -446,4 +446,12 @@ Post 원본은 MongoDB다. Post 내부 EmbeddingProvider 계산 포트와 ES 검
 
 작성 초안은 Post → 기존 Map 위치 인가 → MapPostQuery.SearchNearbyPosts(150m,최대200) → Post Mongo 원본 검증 → 초안 임베딩 → ES 후보 벡터 비교 → Mongo 최종 검증으로 처리한다. 생성은 기존 MongoDB+Outbox 흐름을 유지한다. 독립 그룹 post-semantic-v1 Worker가 생성 이벤트를 소비해 최신 원본을 인덱싱한다. 재구축은 버전별 소비 lease·Stream watermark·원본 스캔·따라잡기·검증·ES 별칭 전환을 사용한다.
 
-실제 모델은 아직 연결하지 않는다. 일반 실행의 추천은 503이며 Worker는 이벤트를 소비하지 않는다. 기존 앱 시작/생존/생성/조회는 ES·모델 준비에 의존하지 않는다. 상세 계약은 [Post 검색 계약](services/post-service/contracts/semantic-search.md)에 있다.
+실제 E5 모델은 고정 revision/체크섬으로 연결되며 Post 운영 이미지에 포함한다. 운영 이미지 진입점은 활성 모델 파일과 CA 설정을 검사한다. 모델 warm-up·ES alias·평가된 threshold가 준비되지 않으면 추천은 503이다. 로컬 개발의 기존 degraded 시작은 유지한다. 상세 계약은 [Post 검색 계약](services/post-service/contracts/semantic-search.md)에 있다.
+
+## AWS 최초 배포 프로파일
+
+현재 구현 기준 연결은 User=RDS PostgreSQL, Post=인스턴스 기반 DocumentDB, Map=Keyspaces,
+Notification=DynamoDB, 공통 Redis=노드 기반 ElastiCache(클러스터 모드 비활성화), 검색=Private EC2 Elasticsearch다.
+위의 초기 PostgreSQL 설계와 달리 Notification 실제 영속 어댑터는 DynamoDB이며 이번 작업으로 저장소를 전환한 것은 아니다.
+서비스 데이터 소유권과 동기/비동기 통신 계약은 유지한다. TLS/Task Role/CA 공급 및 미검증 호환성 차단 조건은
+[AWS 저장소 연결](docs/deployment/aws-storage.md)을 따른다. 이 프로파일은 AWS 연결 검증 완료를 뜻하지 않는다.

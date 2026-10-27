@@ -1,3 +1,5 @@
+-- LOCAL CASSANDRA ONLY. Never execute this replication/compaction configuration on Keyspaces.
+-- Production table verification: docs/deployment/aws-storage.md
 CREATE KEYSPACE IF NOT EXISTS wgo_map WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 CREATE TABLE IF NOT EXISTS wgo_map.user_locations (
   user_id bigint PRIMARY KEY,

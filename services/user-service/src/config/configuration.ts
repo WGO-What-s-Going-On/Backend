@@ -1,3 +1,5 @@
+import { databaseTls } from '../database/tls.js';
+
 function positiveInteger(
   value: string | undefined,
   fallback: number,
@@ -18,6 +20,7 @@ export function configuration() {
       port: positiveInteger(process.env.PORT, 3001, 'PORT'),
     },
     database: {
+      ssl: databaseTls(),
       host: process.env.DB_HOST ?? 'localhost',
       port: positiveInteger(process.env.DB_PORT, 5432, 'DB_PORT'),
       username: process.env.DB_USER ?? 'wgo',

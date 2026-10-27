@@ -29,3 +29,22 @@ describe('loadConfig', () => {
     expect(() => loadConfig()).toThrow('JWT_ACCESS_ISSUER');
   });
 });
+
+it('accepts authenticated TLS Redis without accepting Redis upstreams', () => {
+  process.env = {
+    REDIS_URL: 'rediss://:encoded-password@cache.example:6379/0',
+  };
+  expect(loadConfig().rateLimit.redisUrl).toBe(process.env.REDIS_URL);
+  process.env.POST_SERVICE_URL = 'rediss://cache.example:6379';
+  expect(() => loadConfig()).toThrow('POST_SERVICE_URL');
+});
+
+it('rejects HTTP Redis URLs without exposing credentials', () => {
+  process.env = { REDIS_URL: 'https://:do-not-print@cache.example' };
+  expect(() => loadConfig()).toThrow('REDIS_URL');
+  try {
+    loadConfig();
+  } catch (error) {
+    expect(String(error)).not.toContain('do-not-print');
+  }
+});

@@ -36,3 +36,10 @@ Post가 삭제·만료 상태와 Outbox를 함께 기록하고 PostDeleted/PostE
 기존 `MapPostQuery.SearchNearbyPosts`의 요청에 `cursor`(필드 5), 응답에 `next_cursor`(필드 3)를 추가한다. 응답 items/postId/distanceM/truncated는 그대로다. Map은 기존 Redis GEO·Cassandra 공간 조회와 커서를 재사용해 페이지당 최대 200개를 반환한다. 첫 페이지의 cursor와 마지막 페이지의 nextCursor는 gRPC에서 빈 문자열이다. Post `GrpcNearbyPosts.page()`는 마지막 nextCursor를 null로 변환하며, 같은 좌표·반경으로 다음 페이지를 요청할 수 있다.
 
 유사도 검색용 `search()`는 150m·limit=200·cursor 없는 한 번의 RPC만 호출한다. 다음 페이지가 있어도 자동으로 추가 조회하지 않으며 기존 CANDIDATE_LIMIT 부분 결과를 유지한다. 구 Map 서버의 nextCursor 없는 응답도 유사도 검색에서는 호환되지만, 일반 페이지 조회에서 truncated=true이고 nextCursor가 없으면 오류로 처리해 다음 페이지를 잃지 않도록 한다.
+
+## 운영 이미지 파일 공급
+
+Docker build가 기존 고정 revision/체크섬 준비 스크립트로 모델을 /opt/wgo/models/e5에 포함한다.
+이미지 dist/start.js는 모델 활성화 시 파일 읽기/해시 및 설정된 CA 파일을 검사한 뒤 앱을 실행한다.
+로컬 dev의 degraded 시작 동작은 유지한다. 추론 warm-up 실패·미평가 threshold·미초기화 alias는
+여전히 검색 준비 완료가 아니다. [운영 연결·CA 볼륨·검증 절차](../../../docs/deployment/aws-storage.md)를 따른다.

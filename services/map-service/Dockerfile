@@ -10,6 +10,8 @@ RUN pnpm build && pnpm prune --prod
 FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# Read-only certificate volume is supplied by the task definition.
+RUN mkdir -p /app/certs
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

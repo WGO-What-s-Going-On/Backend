@@ -1,3 +1,4 @@
+import { cassandraOptions } from './cassandra-config.js';
 import cassandra from 'cassandra-driver';
 import { createClient } from 'redis';
 import type { Location, LocationStore } from './location.js';
@@ -29,11 +30,7 @@ export class CassandraLocationStore implements LocationStore {
   });
 
   constructor() {
-    this.db = new cassandra.Client({
-      contactPoints: [process.env.CASSANDRA_HOST ?? 'localhost'],
-      localDataCenter: process.env.CASSANDRA_DATACENTER ?? 'datacenter1',
-      keyspace: process.env.CASSANDRA_KEYSPACE ?? 'wgo_map',
-    });
+    this.db = new cassandra.Client(cassandraOptions());
   }
 
   async connect(): Promise<void> {

@@ -8,6 +8,7 @@
 
 - 배포 동작: [CD 운영 문서](./cd.md)
 - GitHub Secret 이름·JSON 예시: [`.env.cd.example`](../../.env.cd.example)
+- 운영 저장소/TLS/파일 공급: [AWS 저장소 연결](./aws-storage.md)
 - 실행 기준: [CD workflow](../../.github/workflows/cd.yml), [배포 스크립트](../../scripts/cd.mjs)
 
 ## 전체 순서
@@ -90,7 +91,7 @@ Task Role은 AWS API 권한이고 SG는 네트워크 접근 제어다. SG로 연
 - [ ] Map의 [Cassandra schema](../../services/map-service/schema.cql)를 선택한 저장소에 맞춰 검토한다.
 - [ ] DynamoDB 테이블·인덱스·TTL 설정과 애플리케이션의 기대 구조를 일치시킨다.
 - [ ] Elasticsearch mapping·alias 초기화를 준비한다.
-- [ ] 실제 운영 TLS·인증 정책으로 연결 테스트를 한다. 현재 PostgreSQL·Cassandra 설정에 필요한 연결 옵션이 없다면 배포 전 보강한다.
+- [ ] 실제 운영 TLS·인증 정책으로 연결 테스트를 한다. 추가된 PostgreSQL verify-full 및 Keyspaces TLS/SigV4 설정을 실제 endpoint에서 검증한다.
 - [ ] Redis 생산자·소비자의 endpoint, 논리 DB, Stream 이름을 일치시킨다.
 - [ ] Redis 토폴로지와 클라이언트·다중 키 Lua 호환성을 확인한다. Cluster 구성을 주소 교체만으로 적용하지 않는다.
 - [ ] 캐시 eviction이 이벤트 Stream과 처리 상태를 제거하지 않도록 저장소 분리 또는 적절한 메모리 정책을 정한다.
@@ -154,7 +155,7 @@ repo:WGO-What-s-Going-On/Backend:environment:production
 - [ ] 컨테이너 health check와 ALB health check를 실제 제공 경로에 맞춘다.
 - [ ] WS heartbeat, ALB idle timeout, 배포 시 연결 drain·재접속을 검증한다.
 
-Post는 임베딩 모델을 실행하므로 메모리·CPU·시작 시간을 별도로 측정한다. 현재 [Post Dockerfile](../../services/post-service/Dockerfile)은 모델 파일을 복사하지 않는다. 모델을 활성화하려면 이미지 포함 또는 시작 전 모델 공급 방식을 준비하고 `SEMANTIC_MODEL_PATH`, 파일 권한, 실제 추론 성공을 검증해야 한다. 모델 비활성화를 선택하면 유사도 검색을 정상 제공하는 배포로 간주하지 않는다.
+Post는 임베딩 모델을 실행하므로 메모리·CPU·시작 시간을 별도로 측정한다. 현재 [Post Dockerfile](../../services/post-service/Dockerfile)은 고정 revision·체크섬 검증 모델을 빌드 중 다운로드해 포함한다. [인증서 볼륨 공급](./aws-storage.md)과 `SEMANTIC_MODEL_PATH`, 파일 권한, 실제 추론 성공을 검증해야 한다. 모델 비활성화를 선택하면 유사도 검색을 정상 제공하는 배포로 간주하지 않는다.
 
 ## 8. 최초 이미지·스키마·서비스 기동
 

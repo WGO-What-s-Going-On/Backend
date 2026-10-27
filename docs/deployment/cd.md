@@ -101,3 +101,10 @@ SSM 권한 오류, production 미반영 배포 따라잡기와 강제 Secret 회
 [ECS 배포 circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html).
 
 트리거 기준: [GitHub의 PR 병합 이벤트](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#running-your-pull_request_target-workflow-when-a-pull-request-merges).
+
+## 운영 저장소 및 파일 공급
+
+[최초 AWS 저장소 연결](./aws-storage.md)의 변수 표·CA 읽기 전용 볼륨·모델 이미지·IAM·검증 차단 조건을 따른다.
+Post 모델 다운로드는 기존 Docker build 내부에서 고정 revision/체크섬으로 수행하며 runtime Secret을 빌드에 전달하지 않는다.
+인증서는 기존 Task Definition volumes/mountPoints로 공급하고 새 버전 경로를 사용한다.
+Secret VersionId 고정·rollback·production 동일 digest 승격과 최초 ECS Service 생성 제외 범위는 변경하지 않는다.
