@@ -92,6 +92,12 @@ function diagnostic(label, executable, args) {
 }
 
 function collectDiagnostics() {
+  diagnostic('runner kernel', 'uname', ['-a']);
+  diagnostic('Docker host kernel', 'docker', [
+    'info',
+    '--format',
+    '{{.KernelVersion}}',
+  ]);
   diagnostic('container status', 'docker', [
     ...compose,
     'ps',

@@ -79,3 +79,18 @@ step을 펼쳐 확인한다. MongoDB 자체 오류는 container logs, OOM 여부
 원래 의존성 명령의 종료 코드를 유지하며, 기존 workflow의 `always()` stop step이 수집 후 컨테이너를 정리한다.
 성공 시에는 추가 진단을 실행하지 않는다. 변경 반영 전의 과거 실행을 재시도하면 이전 스크립트가 사용되므로,
 PR에 변경을 반영한 새 CI 실행에서 확인해야 한다.
+
+
+## MongoDB runner 커널 호환성
+
+MongoDB를 실행하는 `Test post-service`와 `ws-post`는 임시로 `ubuntu-22.04`를 사용한다.
+PR #59의 [실패 실행](https://github.com/WGO-What-s-Going-On/Backend/actions/runs/40532050906/job/122287286375)에서
+MongoDB가 `Linux kernel versions 6.19 and newer ... known incompatibility`를 출력하고 즉시 종료했다.
+OOMKilled=false였고 메모리/디스크 부족 증거는 없었다. Docker는 호스트 커널을 사용하므로 컨테이너 OS 변경으로 해결하지 않는다.
+실패한 작업도 ubuntu-24.04 이미지였으므로 단순히 latest를 24.04로 바꾸는 것으로는 이 실행의 문제를 피할 수 없다.
+
+2026-10-28 확인 기준 [ubuntu-22.04 runner 명세](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2204-Readme.md)는
+커널 6.8 계열이다. runner 라벨은 커널 버전 자체를 영구 고정하지 않으므로 실패 진단에 `uname -a`와 Docker daemon 커널도 기록한다.
+[MongoDB SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)의 수정 버전과 실제 runner 커널 조합을 검증한 뒤 pin을 해제한다.
+Ubuntu 22 runner는 [지원 종료 예정](https://github.com/actions/runner-images/issues/14254)이므로 장기 해결책으로 두지 않는다.
+MongoDB 외의 CI 작업과 배포 workflow는 변경하지 않는다. 실제 hosted runner 통과 여부는 변경 후 CI에서 확인한다.

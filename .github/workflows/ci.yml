@@ -70,7 +70,9 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
     name: Test ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    # MongoDB 8.0 rejects affected 6.19+ host kernels (SERVER-121912).
+    # Temporary runner pin; revisit before ubuntu-22.04 retirement.
+    runs-on: ${{ matrix.name == 'post-service' && 'ubuntu-22.04' || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -132,7 +134,8 @@ jobs:
   ws-post:
     needs: detect
     if: needs.detect.outputs.integration_ws_post == 'true'
-    runs-on: ubuntu-latest
+    # Same MongoDB host-kernel constraint as Test post-service.
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
