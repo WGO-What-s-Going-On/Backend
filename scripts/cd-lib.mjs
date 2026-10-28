@@ -186,3 +186,26 @@ export function validateRelease(release, sha) {
   }
   return release;
 }
+
+// Keep non-secret staging access settings versioned with the deployment, not in opaque GitHub JSON.
+export function deploymentRuntime(name, mode, values) {
+  if (!values || typeof values !== 'object' || Array.isArray(values))
+    throw new Error('Runtime secret values must be a string map');
+  const runtime = { ...values, DEPLOYMENT_ENV: mode };
+  if (name === 'http-gateway')
+    runtime.DOCS_ENABLED = String(mode === 'staging');
+  if (mode === 'staging' && ['http-gateway', 'ws-gateway'].includes(name)) {
+    const key = name === 'http-gateway' ? 'CORS_ORIGINS' : 'WS_ALLOWED_ORIGINS';
+    runtime[key] = [
+      ...new Set([
+        ...(runtime[key] ?? '')
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+        'http://localhost:3000',
+        'http://localhost:5173',
+      ]),
+    ].join(',');
+  }
+  return runtime;
+}

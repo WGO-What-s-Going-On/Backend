@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parseSecretJson,
   renderTask,
+  deploymentRuntime,
   validateService,
   selectReleaseServices,
   validateRelease,
@@ -321,4 +322,29 @@ test('release artifact supports re-running all jobs after a production failure',
     workflow.indexOf('- name: Remove registry credentials'),
   );
   assert.match(upload, /overwrite: true/);
+});
+
+test('staging docs and frontend origins do not leak into production', () => {
+  const input = { NODE_ENV: 'production', CORS_ORIGINS: 'https://app.example' };
+  const staging = deploymentRuntime('http-gateway', 'staging', input);
+  assert.equal(staging.DOCS_ENABLED, 'true');
+  assert.equal(staging.DEPLOYMENT_ENV, 'staging');
+  assert.equal(staging.NODE_ENV, 'production');
+  assert.equal(
+    staging.CORS_ORIGINS,
+    'https://app.example,http://localhost:3000,http://localhost:5173',
+  );
+  assert.equal(input.CORS_ORIGINS, 'https://app.example');
+  const production = deploymentRuntime('http-gateway', 'production', {
+    ...input,
+    DOCS_ENABLED: 'true',
+    DEPLOYMENT_ENV: 'staging',
+  });
+  assert.equal(production.DOCS_ENABLED, 'false');
+  assert.equal(production.DEPLOYMENT_ENV, 'production');
+  assert.equal(production.CORS_ORIGINS, input.CORS_ORIGINS);
+  assert.match(
+    deploymentRuntime('ws-gateway', 'staging', input).WS_ALLOWED_ORIGINS,
+    /http:\/\/localhost:5173/,
+  );
 });

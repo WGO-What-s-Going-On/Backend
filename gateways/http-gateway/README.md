@@ -96,7 +96,7 @@ alignment remains WGO-ARCH-03. Logout revokes refresh sessions, not already issu
 
 Gateway 디렉터리에서 실행한다. `NODE_ENV=development`와 `.env`의
 `DOCS_ENABLED=true`로 명시적으로 활성화한다. 기본값은 꺼짐이며
-`NODE_ENV=production`에서는 플래그가 켜져 있어도 `/docs`, JSON, Swagger 자산
+`NODE_ENV=production`에서는 `DEPLOYMENT_ENV=staging`인 경우에만 명시적으로 활성화할 수 있다. 그 외에는 플래그가 켜져 있어도 `/docs`, JSON, Swagger 자산
 라우트를 등록하지 않는다. 테스트 환경에서도 명시적 활성화가 필요하다.
 
 ```bash
@@ -158,3 +158,22 @@ User API는 Authorize에 로그인 응답의 사용자 Access JWT를 입력한�
 WebSocket 이벤트 병합은 범위에 포함하지 않는다. 컨테이너에서 문서를 사용하려면
 생성 파일을 `DOCS_FILE` 위치로 read-only 마운트하고 `DOCS_ENABLED=true`를 주입한다.
 이미지에 개발 문서를 포함하지 않는다.
+
+### Staging 문서와 프런트 연동
+
+CD는 staging HTTP Gateway에 `DEPLOYMENT_ENV=staging`, `DOCS_ENABLED=true`를
+주입하며 `NODE_ENV=production`을 유지한다. `/docs`는 Swagger UI,
+`/swagger-ui.html`은 `/docs`로 리디렉션한다. staging에서는 JSON 요청 시 내부 서비스의
+OpenAPI를 수집·검증·병합하므로 컨테이너에 사전 생성 파일이 없어도 된다.
+성공 결과는 60초 동안 메모리에 보관하고 동시 갱신은 하나로 합친다.
+수집 실패는 문서 JSON만 503을 반환하며 일반 API 시작·요청에는 영향을 주지 않는다.
+production CD는 `DEPLOYMENT_ENV=production`, `DOCS_ENABLED=false`를 강제한다.
+내부/health 경로는 기존 병합 규칙으로 제외하며 Moderation은 아직 수집 미지원이다.
+
+Frontend 저장소는 `vite` 기본 개발 서버를 사용하므로 `http://localhost:5173`을 사용한다.
+CD는 staging의 기존 CORS·WebSocket Origin 목록에 localhost:3000과 localhost:5173을
+추가한다. 보안그룹에 프런트 개발 서버 포트를 여는 설정은 필요 없다.
+HTTP CORS는 GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS를 허용하고
+인증 정보를 포함하는 요청에도 정확한 Origin 허용 목록을 유지한다.
+5173이 사용 중이면 Vite가 다음 포트를 선택할 수 있으므로 프런트는
+`npm run dev -- --port 5173 --strictPort`로 실행하는 것을 권장한다.
