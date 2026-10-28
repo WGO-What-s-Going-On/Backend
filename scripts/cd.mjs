@@ -9,6 +9,8 @@ import {
   parseSecretJson,
   validateService,
   renderTask,
+  deploymentRuntime,
+  deploymentRuntimeChanged,
   selectReleaseServices,
   validateRelease,
   waitForDeployment,
@@ -164,6 +166,7 @@ async function deploy() {
     if (mode === 'staging') {
       const changed =
         !previous ||
+        deploymentRuntimeChanged(name, changedFiles(previous.sha, sha)) ||
         selectChanges(
           changedFiles(previous.sha, sha),
         ).deploy_matrix.include.some((entry) => entry.name === name);
@@ -233,7 +236,7 @@ async function deploy() {
     image,
     sourceSha,
   } of prepared) {
-    const secretValues = runtime[name];
+    const secretValues = deploymentRuntime(name, mode, runtime[name]);
     // Validate before changing AWS secret versions. Task rendering is repeated with the real version below.
     renderTask(config, image, secretValues, randomUUID());
     const secret = aws(

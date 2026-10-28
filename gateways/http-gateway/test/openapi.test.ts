@@ -308,6 +308,55 @@ describe('public OpenAPI merge', () => {
 });
 
 describe('collection and docs routes', () => {
+  it('serves staging docs without an artifact and shares validated live refreshes', async () => {
+    const cfg = config();
+    cfg.nodeEnv = 'production';
+    cfg.docs.live = true;
+    cfg.docs.file = '/missing-artifact.json';
+    let calls = 0;
+    let fail = true;
+    const upstream = Fastify();
+    for (const [service, path] of Object.entries({
+      user: '/api/v1/users/me',
+      post: '/api/v1/posts',
+      map: '/api/v1/location',
+      notification: '/api/v1/notifications',
+    })) {
+      upstream.get(`/${service}/docs/openapi.json`, async (_request, reply) => {
+        calls++;
+        return fail ? reply.code(503).send() : fixture(path);
+      });
+    }
+    const base = await upstream.listen({ host: '127.0.0.1', port: 0 });
+    cleanup.push(() => upstream.close());
+    for (const service of ['user', 'post', 'map', 'notification'] as const)
+      cfg.services[service] = `${base}/${service}`;
+    const app = await buildApp({ config: cfg, logger: false });
+    cleanup.push(() => app.close());
+    expect((await app.inject('/docs')).statusCode).toBe(200);
+    expect((await app.inject('/swagger-ui.html')).headers.location).toBe(
+      '/docs',
+    );
+    expect(calls).toBe(0);
+    const failed = await app.inject('/docs/openapi.json');
+    expect(failed.statusCode).toBe(503);
+    expect(failed.body).not.toContain(base);
+    expect((await app.inject('/health/live')).statusCode).toBe(200);
+    fail = false;
+    const responses = await Promise.all([
+      app.inject('/docs/openapi.json'),
+      app.inject('/docs/openapi.json'),
+    ]);
+    expect(calls).toBe(8);
+    for (const response of responses) {
+      expect(response.statusCode).toBe(200);
+      expect(response.json().servers).toEqual([{ url: '/' }]);
+      expect(response.json().paths['/internal/test']).toBeUndefined();
+      expect(response.json().paths['/api/v1/users/me']).toBeDefined();
+    }
+    await app.inject('/docs/openapi.json');
+    expect(calls).toBe(8);
+  });
   it('collects configured URLs and preserves output on fetch/merge failure', async () => {
     const cfg = config();
     cfg.docs.file = join(await directory(), 'openapi.json');
