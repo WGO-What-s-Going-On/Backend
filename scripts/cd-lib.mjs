@@ -209,3 +209,13 @@ export function deploymentRuntime(name, mode, values) {
   }
   return runtime;
 }
+
+export function deploymentRuntimeChanged(name, files) {
+  // Gateway access settings live in the CD helpers and must deploy even if app source is unchanged.
+  return (
+    ['http-gateway', 'ws-gateway'].includes(name) &&
+    files.some((file) =>
+      ['scripts/cd-lib.mjs', 'scripts/cd.mjs'].includes(file),
+    )
+  );
+}

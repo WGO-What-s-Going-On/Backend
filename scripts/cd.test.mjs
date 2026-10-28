@@ -4,6 +4,7 @@ import {
   parseSecretJson,
   renderTask,
   deploymentRuntime,
+  deploymentRuntimeChanged,
   validateService,
   selectReleaseServices,
   validateRelease,
@@ -346,5 +347,20 @@ test('staging docs and frontend origins do not leak into production', () => {
   assert.match(
     deploymentRuntime('ws-gateway', 'staging', input).WS_ALLOWED_ORIGINS,
     /http:\/\/localhost:5173/,
+  );
+});
+
+test('CD runtime setting changes redeploy both gateways, not unrelated services', () => {
+  for (const name of ['http-gateway', 'ws-gateway']) {
+    assert.equal(deploymentRuntimeChanged(name, ['scripts/cd-lib.mjs']), true);
+    assert.equal(deploymentRuntimeChanged(name, ['scripts/cd.mjs']), true);
+    assert.equal(
+      deploymentRuntimeChanged(name, ['scripts/cd.test.mjs']),
+      false,
+    );
+  }
+  assert.equal(
+    deploymentRuntimeChanged('user-service', ['scripts/cd-lib.mjs']),
+    false,
   );
 });

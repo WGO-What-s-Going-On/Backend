@@ -10,6 +10,7 @@ import {
   validateService,
   renderTask,
   deploymentRuntime,
+  deploymentRuntimeChanged,
   selectReleaseServices,
   validateRelease,
   waitForDeployment,
@@ -165,6 +166,7 @@ async function deploy() {
     if (mode === 'staging') {
       const changed =
         !previous ||
+        deploymentRuntimeChanged(name, changedFiles(previous.sha, sha)) ||
         selectChanges(
           changedFiles(previous.sha, sha),
         ).deploy_matrix.include.some((entry) => entry.name === name);
