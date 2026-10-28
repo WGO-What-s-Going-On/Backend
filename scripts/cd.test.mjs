@@ -6,7 +6,77 @@ import {
   validateService,
   selectReleaseServices,
   validateRelease,
+  waitForDeployment,
 } from './cd-lib.mjs';
+
+test('stable task count can precede rollout completion without triggering rollback', async () => {
+  let reads = 0;
+  let pauses = 0;
+  assert.equal(
+    await waitForDeployment(
+      () => ({
+        taskDefinition: 'new-task',
+        desiredCount: 1,
+        runningCount: 1,
+        pendingCount: 0,
+        deployments: [
+          {
+            taskDefinition: 'new-task',
+            rolloutState: ++reads < 3 ? 'IN_PROGRESS' : 'COMPLETED',
+          },
+        ],
+      }),
+      'new-task',
+      async () => {
+        pauses++;
+      },
+    ),
+    true,
+  );
+  assert.equal(reads, 3);
+  assert.equal(pauses, 2);
+});
+test('rollout waiting is bounded and rejects rollback or failure immediately', async () => {
+  const service = {
+    taskDefinition: 'new-task',
+    desiredCount: 1,
+    runningCount: 1,
+    pendingCount: 0,
+    deployments: [{ taskDefinition: 'new-task', rolloutState: 'IN_PROGRESS' }],
+  };
+  let pauses = 0;
+  assert.equal(
+    await waitForDeployment(
+      () => service,
+      'new-task',
+      async () => {
+        pauses++;
+      },
+      3,
+    ),
+    false,
+  );
+  assert.equal(pauses, 2);
+  for (const result of [
+    undefined,
+    { ...service, taskDefinition: 'old-task' },
+    {
+      ...service,
+      deployments: [{ taskDefinition: 'new-task', rolloutState: 'FAILED' }],
+    },
+  ]) {
+    assert.equal(
+      await waitForDeployment(
+        () => result,
+        'new-task',
+        async () => {
+          assert.fail('must not wait');
+        },
+      ),
+      false,
+    );
+  }
+});
 
 const digest = `123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/wgo/user@sha256:${'a'.repeat(64)}`;
 const config = {
