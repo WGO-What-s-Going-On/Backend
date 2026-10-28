@@ -1,6 +1,13 @@
 name: CD
 
 on:
+  workflow_dispatch:
+    inputs:
+      initial_deployment:
+        description: 'Start staging services with no successful deployment from 0 to 1'
+        type: boolean
+        default: false
+        required: true
   # Require reviewed PRs and successful CI through main branch protection.
   push:
     branches: [main]
@@ -18,7 +25,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      # Validate the push before checkout or access to environment credentials.
+      # Manual runs use the same trusted main ref and never promote to production.
       - name: Reject untrusted release source before checkout
         env:
           CD_SHA: ${{ github.sha }}
@@ -26,12 +33,16 @@ jobs:
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs';
           const e = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
-          if (process.env.GITHUB_EVENT_NAME !== 'push' ||
-              process.env.GITHUB_REF !== 'refs/heads/main' || e.ref !== 'refs/heads/main' ||
-              e.deleted !== false || e.repository?.full_name !== process.env.GITHUB_REPOSITORY ||
-              !/^[a-f0-9]{40}$/.test(e.after ?? '') || /^0{40}$/.test(e.after) ||
-              e.after !== process.env.GITHUB_SHA || e.after !== process.env.CD_SHA)
-            throw new Error('Only a non-deletion push to main with a matching commit SHA can deploy');
+          const sha = process.env.GITHUB_SHA;
+          const trusted = process.env.GITHUB_REF === 'refs/heads/main' &&
+            e.repository?.full_name === process.env.GITHUB_REPOSITORY &&
+            /^[a-f0-9]{40}$/.test(sha ?? '') && !/^0{40}$/.test(sha) && sha === process.env.CD_SHA;
+          const push = process.env.GITHUB_EVENT_NAME === 'push' &&
+            e.ref === 'refs/heads/main' && e.deleted === false && e.after === sha;
+          const manual = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch' &&
+            ['true', 'false'].includes(String(e.inputs?.initial_deployment));
+          if (!trusted || (!push && !manual))
+            throw new Error('Only a main push or explicit main staging dispatch with a matching SHA can deploy');
           JS
 
   staging:
@@ -42,6 +53,7 @@ jobs:
       contents: read
       id-token: write
     env:
+      CD_INITIAL_DEPLOYMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.initial_deployment && 'true' || 'false' }}
       CD_SHA: ${{ github.sha }}
       CD_FORCE_SERVICES: ${{ secrets.CD_FORCE_SERVICES }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -73,7 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-      - name: Build changed images and deploy staging
+      - name: Push changed images then deploy staging
         run: node scripts/cd.mjs staging
       - name: Save tested immutable release (no task definitions or secret values)
         uses: actions/upload-artifact@v4
@@ -89,6 +101,7 @@ jobs:
 
   production:
     needs: staging
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # Configure required reviewers and branch restrictions in this GitHub Environment.
     environment: production

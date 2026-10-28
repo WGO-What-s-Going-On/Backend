@@ -22,12 +22,26 @@
   이 설정은 저장소 코드가 자동으로 생성하지 않는다. CD에서 push CI 성공을 재조회하지 않는다.
 - Secret/task definition만 바꿀 때는 선택적으로 `CD_FORCE_SERVICES` Secret에 서비스 이름 목록 또는
   `all`을 설정하고 main으로 변경 안내 PR을 병합한다. staging/production에 같은 값을 적용하고
-  배포 성공 후 비운다. 수동 신규 실행은 없으며 실패한 기존 실행은 GitHub에서 재실행할 수 있다.
+  배포 성공 후 비운다. 실패한 기존 실행은 GitHub에서 재실행할 수 있다.
+
+### staging 최초 배포
+
+Actions → CD → Run workflow에서 **main** 브랜치를 선택하고 `initial_deployment`를 체크한다.
+이 수동 실행은 staging만 배포하고 production job은 실행하지 않는다. GitHub 수동 실행 버튼에는
+기본 브랜치에도 `workflow_dispatch` 선언이 필요하다. 기본 브랜치가 dev인 저장소는 동일한 workflow
+변경을 dev에도 반영하되, 실행 브랜치는 반드시 main으로 선택한다.
+
+- 기본값은 false다. 옵션이 없으면 실행 수가 0인 서비스를 시작하지 않는다.
+- 옵션이 true이고 성공 SSM state가 없으며 desiredCount가 0인 기존 서비스만 1로 시작한다.
+- 이미 성공 배포 이력이 있는 중지 서비스는 옵션을 켜도 시작하지 않는다. 별도의 운영 재시작 절차를 따른다.
+- 이미 실행 중인 서비스의 desiredCount는 유지한다. 부분 성공 후 재실행하면 성공한 서비스는 기존 변경 감지를 따른다.
+- 최초 배포의 안정화/smoke 실패 시 이전 태스크 정의와 desiredCount=0으로 복구한다.
+  마이그레이션 실패 시 서비스는 시작하지 않으며, DB 변경 자체는 자동 rollback하지 않는다.
 
 ## 파이프라인 흐름
 
 1. **main 브랜치의 `push` 이벤트**로 배포한다. PR 병합도 main push를 발생시킨다.
-   dev push, 태그 push, PR 닫기만으로는 실행되지 않으며 수동 신규 실행도 지원하지 않는다.
+   dev push, 태그 push, PR 닫기만으로는 실행되지 않는다. 수동 실행은 main의 staging만 지원한다.
    checkout 전에 push 이벤트·main ref·대상 저장소·브랜치 삭제 여부·SHA 일치를 검사한다.
    checkout, `CD_SHA`, release artifact 이름 모두 실행 시점의 `github.sha`로 고정한다.
    저장소 기본 브랜치가 dev여도 실행 ref는 main이므로 Environment의 main 제한과 일치한다.
@@ -38,7 +52,7 @@
    테스트·문서만 변경되면 이미지를 다시 만들지 않는다. 누락된 state는 최초 배포로 간주한다.
    권한/네트워크 오류를 state 없음으로 처리하지 않는다. 삭제되거나 유효하지 않은 과거 Git SHA는
    배포를 중단하므로 히스토리 rewrite를 피하고 state 복구를 검토한다.
-3. 변경 이미지를 ECR에 push하고 digest를 고정한다. 서비스 순서는 User→Map→Post→Notification→
+3. 모든 변경 이미지를 ECR에 push하고 digest를 고정한 뒤 서비스 배포를 시작한다. 서비스 순서는 User→Map→Post→Notification→
    Moderation→HTTP Gateway→WS Gateway다. 호환되지 않는 계약은 별도 단계적 릴리스가 필요하다.
 4. 서비스의 런타임 값은 GitHub Secret JSON에서 Secrets Manager의 기존 서비스 전용 Secret에 저장한다.
    Task definition은 JSON key와 **VersionId를 고정한 참조**만 가진다. plaintext 런타임 값은
@@ -49,7 +63,7 @@
 6. 선택적 HTTPS smoke와 VPC 내 일회성 `smokeCommand`를 실행한 후에만 SSM 성공 상태를 갱신한다.
    서비스별 ECS container healthCheck는 필수다. 비즈니스 smoke를 설정하지 않으면 readiness 수준을
    넘어 인증·WS 실제 동작까지 배포 후 확인한 것은 아니다. CI의 인증/위치 통합 테스트도 유지한다.
-7. 같은 workflow 실행의 release artifact만 production에 전달한다. artifact에는 SHA·서비스 이름·
+7. main push 실행에서만 같은 workflow의 release artifact를 production에 전달한다. 수동 실행은 staging에서 끝난다. artifact에는 SHA·서비스 이름·
    image digest만 있으며 배포 설정/런타임 secret은 없다. Production은 이미지를 다시 빌드하지 않는다.
    staging에서 변경되지 않은 서비스도 release에 포함해 이전 production 실패로 미반영된 이미지를 따라잡는다.
 8. 전체 CD workflow는 취소하지 않고 직렬화한다. 대기 실행이 새 실행으로 대체되어도 서비스별 마지막
@@ -57,7 +71,8 @@
 
 ## AWS 사전 준비
 
-- 기존 ECR repositories, ECS rolling (`ECS` controller) Fargate services, desiredCount >= 1.
+- 기존 ECR repositories, ECS rolling (`ECS` controller) Fargate services, desiredCount >= 1
+  (명시적인 staging 최초 배포는 성공 이력이 없는 desiredCount=0 서비스도 허용).
   서비스별 task definition JSON과 app healthCheck는 Secret으로 제공한다. 컨테이너 CPU 아키텍처는
   `CD_IMAGE_PLATFORM`과 일치해야 한다. Task definition family, IAM roles, 로그 그룹 등은 실제 값을 사용한다.
 - User/Post/Map/Notification/Moderation과 저장소는 사설 네트워크. Gateway만 ALB 등 외부 진입점에 연결한다.

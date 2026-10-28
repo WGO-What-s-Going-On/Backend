@@ -57,6 +57,11 @@ function sameOrNewer(previous) {
 async function deploy() {
   if (!['staging', 'production'].includes(mode))
     throw new Error('Usage: node scripts/cd.mjs staging|production');
+  const initialDeployment = env.CD_INITIAL_DEPLOYMENT === 'true';
+  if (!['true', 'false'].includes(env.CD_INITIAL_DEPLOYMENT ?? 'false'))
+    throw new Error('CD_INITIAL_DEPLOYMENT must be true or false');
+  if (initialDeployment && mode !== 'staging')
+    throw new Error('Initial deployment is only supported for staging');
   const account = required(env, 'AWS_ACCOUNT_ID');
   if (
     !/^\d{12}$/.test(account) ||
@@ -120,11 +125,38 @@ async function deploy() {
       ))
   )
     throw new Error('Staging/production configured service sets must match');
+  const prepared = [];
   for (const service of services) {
     const name = service.name;
     const config = configured[name];
     const previous = state(name);
     sameOrNewer(previous);
+    const existing = aws(
+      'ecs',
+      'describe-services',
+      '--cluster',
+      cluster,
+      '--services',
+      config.ecsService,
+    ).services?.[0];
+    const bootstrap =
+      initialDeployment && !previous && existing?.desiredCount === 0;
+    if (
+      !existing ||
+      existing.status !== 'ACTIVE' ||
+      existing.deploymentController?.type !== 'ECS' ||
+      !Number.isInteger(existing.desiredCount) ||
+      (existing.desiredCount < 1 && !bootstrap)
+    )
+      throw new Error(
+        `${name}: active ECS rolling service required; zero count requires staging initial deployment and no successful state`,
+      );
+    if (
+      existing.deployments?.some(
+        (deployment) => deployment.rolloutState === 'IN_PROGRESS',
+      )
+    )
+      throw new Error(`${name}: another deployment is still in progress`);
     const force = forced.includes('all') || forced.includes(name);
     let image;
     let sourceSha = sha;
@@ -189,29 +221,17 @@ async function deploy() {
         continue;
       }
     }
-    const existing = aws(
-      'ecs',
-      'describe-services',
-      '--cluster',
-      cluster,
-      '--services',
-      config.ecsService,
-    ).services?.[0];
-    if (
-      !existing ||
-      existing.status !== 'ACTIVE' ||
-      existing.deploymentController?.type !== 'ECS' ||
-      existing.desiredCount < 1
-    )
-      throw new Error(
-        `${name}: existing active ECS rolling service with desiredCount >= 1 required`,
-      );
-    if (
-      existing.deployments?.some(
-        (deployment) => deployment.rolloutState === 'IN_PROGRESS',
-      )
-    )
-      throw new Error(`${name}: another deployment is still in progress`);
+    prepared.push({ name, config, existing, bootstrap, image, sourceSha });
+  }
+  // Complete every image push before starting migrations or updating a running service.
+  for (const {
+    name,
+    config,
+    existing,
+    bootstrap,
+    image,
+    sourceSha,
+  } of prepared) {
     const secretValues = runtime[name];
     // Validate before changing AWS secret versions. Task rendering is repeated with the real version below.
     renderTask(config, image, secretValues, randomUUID());
@@ -308,6 +328,7 @@ async function deploy() {
         config.ecsService,
         '--task-definition',
         revision,
+        ...(bootstrap ? ['--desired-count', '1'] : []),
         '--deployment-configuration',
         JSON.stringify({
           deploymentCircuitBreaker: { enable: true, rollback: true },
@@ -332,6 +353,9 @@ async function deploy() {
       ).services?.[0];
       if (
         deployed?.taskDefinition !== revision ||
+        deployed.desiredCount < 1 ||
+        deployed.runningCount < deployed.desiredCount ||
+        deployed.pendingCount !== 0 ||
         !deployed.deployments?.some(
           (deployment) =>
             deployment.taskDefinition === revision &&
@@ -374,6 +398,8 @@ async function deploy() {
         config.ecsService,
         '--task-definition',
         existing.taskDefinition,
+        // A failed first release has no healthy predecessor: return it to stopped.
+        ...(bootstrap ? ['--desired-count', '0'] : []),
       );
       run('aws', [
         'ecs',
