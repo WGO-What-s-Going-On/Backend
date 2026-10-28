@@ -60,6 +60,8 @@ Actions → CD → Run workflow에서 **main** 브랜치를 선택하고 `initia
 5. 선택적으로 migration Fargate task를 한 번 실행한다. 성공 후 서비스 revision을 갱신하고 ECS
    circuit breaker/rollback을 활성화한다. 안정화 확인 시 **목표 revision이 실제 COMPLETED인지**도 검사한다.
    `services-stable`만 통과한 자동 rollback을 성공 배포로 기록하지 않는다.
+   CLI waiter가 먼저 끝나고 ECS가 아직 `IN_PROGRESS`라면 10초 간격으로 최대 60회 완료 상태를 확인한다.
+   다른 revision으로 복구됐거나 목표 배포가 `FAILED`이면 즉시 실패 처리한다.
 6. 선택적 HTTPS smoke와 VPC 내 일회성 `smokeCommand`를 실행한 후에만 SSM 성공 상태를 갱신한다.
    서비스별 ECS container healthCheck는 필수다. 비즈니스 smoke를 설정하지 않으면 readiness 수준을
    넘어 인증·WS 실제 동작까지 배포 후 확인한 것은 아니다. CI의 인증/위치 통합 테스트도 유지한다.

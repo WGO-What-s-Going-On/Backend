@@ -11,6 +11,7 @@ import {
   renderTask,
   selectReleaseServices,
   validateRelease,
+  waitForDeployment,
 } from './cd-lib.mjs';
 
 const mode = process.argv[2];
@@ -343,25 +344,22 @@ async function deploy() {
         '--services',
         config.ecsService,
       ]);
-      const deployed = aws(
-        'ecs',
-        'describe-services',
-        '--cluster',
-        cluster,
-        '--services',
-        config.ecsService,
-      ).services?.[0];
-      if (
-        deployed?.taskDefinition !== revision ||
-        deployed.desiredCount < 1 ||
-        deployed.runningCount < deployed.desiredCount ||
-        deployed.pendingCount !== 0 ||
-        !deployed.deployments?.some(
-          (deployment) =>
-            deployment.taskDefinition === revision &&
-            deployment.rolloutState === 'COMPLETED',
-        )
-      )
+      // The CLI stable waiter can finish while ECS still reports IN_PROGRESS.
+      // Wait for the target revision's completion instead of rolling back healthy tasks.
+      const completed = await waitForDeployment(
+        () =>
+          aws(
+            'ecs',
+            'describe-services',
+            '--cluster',
+            cluster,
+            '--services',
+            config.ecsService,
+          ).services?.[0],
+        revision,
+        () => new Promise((resolve) => setTimeout(resolve, 10000)),
+      );
+      if (!completed)
         throw new Error(`${name}: deployment rolled back or did not complete`);
       if (config.smokeUrl) {
         const response = await fetch(config.smokeUrl, {

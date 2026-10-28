@@ -1,4 +1,33 @@
-// Pure deployment validation/rendering helpers: tests never require AWS credentials.
+// Deployment helpers receive external effects explicitly so tests never need AWS credentials.
+export async function waitForDeployment(
+  readService,
+  revision,
+  pause,
+  attempts = 60,
+) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const service = readService();
+    const target = service?.deployments?.find(
+      (d) => d.taskDefinition === revision,
+    );
+    if (
+      !service ||
+      service.taskDefinition !== revision ||
+      !target ||
+      target.rolloutState === 'FAILED'
+    )
+      return false;
+    if (target.rolloutState === 'COMPLETED')
+      return (
+        service.desiredCount >= 1 &&
+        service.runningCount >= service.desiredCount &&
+        service.pendingCount === 0
+      );
+    if (attempt + 1 < attempts) await pause();
+  }
+  return false;
+}
+
 export function required(env, name) {
   const value = env[name];
   if (typeof value !== 'string' || !value.trim())
