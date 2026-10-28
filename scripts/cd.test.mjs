@@ -125,7 +125,7 @@ test('release promotion requires exact source SHA and digest for every entry', (
   );
 });
 
-test('CI is PR-only and CD accepts only main pushes before checkout', async () => {
+test('CI is PR-only and CD accepts main pushes or explicit main staging dispatches', async () => {
   const { readFileSync } = await import('node:fs');
   const { runInNewContext } = await import('node:vm');
   const workflow = readFileSync(
@@ -141,7 +141,16 @@ test('CI is PR-only and CD accepts only main pushes before checkout', async () =
   assert.match(workflow, /push:\s+branches: \[main\]/);
   assert.doesNotMatch(
     workflow,
-    /workflow_run|workflow_dispatch|pull_request_target|merge_commit_sha/,
+    /workflow_run|pull_request_target|merge_commit_sha/,
+  );
+  assert.match(workflow, /workflow_dispatch:\s+inputs:\s+initial_deployment:/);
+  assert.match(
+    workflow,
+    /production:\s+needs: staging\s+if: github.event_name == 'push'/,
+  );
+  assert.match(
+    workflow,
+    /CD_INITIAL_DEPLOYMENT: \$\{\{ github.event_name == 'workflow_dispatch' && inputs.initial_deployment/,
   );
   assert.equal(
     (workflow.match(/CD_SHA: \$\{\{ github.sha \}\}/g) ?? []).length,
@@ -185,6 +194,31 @@ test('CI is PR-only and CD accepts only main pushes before checkout', async () =
       },
     });
   assert.doesNotThrow(() => check(event));
+  const dispatch = {
+    repository: event.repository,
+    inputs: { initial_deployment: 'true' },
+  };
+  assert.doesNotThrow(() =>
+    check(dispatch, { GITHUB_EVENT_NAME: 'workflow_dispatch' }),
+  );
+  assert.doesNotThrow(() =>
+    check(
+      { ...dispatch, inputs: { initial_deployment: 'false' } },
+      { GITHUB_EVENT_NAME: 'workflow_dispatch' },
+    ),
+  );
+  assert.throws(() =>
+    check(dispatch, {
+      GITHUB_EVENT_NAME: 'workflow_dispatch',
+      GITHUB_REF: 'refs/heads/dev',
+    }),
+  );
+  assert.throws(() =>
+    check(
+      { ...dispatch, inputs: { initial_deployment: 'yes' } },
+      { GITHUB_EVENT_NAME: 'workflow_dispatch' },
+    ),
+  );
   for (const patch of [
     { ref: 'refs/heads/dev' },
     { ref: 'refs/tags/main' },

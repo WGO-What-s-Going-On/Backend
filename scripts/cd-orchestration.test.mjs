@@ -55,13 +55,17 @@ else if (op === 'ssm get-parameters') {
   if (state.denied) process.exit(1);
   result = { Parameters: state.previous ? [{ Value: JSON.stringify(state.previous) }] : [], InvalidParameters: state.previous ? [] : [get('--names')] };
 } else if (op === 'ecr describe-images') result = { imageDetails: [{ imageDigest: 'sha256:' + 'a'.repeat(64) }] };
-else if (op === 'ecs describe-services') result = { services: [{ status: 'ACTIVE', desiredCount: 1, deploymentController: { type: 'ECS' }, taskDefinition: state.autoRollback && state.updated === 'new-task' ? 'old-task' : (state.updated || 'old-task'), networkConfiguration: { awsvpcConfiguration: { subnets: ['subnet'], securityGroups: ['sg'], assignPublicIp: 'DISABLED' } }, deployments: [{ taskDefinition: state.autoRollback && state.updated === 'new-task' ? 'old-task' : (state.updated || 'old-task'), rolloutState: 'COMPLETED' }] }] };
+else if (op === 'ecs describe-services') result = { services: [{ status: 'ACTIVE', desiredCount: state.desiredCount ?? 1, runningCount: state.noRunning ? 0 : (state.desiredCount ?? 1), pendingCount: 0, deploymentController: { type: 'ECS' }, taskDefinition: state.autoRollback && state.updated === 'new-task' ? 'old-task' : (state.updated || 'old-task'), networkConfiguration: { awsvpcConfiguration: { subnets: ['subnet'], securityGroups: ['sg'], assignPublicIp: 'DISABLED' } }, deployments: [{ taskDefinition: state.autoRollback && state.updated === 'new-task' ? 'old-task' : (state.updated || 'old-task'), rolloutState: state.inProgress ? 'IN_PROGRESS' : 'COMPLETED' }] }] };
 else if (op === 'secretsmanager put-secret-value') result = { VersionId: 'a'.repeat(32) };
 else if (op === 'ecs register-task-definition') {
   const content = readFileSync(get('--cli-input-json').slice(7), 'utf8');
   if (content.includes('do-not-leak')) process.exit(8);
   result = { taskDefinition: { taskDefinitionArn: 'new-task' } };
-} else if (op === 'ecs update-service') state.updated = get('--task-definition');
+} else if (op === 'ecs update-service') {
+  state.updated = get('--task-definition');
+  (state.updates ??= []).push(args);
+  if (args.includes('--desired-count')) state.desiredCount = Number(get('--desired-count'));
+}
 else if (op === 'ecs run-task') result = { tasks: [{ taskArn: 'smoke-task' }] };
 else if (op === 'ecs describe-tasks') result = { tasks: [{ containers: [{ name: 'app', exitCode: state.smokeFailed ? 1 : 0 }] }] };
 else if (op === 'ssm put-parameter') state.saved = JSON.parse(get('--value'));
@@ -118,6 +122,7 @@ function fixture(t, initial = {}, options = {}) {
   writeFileSync(join(dir, 'calls.log'), '');
   const config = structuredClone(task);
   if (options.smoke) config.smokeCommand = ['node', '-e', 'process.exit(0)'];
+  if (options.migration) config.migrationCommand = ['node', 'migrate.js'];
   const env = {
     ...process.env,
     PATH: `${dir}/bin:${process.env.PATH}`,
@@ -129,13 +134,20 @@ function fixture(t, initial = {}, options = {}) {
     ECR_REGISTRY: registry,
     CD_IMAGE_PLATFORM: 'linux/amd64',
     CD_STATE_PREFIX: '/wgo/test',
-    CD_SERVICES_JSON: JSON.stringify({ 'user-service': config }),
+    CD_SERVICES_JSON: JSON.stringify({
+      'user-service': config,
+      ...(options.twoServices ? { 'map-service': config } : {}),
+    }),
     CD_RUNTIME_SECRETS_JSON: JSON.stringify({
       'user-service': { NODE_ENV: 'production', PASSWORD: 'do-not-leak' },
+      ...(options.twoServices
+        ? { 'map-service': { NODE_ENV: 'production' } }
+        : {}),
     }),
     GITHUB_RUN_ID: '1',
     GITHUB_RUN_ATTEMPT: '1',
     CD_FORCE_SERVICES: options.force ? 'user-service' : '',
+    CD_INITIAL_DEPLOYMENT: options.initial ? 'true' : 'false',
   };
   return {
     dir,
@@ -224,4 +236,99 @@ test('manual force rebuilds even with only documentation changes', (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.calls.includes('docker build'));
   assert.equal(result.state.saved.image, image);
+});
+
+test('zero count is rejected without explicit initial deployment before pushing images', (t) => {
+  const result = fixture(t, { desiredCount: 0 }).execute();
+  assert.equal(result.status, 1);
+  assert.ok(!result.calls.includes('docker build'));
+  assert.equal(result.state.updated, undefined);
+});
+test('initial staging deployment migrates then starts one task and saves verified state', (t) => {
+  const result = fixture(
+    t,
+    { desiredCount: 0 },
+    { initial: true, migration: true },
+  ).execute();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.state.desiredCount, 1);
+  assert.equal(result.state.saved.image, image);
+  assert.ok(
+    result.calls.indexOf('ecs describe-tasks') <
+      result.calls.indexOf('ecs update-service'),
+  );
+});
+test('initial option never restarts a previously deployed stopped service', (t) => {
+  const result = fixture(
+    t,
+    { desiredCount: 0 },
+    { initial: true, previous: true, docsOnly: true },
+  ).execute();
+  assert.equal(result.status, 1);
+  assert.equal(result.state.updated, undefined);
+});
+test('failed initial smoke restores the stopped state without recording success', (t) => {
+  const result = fixture(
+    t,
+    { desiredCount: 0, smokeFailed: true },
+    { initial: true, smoke: true },
+  ).execute();
+  assert.equal(result.status, 1);
+  assert.equal(result.state.desiredCount, 0);
+  assert.equal(result.state.updated, 'old-task');
+  assert.equal(result.state.saved, undefined);
+});
+test('failed initial migration never starts the service', (t) => {
+  const result = fixture(
+    t,
+    { desiredCount: 0, smokeFailed: true },
+    { initial: true, migration: true },
+  ).execute();
+  assert.equal(result.status, 1);
+  assert.equal(result.state.desiredCount, 0);
+  assert.equal(result.state.updated, undefined);
+});
+test('initial option preserves the running task count on subsequent deployments', (t) => {
+  const result = fixture(
+    t,
+    { desiredCount: 3 },
+    { initial: true, previous: true },
+  ).execute();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.state.desiredCount, 3);
+  assert.ok(
+    result.state.updates.every((args) => !args.includes('--desired-count')),
+  );
+});
+test('initial option is rejected in production before AWS access', (t) => {
+  const result = fixture(t, {}, { initial: true }).execute('production');
+  assert.equal(result.status, 1);
+  assert.equal(result.calls, '');
+});
+test('all images are pushed before any migration or service update', (t) => {
+  const result = fixture(
+    t,
+    {},
+    { twoServices: true, migration: true },
+  ).execute();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal((result.calls.match(/docker build/g) ?? []).length, 2);
+  assert.ok(
+    result.calls.lastIndexOf('docker build') <
+      result.calls.indexOf('ecs run-task'),
+  );
+});
+test('completed deployment without running tasks is not accepted', (t) => {
+  const result = fixture(t, { noRunning: true }).execute();
+  assert.equal(result.status, 1);
+  assert.equal(result.state.saved, undefined);
+});
+test('initial option does not interrupt an in-progress deployment', (t) => {
+  const result = fixture(
+    t,
+    { desiredCount: 0, inProgress: true },
+    { initial: true },
+  ).execute();
+  assert.equal(result.status, 1);
+  assert.equal(result.state.updated, undefined);
 });
