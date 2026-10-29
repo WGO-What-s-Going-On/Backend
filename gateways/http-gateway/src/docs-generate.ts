@@ -11,9 +11,7 @@ import {
   type ApiDocument,
 } from './openapi.js';
 
-export async function generateDocs(config: AppConfig): Promise<ApiDocument> {
-  if (config.nodeEnv === 'production')
-    throw new Error('Documentation generation is development-only');
+export async function collectDocs(config: AppConfig): Promise<ApiDocument> {
   const results = await Promise.allSettled(
     documentedServices.map(async (service) => {
       const url = `${config.services[service]}/docs/openapi.json`;
@@ -41,7 +39,13 @@ export async function generateDocs(config: AppConfig): Promise<ApiDocument> {
   const sources = results.flatMap((result) =>
     result.status === 'fulfilled' ? [result.value] : [],
   );
-  const document = await mergeDocuments(sources, config);
+  return mergeDocuments(sources, config);
+}
+
+export async function generateDocs(config: AppConfig): Promise<ApiDocument> {
+  if (config.nodeEnv === 'production')
+    throw new Error('Documentation generation is development-only');
+  const document = await collectDocs(config);
   const file = resolve(config.docs.file);
   await mkdir(dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;

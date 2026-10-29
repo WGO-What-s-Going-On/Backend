@@ -58,6 +58,17 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
       try {
         const delivery = await this.store.acquire(pending);
         if (!delivery) continue;
+        if (
+          this.store.allowed &&
+          !(await this.store.allowed(
+            delivery.message.userId,
+            delivery.postId,
+            delivery.message.data?.type ?? '',
+          ))
+        ) {
+          await this.store.finish(delivery, 'CANCELED');
+          continue;
+        }
         let result;
         try {
           result = await this.push.send(delivery.message);

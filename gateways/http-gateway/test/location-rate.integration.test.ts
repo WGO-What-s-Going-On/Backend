@@ -1,8 +1,17 @@
 import Fastify from 'fastify';
 import { Redis } from 'ioredis';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
+import { frontendAuth, frontendBearer } from './frontend-auth-fixture.js';
 
 const suite = process.env.RUN_INTEGRATION === '1' ? describe : describe.skip;
 suite('location IP rate limit', () => {
@@ -27,10 +36,17 @@ suite('location IP rate limit', () => {
       logger: false,
       config: {
         ...config,
+        userAuth: frontendAuth,
         rateLimit: { enabled: true, max: 100, windowMs: 60000, redisUrl },
         services: { ...config.services, map: upstreamUrl, post: upstreamUrl },
       },
     });
+  });
+
+  beforeEach(async () => {
+    // Each case starts with an empty rate window and its own forwarding count.
+    await redis.flushdb();
+    forwarded = 0;
   });
 
   afterAll(async () => {
@@ -44,6 +60,7 @@ suite('location IP rate limit', () => {
       const response = await app.inject({
         method: 'PUT',
         url: '/api/v1/location',
+        headers: { authorization: frontendBearer() },
         payload: {},
       });
       expect(response.statusCode).toBe(200);
@@ -51,13 +68,20 @@ suite('location IP rate limit', () => {
     const blocked = await app.inject({
       method: 'PUT',
       url: '/api/v1/location',
+      headers: { authorization: frontendBearer() },
       payload: {},
     });
     expect(blocked.statusCode).toBe(429);
     expect(Number(blocked.headers['retry-after'])).toBeGreaterThan(0);
     expect(forwarded).toBe(60);
     expect(
-      (await app.inject({ method: 'GET', url: '/api/v1/posts' })).statusCode,
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/v1/posts',
+          headers: { authorization: frontendBearer() },
+        })
+      ).statusCode,
     ).toBe(200);
   });
 
@@ -69,10 +93,13 @@ suite('location IP rate limit', () => {
       const response = await app.inject({
         method: 'PUT',
         url: '/api/v1/location',
+        headers: { authorization: frontendBearer() },
         payload: {},
       });
       expect(response.statusCode).toBe(503);
-      expect(forwarded).toBe(60);
+      expect(response.json().message).toBe('Location rate limit unavailable.');
+      expect(evalCall).toHaveBeenCalledOnce();
+      expect(forwarded).toBe(0);
     } finally {
       evalCall.mockRestore();
     }

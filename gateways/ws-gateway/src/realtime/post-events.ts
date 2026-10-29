@@ -24,6 +24,9 @@ if ending then
   if terminal=='post.deleted' or terminal==m.type then return 0 end
   local prior=tonumber(redis.call('HGET',KEYS[1],'postVersion') or '0')
   if prior>=tonumber(m.postVersion) then return 0 end
+elseif m.type=='post.updated' then
+  local prior=tonumber(redis.call('HGET',KEYS[1],'updateVersion') or '0')
+  if prior>=tonumber(m.postVersion) then return 0 end
 elseif m.type=='comment.created' or m.type=='comment.deleted' then
   local field='comment:'..m.comment.commentId
   local deleted=redis.call('HGET',KEYS[1],'deleted:'..m.comment.commentId)
@@ -36,6 +39,8 @@ if delivered==0 then return -1 end
 if ending then
   redis.call('DEL',KEYS[1])
   redis.call('HSET',KEYS[1],'status',m.type,'postVersion',tostring(m.postVersion))
+elseif m.type=='post.updated' then
+  redis.call('HSET',KEYS[1],'updateVersion',tostring(m.postVersion))
 elseif m.type=='comment.created' or m.type=='comment.deleted' then
   redis.call('HSET',KEYS[1],'comment:'..m.comment.commentId,tostring(m.activityVersion))
   if m.type=='comment.deleted' then redis.call('HSET',KEYS[1],'deleted:'..m.comment.commentId,'1') end
@@ -250,7 +255,8 @@ export class PostEvents implements RealtimeBus {
         message.type === 'post.deleted' || message.type === 'post.expired';
       const sockets = [...this.subscriptions.socketsForBoard(message.boardId)];
       // 인가 await 중의 join도 먼저 무효화한다. 다른 Room·영속 참여 정보는 변경하지 않는다.
-      if (terminal) this.subscriptions.closeBoard(message.boardId);
+      if (terminal || (message.type === 'post.updated' && message.closedAt))
+        this.subscriptions.closeBoard(message.boardId);
       const encoded = JSON.stringify(message);
       for (const socket of sockets) {
         if (socket.readyState !== WebSocket.OPEN) continue;

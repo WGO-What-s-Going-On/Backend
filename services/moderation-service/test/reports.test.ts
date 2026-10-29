@@ -20,6 +20,7 @@ describe('report validation and live Post read adapter', () => {
       {},
       { ...input, reason: 'bad' },
       { ...input, postId: 'post_no' },
+      { targetType: 'POST', targetId: postId, reason: 'SPAM' },
       { ...input, commentId },
       { ...input, targetType: 'COMMENT' },
       { ...input, description: 'x'.repeat(2001) },

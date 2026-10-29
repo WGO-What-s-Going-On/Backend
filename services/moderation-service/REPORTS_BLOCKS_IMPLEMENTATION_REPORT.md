@@ -1,5 +1,17 @@
 # 사용자 차단·신고 구현 결과 (2026-10-29)
 
+## 최신 dev 병합 결과
+
+최신 dev 9176d57을 현재 기능 브랜치에 병합했다. 기존 기능 커밋 a984102는 그대로 보존하며 backup/blocks-reports-before-dev-merge에서도 확인할 수 있다. User 실명/브라우저 쿠키·새 migration 및 다른 서비스의 dev 변경을 보존했다.
+
+충돌9개 파일과 자동 병합으로 생긴 중복 라우트/키를 정리했다. 차단의 구 PUT/본문 DELETE와 신 POST/경로 DELETE는 단일 트랜잭션·Outbox를 사용한다. GET은 기존 createdAt 별칭과 숫자 ASC 커서를 지원하고 신규 DESC opaque 커서도 유지한다. 신고는 단일 PostgreSQL ReportsModule로 통합하며, 최신 Gateway의 서명된 userId와 헤더 일치 검증을 보존했다.
+
+기존 dev 신고의 targetId/자유문자열 본문은 원래 작업의 postId/commentId·enum 사유/description 계약으로 전환해야 한다. 예전 Redis-only 데이터를 삭제하지 않았으며 운영 이관은 별도다. 최신 Post 운영 조회의 서비스 인증 계약이 없어 대상 확인은503으로 닫히므로 Moderation 전용 DB와 Moderation→Post 검증 API가 운영 선행 조건이다.
+
+Gateway의 Moderation 인증·문서 수집은 dev에 이미 포함됐다. 남은 User 신경로 allowlist/문서와 프론트/Post/인프라 변경은 [최신 후속 요청](contracts/gateway-handoff.md)이 기준이다. 아래 본문은 최초 구현 당시의 조사/검증 기록이며 Gateway 상태는 이 병합 결과가 우선한다. 병합 후 검증은 Node24.13.0/pnpm10.33.0에서 완료했다. User 246통과/외부 Gateway 선택1개 생략, Moderation 59통과, 격리된 Redis의 통합56통과/재시작 선택1개 생략이다. 두 서비스 typecheck/build, 루트 format과 변경분 검사를 통과했다. 동시 실행에서 Redis DB15가 공유된 첫 통합 실행은 충돌했으며, Moderation용 로컬 Redis를 분리한 최종 실행은 통과했다. 실제 PostgreSQL 이벤트6개와 서비스 OpenAPI 형식도 검증했다. 기능 차이는 dev 대비 User/Moderation 두 서비스의43개 파일에 한정한다.
+
+## 최초 구현 기록
+
 ## 1. 작업 기준과 브랜치
 
 브랜치: `feat/user-blocks-moderation-reports`. 파일 수정 전에 dev에서 새 브랜치를 생성했다. 시작 시 작업 트리는 깨끗했고 HEAD/origin/dev 및 원격 조회한 dev가 모두 8b2598d였다. 기존 변경을 덮어쓰거나 rebase/reset하지 않았다. push/PR/병합/AWS 배포·운영 데이터·Secrets 변경은 하지 않았다.

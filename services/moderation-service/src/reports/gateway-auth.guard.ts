@@ -75,6 +75,7 @@ export class GatewayAuthGuard implements CanActivate {
       const now = Math.floor(Date.now() / 1000);
       if (
         payload.aud !== 'wgo-moderation-service' ||
+        payload.userId !== userId ||
         !Number.isInteger(payload.iat) ||
         !Number.isInteger(payload.exp) ||
         payload.iat! < 0 ||

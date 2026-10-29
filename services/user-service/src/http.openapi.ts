@@ -55,6 +55,12 @@ export class KakaoLoginResult
   restoredFromWithdrawal!: boolean;
 }
 export class UserProfileResult implements UserProfileResponse {
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: 'Private: only returned in own profile',
+  })
+  realName!: string | null;
   @ApiProperty({ example: '123' }) userId!: string;
   @ApiProperty() nickname!: string;
   @ApiProperty({ type: String, nullable: true }) profileImageKey!:

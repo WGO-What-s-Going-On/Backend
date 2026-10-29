@@ -1,4 +1,7 @@
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rootCertificates } from 'node:tls';
@@ -19,6 +22,28 @@ const env = {
   AWS_REGION: 'ap-northeast-2',
   CASSANDRA_CA_PATH: caPath,
 };
+it('loads Keyspaces authentication in native Node ESM without bundler interop', () => {
+  const source = readFileSync(
+    new URL('../src/keyspaces-auth.ts', import.meta.url),
+    'utf8',
+  );
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2023,
+      module: ts.ModuleKind.ESNext,
+    },
+  });
+  // Vitest's module transform can hide imports that fail in the production Node process.
+  const result = spawnSync(
+    process.execPath,
+    ['--input-type=module', '--eval', outputText],
+    {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      encoding: 'utf8',
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+});
 it('keeps local Cassandra defaults', () => {
   const options = cassandraOptions({});
   expect(options.contactPoints).toEqual(['localhost']);

@@ -9,6 +9,7 @@ import {
   Patch,
   Param,
   Post,
+  Put,
   Query,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -142,6 +143,80 @@ export class UsersController {
     );
   }
 
+  @Put('me/blocks')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: 'Block a user (compatible PUT)',
+    description:
+      'Same transactional and idempotent behavior as POST. Kept for existing Gateway clients.',
+  })
+  @userIdentityHeader()
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['userId'],
+      additionalProperties: false,
+      properties: { userId: { type: 'string', pattern: '^[1-9][0-9]{0,15}$' } },
+    },
+  })
+  @ApiResponse({
+    status: 204,
+    description: 'Blocked, or already blocked. No body.',
+  })
+  @userErrorResponses(
+    [400, 'Invalid target or self block.'],
+    [401, 'Invalid Gateway credentials.'],
+    [403, 'Requester is not active.'],
+    [404, 'User or target not found.'],
+  )
+  block(
+    @Headers('x-user-id') userId: unknown,
+    @Body() body: unknown,
+  ): Promise<void> {
+    return this.usersService.changeBlock(
+      requireUserId(userId),
+      blockTarget(body),
+      true,
+    );
+  }
+
+  @Delete('me/blocks')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: 'Unblock a user (compatible DELETE)',
+    description:
+      'Same transactional and idempotent behavior as DELETE with a path ID. Kept for existing Gateway clients.',
+  })
+  @userIdentityHeader()
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['userId'],
+      additionalProperties: false,
+      properties: { userId: { type: 'string', pattern: '^[1-9][0-9]{0,15}$' } },
+    },
+  })
+  @ApiResponse({
+    status: 204,
+    description: 'Unblocked, or already absent. No body.',
+  })
+  @userErrorResponses(
+    [400, 'Invalid target or self target.'],
+    [401, 'Invalid Gateway credentials.'],
+    [403, 'Requester is not active.'],
+    [404, 'Requester not found.'],
+  )
+  unblock(
+    @Headers('x-user-id') userId: unknown,
+    @Body() body: unknown,
+  ): Promise<void> {
+    return this.usersService.changeBlock(
+      requireUserId(userId),
+      blockTarget(body),
+      false,
+    );
+  }
+
   @Get('nickname/availability')
   @ApiOperation({
     summary: 'Check nickname availability',
@@ -196,6 +271,7 @@ export class UsersController {
           description:
             'Trimmed, non-empty nickname; at most 30 Unicode characters after trimming.',
         },
+        realName: { type: 'string', maxLength: 100, nullable: true },
         profileImageKey: { type: 'string', maxLength: 500, nullable: true },
       },
     },
@@ -219,14 +295,29 @@ export class UsersController {
     const input = body as Record<string, unknown>;
     if (
       Object.keys(input).some(
-        (key) => key !== 'nickname' && key !== 'profileImageKey',
+        (key) =>
+          key !== 'nickname' && key !== 'profileImageKey' && key !== 'realName',
       ) ||
-      (!Object.hasOwn(input, 'nickname') &&
+      (!Object.hasOwn(input, 'realName') &&
+        !Object.hasOwn(input, 'nickname') &&
         !Object.hasOwn(input, 'profileImageKey'))
     ) {
       throw new BadRequestException('Provide nickname or profileImageKey only');
     }
     const update: UpdateUserProfile = {};
+    if (Object.hasOwn(input, 'realName')) {
+      if (
+        input.realName !== null &&
+        (typeof input.realName !== 'string' ||
+          !input.realName.trim() ||
+          [...input.realName.trim()].length > 100)
+      )
+        throw new BadRequestException(
+          'realName must be null or 1-100 characters',
+        );
+      update.realName =
+        typeof input.realName === 'string' ? input.realName.trim() : null;
+    }
     if (Object.hasOwn(input, 'nickname'))
       update.nickname = normalizeNickname(input.nickname);
     if (Object.hasOwn(input, 'profileImageKey')) {
@@ -341,4 +432,16 @@ function requireUserId(value: unknown): string {
     throw new UnauthorizedException('Invalid authentication credentials');
   }
   return userId;
+}
+
+function blockTarget(body: unknown): string {
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    Array.isArray(body) ||
+    Object.keys(body).length !== 1 ||
+    !('userId' in body)
+  )
+    throw new BadRequestException('userId required');
+  return blockedUserId(body.userId);
 }

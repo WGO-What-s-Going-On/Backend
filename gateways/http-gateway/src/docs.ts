@@ -4,12 +4,14 @@ import { dirname, join } from 'node:path';
 
 import type { FastifyInstance } from 'fastify';
 import type { AppConfig } from './config.js';
+import { collectDocs } from './docs-generate.js';
+import type { ApiDocument } from './openapi.js';
 
 const require = createRequire(import.meta.url);
 const page = `<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><title>WGO Public HTTP API</title>
 <link rel="stylesheet" href="/docs/swagger-ui.css"></head><body>
-<p>로컬·dev 공개 HTTP API · <a href="https://github.com/WGO-What-s-Going-On/Backend/blob/dev/gateways/ws-gateway/README.md">기존 WebSocket 계약</a></p>
+<p>공개 HTTP API · <a href="https://github.com/WGO-What-s-Going-On/Backend/blob/main/gateways/ws-gateway/README.md">기존 WebSocket 계약</a></p>
 <div id="swagger-ui"></div><script src="/docs/swagger-ui-bundle.js"></script>
 <script src="/docs/init.js"></script></body></html>`;
 
@@ -18,7 +20,28 @@ export async function registerDocs(
   config: AppConfig,
 ): Promise<void> {
   // The environment guard also protects callers that supply config directly.
-  if (config.nodeEnv === 'production' || !config.docs.enabled) return;
+  if (
+    (config.nodeEnv === 'production' && !config.docs.live) ||
+    !config.docs.enabled
+  )
+    return;
+  let cached: ApiDocument | undefined;
+  let expiresAt = 0;
+  let pending: Promise<ApiDocument> | undefined;
+  async function liveDocument(): Promise<ApiDocument> {
+    if (cached && Date.now() < expiresAt) return cached;
+    // Share concurrent refreshes; a partial or failed merge must never replace the document.
+    pending ??= collectDocs(config)
+      .then((document) => {
+        cached = document;
+        expiresAt = Date.now() + 60_000;
+        return document;
+      })
+      .finally(() => {
+        pending = undefined;
+      });
+    return pending;
+  }
   const assetRoot = dirname(require.resolve('swagger-ui-dist/package.json'));
   const options = {
     config: { rateLimit: false },
@@ -34,6 +57,9 @@ export async function registerDocs(
       },
     },
   };
+  app.get('/swagger-ui.html', options, async (_request, reply) =>
+    reply.redirect('/docs'),
+  );
   app.get('/docs', options, async (_request, reply) =>
     reply.type('text/html').send(page),
   );
@@ -57,13 +83,17 @@ export async function registerDocs(
   }
   app.get('/docs/openapi.json', options, async (request, reply) => {
     try {
-      const document = JSON.parse(await readFile(config.docs.file, 'utf8'));
+      const document = config.docs.live
+        ? await liveDocument()
+        : JSON.parse(await readFile(config.docs.file, 'utf8'));
       return reply.header('Cache-Control', 'no-store').send(document);
     } catch (error) {
       request.log.warn({ err: error }, 'Gateway OpenAPI artifact unavailable');
       return reply.code(503).send({
         code: 'GATEWAY_DOCS_UNAVAILABLE',
-        message: 'Run pnpm docs:generate from the HTTP Gateway directory.',
+        message: config.docs.live
+          ? 'Public API documentation is temporarily unavailable.'
+          : 'Run pnpm docs:generate from the HTTP Gateway directory.',
         requestId: request.id,
         timestamp: new Date().toISOString(),
       });

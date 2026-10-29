@@ -15,13 +15,15 @@ const operations: Record<string, 'public' | 'user'> = {
   'POST /api/v1/auth/logout': 'user',
   'GET /api/v1/users/nickname/availability': 'public',
   'GET /api/v1/terms': 'public',
+  'GET /api/v1/users/me/blocks': 'user',
+  'PUT /api/v1/users/me/blocks': 'user',
+  'DELETE /api/v1/users/me/blocks': 'user',
   'GET /api/v1/users/me': 'user',
   'PATCH /api/v1/users/me': 'user',
   'POST /api/v1/users/me/term-consents': 'user',
   'GET /api/v1/users/me/badges': 'user',
   'POST /api/v1/users/me/withdrawal': 'user',
   'POST /api/v1/users/me/blocks': 'user',
-  'GET /api/v1/users/me/blocks': 'user',
 };
 
 type Request = {

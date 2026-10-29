@@ -15,6 +15,9 @@ export const userOperations: Record<string, 'public' | 'user'> = {
   'POST /api/v1/auth/logout': 'user',
   'GET /api/v1/users/nickname/availability': 'public',
   'GET /api/v1/terms': 'public',
+  'GET /api/v1/users/me/blocks': 'user',
+  'PUT /api/v1/users/me/blocks': 'user',
+  'DELETE /api/v1/users/me/blocks': 'user',
   'GET /api/v1/users/me': 'user',
   'PATCH /api/v1/users/me': 'user',
   'POST /api/v1/users/me/term-consents': 'user',
@@ -22,7 +25,10 @@ export const userOperations: Record<string, 'public' | 'user'> = {
   'POST /api/v1/users/me/withdrawal': 'user',
 };
 
-export async function userAuthentication(config: UserAuthConfig | null) {
+export async function userAuthentication(
+  config: UserAuthConfig | null,
+  service = 'user',
+) {
   let signingKey;
   let kid: string | undefined;
   if (config) {
@@ -59,7 +65,9 @@ export async function userAuthentication(config: UserAuthConfig | null) {
         timestamp: new Date().toISOString(),
       });
     const policy =
-      userOperations[`${request.method} ${request.url.split('?')[0]}`];
+      service === 'user'
+        ? userOperations[`${request.method} ${request.url.split('?')[0]}`]
+        : 'user';
     if (!policy)
       return fail(
         404,
@@ -124,11 +132,13 @@ export async function userAuthentication(config: UserAuthConfig | null) {
       }
     }
     // The upstream bearer proves Gateway identity; user identity stays in verified headers.
-    request.headers.authorization = `Bearer ${await new SignJWT({})
+    request.headers.authorization = `Bearer ${await new SignJWT(
+      service === 'user' ? {} : { userId: request.headers['x-user-id'] },
+    )
       .setProtectedHeader({ alg: 'ES256', typ: 'wgo-service+jwt', kid })
       .setIssuer('wgo-http-gateway')
       .setSubject('http-gateway')
-      .setAudience('wgo-user-service')
+      .setAudience(`wgo-${service}-service`)
       .setIssuedAt()
       .setExpirationTime('30s')
       .sign(key)}`;

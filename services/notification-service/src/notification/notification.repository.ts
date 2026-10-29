@@ -3,6 +3,7 @@ import type { Notification, NotificationPage } from './notification.js';
 export const NOTIFICATION_REPOSITORY = Symbol('NOTIFICATION_REPOSITORY');
 
 export interface NotificationRepository {
+  remove?(userId: string, notificationId: string): Promise<void>;
   create(notification: Notification): Promise<boolean>;
   list(
     userId: string,

@@ -1,3 +1,4 @@
+import { frontendAuth, frontendBearer } from './frontend-auth-fixture.js';
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -18,6 +19,7 @@ function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
 
   return {
     ...base,
+    userAuth: frontendAuth,
     ...overrides,
     rateLimit: overrides.rateLimit ?? base.rateLimit,
     upstream: overrides.upstream ?? base.upstream,
@@ -66,6 +68,7 @@ describe('HTTP gateway', () => {
 
     const response = await app.inject({
       method: 'GET',
+      headers: { authorization: frontendBearer() },
       url: '/api/v1/posts/nearby?lat=37.123&lng=127.123&radius=500',
     });
 
@@ -89,6 +92,7 @@ describe('HTTP gateway', () => {
 
     const response = await app.inject({
       method: 'GET',
+      headers: { authorization: frontendBearer() },
       url: '/api/v1/posts/nearby',
     });
 
@@ -99,3 +103,42 @@ describe('HTTP gateway', () => {
     });
   });
 });
+
+it.each(['PATCH', 'DELETE'])(
+  'allows %s preflight only for configured frontend origins',
+  async (method) => {
+    const app = await buildApp({
+      config: testConfig({ corsOrigins: ['http://localhost:5173'] }),
+      logger: false,
+    });
+    apps.push(app);
+    for (const origin of [
+      'http://localhost:5173',
+      'https://untrusted.example',
+    ]) {
+      const response = await app.inject({
+        method: 'OPTIONS',
+        url: '/api/v1/posts/example',
+        headers: {
+          origin,
+          'access-control-request-method': method,
+          'access-control-request-headers': 'authorization,content-type',
+        },
+      });
+      if (origin === 'http://localhost:5173') {
+        expect(response.statusCode).toBe(204);
+        expect(response.headers['access-control-allow-origin']).toBe(origin);
+        expect(response.headers['access-control-allow-methods']).toContain(
+          method,
+        );
+        expect(response.headers['access-control-allow-credentials']).toBe(
+          'true',
+        );
+        expect(response.headers['access-control-allow-headers']).toContain(
+          'authorization',
+        );
+      } else
+        expect(response.headers['access-control-allow-origin']).toBeUndefined();
+    }
+  },
+);

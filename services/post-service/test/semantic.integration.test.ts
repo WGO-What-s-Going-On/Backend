@@ -1,3 +1,4 @@
+import { UserProfiles } from '../src/post/infrastructure/user-profiles.js';
 import type { GrpcNearbyPosts } from '../src/post/semantic/grpc-candidates.js';
 import 'reflect-metadata';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
@@ -133,6 +134,11 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
     const module = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(EMBEDDING_PROVIDER)
       .useValue(embedding)
+      .overrideProvider(UserProfiles)
+      .useValue({
+        names: async (ids: number[]) =>
+          new Map(ids.map((id) => [id, `user-${id}`])),
+      })
       .compile();
     app = module.createNestApplication();
     // 반복 HTTP 요청이 닫힌 임시 서버의 keep-alive 연결을 재사용하지 않게 한다.
@@ -674,6 +680,11 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
           .useValue(real)
           .overrideProvider(SEMANTIC_POST_INDEX)
           .useValue(realIndex)
+          .overrideProvider(UserProfiles)
+          .useValue({
+            names: async (ids: number[]) =>
+              new Map(ids.map((id) => [id, `user-${id}`])),
+          })
           .compile();
         realApp = module.createNestApplication();
         await realApp.init();

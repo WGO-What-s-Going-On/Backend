@@ -1,3 +1,4 @@
+import { AddPrivateRealName1793200000000 } from '../src/database/migrations/1793200000000-AddPrivateRealName.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -61,6 +62,7 @@ describe('Users API integration', () => {
       database: testDatabaseName,
       entities: [...USER_SERVICE_ENTITIES],
       migrations: [
+        AddPrivateRealName1793200000000,
         InitialUserServiceSchema1789990707351,
         AddTermsCodeEffectiveAtIndex1789993249262,
       ],
@@ -108,6 +110,58 @@ describe('Users API integration', () => {
       'TRUNCATE TABLE "users" RESTART IDENTITY CASCADE',
     );
     await testDataSource.query('TRUNCATE TABLE "outbox_events"');
+  });
+
+  it('stores own real name privately and keeps blocks isolated and idempotent', async () => {
+    const owner = await insertUser('owner'),
+      target = await insertUser('target');
+    const profile = await request(app.getHttpServer())
+      .patch('/api/v1/users/me')
+      .set('x-user-id', owner)
+      .send({ realName: '  홍길동  ' })
+      .expect(200);
+    expect(profile.body.realName).toBe('홍길동');
+    expect(JSON.stringify(await outbox())).not.toContain('홍길동');
+    await request(app.getHttpServer())
+      .patch('/api/v1/users/me')
+      .set('x-user-id', owner)
+      .send({ realName: 7 })
+      .expect(400);
+    for (let i = 0; i < 2; i++)
+      await request(app.getHttpServer())
+        .put('/api/v1/users/me/blocks')
+        .set('x-user-id', owner)
+        .send({ userId: target })
+        .expect(204);
+    const blocks = await request(app.getHttpServer())
+      .get('/api/v1/users/me/blocks')
+      .set('x-user-id', owner)
+      .expect(200);
+    expect(blocks.body.items).toHaveLength(1);
+    expect(blocks.body.items[0]).toMatchObject({
+      userId: target,
+      nickname: 'target',
+    });
+    const other = await request(app.getHttpServer())
+      .get('/api/v1/users/me/blocks')
+      .set('x-user-id', target)
+      .expect(200);
+    expect(other.body.items).toEqual([]);
+    await request(app.getHttpServer())
+      .put('/api/v1/users/me/blocks')
+      .set('x-user-id', owner)
+      .send({ userId: owner })
+      .expect(400);
+    await request(app.getHttpServer())
+      .delete('/api/v1/users/me/blocks')
+      .set('x-user-id', owner)
+      .send({ userId: target })
+      .expect(204);
+    await request(app.getHttpServer())
+      .patch('/api/v1/users/me')
+      .set('x-user-id', owner)
+      .send({ realName: null })
+      .expect(200);
   });
 
   it('returns available when the nickname does not exist', async () => {
@@ -240,6 +294,7 @@ describe('Users API integration', () => {
       .expect(200)
       .expect({
         userId: id,
+        realName: null,
         nickname: 'Temporary',
         profileImageKey: null,
         status: 'ACTIVE',
@@ -789,6 +844,49 @@ describe('Users API integration', () => {
         .delete(`/api/v1/users/me/blocks/${target}`)
         .set('x-user-id', owner);
     }
+    it('shares outbox idempotency across old and new block methods and continues numeric cursors', async () => {
+      const owner = await insertUser('owner');
+      const targets: string[] = [];
+      for (const name of ['one', 'two', 'three'])
+        targets.push(await insertUser(name));
+      for (const userId of targets)
+        await request(app.getHttpServer())
+          .put('/api/v1/users/me/blocks')
+          .set('x-user-id', owner)
+          .send({ userId })
+          .expect(204);
+      await block(owner, targets[0]!).expect(204);
+      expect(await outbox()).toHaveLength(3);
+      const page = await request(app.getHttpServer())
+        .get('/api/v1/users/me/blocks')
+        .set('x-user-id', owner)
+        .query({ cursor: targets[0], limit: 1 })
+        .expect(200);
+      expect(page.body.items[0]).toMatchObject({
+        userId: targets[1],
+        createdAt: page.body.items[0].blockedAt,
+      });
+      const next = await request(app.getHttpServer())
+        .get('/api/v1/users/me/blocks')
+        .set('x-user-id', owner)
+        .query({ cursor: page.body.nextCursor, limit: 1 })
+        .expect(200);
+      expect(
+        next.body.items.map((item: { userId: string }) => item.userId),
+      ).toEqual([targets[2]]);
+      await request(app.getHttpServer())
+        .delete('/api/v1/users/me/blocks')
+        .set('x-user-id', owner)
+        .send({ userId: targets[0] })
+        .expect(204);
+      await unblock(owner, targets[0]!).expect(204);
+      expect(
+        (await outbox()).filter(
+          (event) => event.eventType === 'USER_BLOCK_REMOVED',
+        ),
+      ).toHaveLength(1);
+    });
+
     it('serializes concurrent retries and records only real transitions in the same outbox', async () => {
       const owner = await insertUser('Owner');
       const target = await insertUser('Target');

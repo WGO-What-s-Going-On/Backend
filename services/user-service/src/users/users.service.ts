@@ -109,7 +109,7 @@ export class UsersService {
     cursor: unknown,
     limit: unknown,
   ): Promise<BlockPage> {
-    const { before, size } = parseBlockPage(userId, cursor, limit);
+    const { before, size, direction } = parseBlockPage(userId, cursor, limit);
     if (!(await this.usersRepository.existsBy({ id: userId })))
       throw new NotFoundException('User not found');
     // The existing composite PK supports this owner-scoped keyset scan.
@@ -118,9 +118,15 @@ export class UsersService {
       .createQueryBuilder('block')
       .innerJoinAndSelect('block.blockedUser', 'target')
       .where('block.blockerUserId = :userId', { userId });
-    if (before) query.andWhere('block.blockedUserId < :before', { before });
+    if (before)
+      query.andWhere(
+        direction === 'ASC'
+          ? 'block.blockedUserId > :before'
+          : 'block.blockedUserId < :before',
+        { before },
+      );
     const rows = await query
-      .orderBy('block.blockedUserId', 'DESC')
+      .orderBy('block.blockedUserId', direction)
       .take(size + 1)
       .getMany();
     const page = rows.slice(0, size);
@@ -130,12 +136,14 @@ export class UsersService {
         nickname: row.blockedUser.nickname,
         profileImageKey: row.blockedUser.profileImageKey,
         blockedAt: row.createdAt.toISOString(),
+        createdAt: row.createdAt.toISOString(),
       })),
       nextCursor:
         rows.length > size
           ? Buffer.from(
               JSON.stringify({
                 owner: userId,
+                direction,
                 before: page.at(-1)!.blockedUserId,
               }),
             ).toString('base64url')
@@ -352,11 +360,13 @@ export class UsersService {
             throw new ConflictException('Nickname is already in use');
         }
         const changed =
+          (input.realName !== undefined && input.realName !== user.realName) ||
           (input.nickname !== undefined && input.nickname !== user.nickname) ||
           (input.profileImageKey !== undefined &&
             input.profileImageKey !== user.profileImageKey);
         if (!changed && !completesOnboarding) return toProfile(user);
         const now = new Date();
+        if (input.realName !== undefined) user.realName = input.realName;
         if (input.nickname !== undefined) user.nickname = input.nickname;
         if (input.profileImageKey !== undefined)
           user.profileImageKey = input.profileImageKey;
@@ -411,6 +421,7 @@ export class UsersService {
 function toProfile(user: UserEntity): UserProfileResponse {
   return {
     userId: user.id,
+    realName: user.realName ?? null,
     nickname: user.nickname,
     profileImageKey: user.profileImageKey,
     status: user.status,

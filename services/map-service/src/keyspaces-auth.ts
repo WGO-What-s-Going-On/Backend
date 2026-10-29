@@ -1,6 +1,9 @@
 import cassandra from 'cassandra-driver';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
-import { SigV4AuthProvider } from 'aws-sigv4-auth-cassandra-plugin';
+import sigV4Plugin from 'aws-sigv4-auth-cassandra-plugin';
+
+// CommonJS re-export는 Node ESM에서 named export로 감지되지 않을 수 있다.
+const { SigV4AuthProvider } = sigV4Plugin;
 
 // 공식 서명 구현은 유지한다. 플러그인 1.0.5의 SDK v2 조회 오류는 callback으로
 // 전달되지 않으므로, 갱신 가능한 SDK v3 provider로 먼저 조회하고 실패를 전달한다.

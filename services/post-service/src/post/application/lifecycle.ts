@@ -32,6 +32,68 @@ export class PostLifecycle {
     private readonly partition: PartitionStrategy,
   ) {}
 
+  async update(
+    postId: string,
+    userId: number,
+    details: { title?: string; content?: string },
+  ) {
+    await this.unitOfWork.execute(async (tx) => {
+      const post = await existingPost(tx, postId);
+      if (post.authorId !== userId)
+        throw new PostOwnershipError('Only the author may edit');
+      requireActive(post);
+      const now = new Date();
+      await tx.commands.fenceActivities(postId, post.bucketCount);
+      await tx.commands.updateDetails(postId, details, now);
+      await tx.commands.appendEvent(
+        event(
+          postId,
+          'PostUpdated',
+          {
+            post: {
+              postId,
+              authorId: post.authorId,
+              category: post.category,
+              closedAt: post.closedAt ?? null,
+            },
+            postVersion: post.postVersion + 1,
+          },
+          now,
+        ),
+      );
+    });
+  }
+  async setClosed(postId: string, userId: number, closed: boolean) {
+    await this.unitOfWork.execute(async (tx) => {
+      const post = await existingPost(tx, postId);
+      if (post.authorId !== userId)
+        throw new PostOwnershipError('Only the author may close or reopen');
+      // Author closure is reversible; expiry, deletion and moderation remain terminal.
+      requireActive({ ...post, closedAt: null });
+      if (Boolean(post.closedAt) === closed) return;
+      const now = new Date();
+      await tx.commands.fenceActivities(postId, post.bucketCount);
+      if (closed) await tx.commands.closeVote(postId, now);
+      await tx.commands.setClosed(postId, closed ? now : null, now);
+      await tx.commands.appendEvent(
+        event(
+          postId,
+          'PostUpdated',
+          {
+            post: {
+              postId,
+              authorId: post.authorId,
+              category: post.category,
+              closedAt: closed ? now : null,
+            },
+            postVersion: post.postVersion + 1,
+          },
+          now,
+        ),
+      );
+    });
+  }
+
   async removeReaction(
     postId: string,
     userId: number,

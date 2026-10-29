@@ -7,7 +7,7 @@ import {
   status,
 } from '@grpc/grpc-js';
 import { loadSync } from '@grpc/proto-loader';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createGrpcServer, createHttpServer } from '../src/server.js';
 import { InvalidCursorError } from '../src/post-index.js';
 import { NearbySearchError } from '../src/nearby-budget.js';
@@ -192,44 +192,50 @@ describe('Map HTTP and gRPC contract', () => {
   });
 
   it('rejects missing, duplicate, altered, and invalid ES256 tokens for both RPCs', async () => {
-    const fields = {
-      userId: '123',
-      latitude: 37.5,
-      longitude: 127,
-      radiusM: 250,
-      postId: `post_${'a'.repeat(36)}`,
-    };
-    const other = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
-    const now = Math.floor(Date.now() / 1000);
-    const invalid = [
-      '',
-      esToken({}, {}, other.privateKey),
-      esToken({ alg: 'none' }),
-      esToken({ typ: 'JWT' }),
-      esToken({ kid: 'unknown' }),
-      esToken({}, { iss: 'wgo-other-service' }),
-      esToken({}, { sub: 'other-service' }),
-      esToken({}, { aud: 'wgo-other-service' }),
-      esToken({}, { exp: now - 1 }),
-      esToken({}, { iat: now + 6 }),
-      esToken({}, { exp: now + 61 }),
-      esToken({}, { exp: now }),
-      `${esToken().split('.').slice(0, 2).join('.')}.bad-signature`,
-    ];
-    for (const method of ['CheckPostCreation', 'CheckPostParticipation']) {
-      for (const jwt of invalid)
-        await expect(call(method, fields, jwt)).rejects.toMatchObject({
-          code: status.UNAUTHENTICATED,
-        });
+    // Keep JWT boundaries fixed while real gRPC timers continue to run.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    try {
+      const fields = {
+        userId: '123',
+        latitude: 37.5,
+        longitude: 127,
+        radiusM: 250,
+        postId: `post_${'a'.repeat(36)}`,
+      };
+      const other = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+      const now = Math.floor(Date.now() / 1000);
+      const invalid = [
+        '',
+        esToken({}, {}, other.privateKey),
+        esToken({ alg: 'none' }),
+        esToken({ typ: 'JWT' }),
+        esToken({ kid: 'unknown' }),
+        esToken({}, { iss: 'wgo-other-service' }),
+        esToken({}, { sub: 'other-service' }),
+        esToken({}, { aud: 'wgo-other-service' }),
+        esToken({}, { exp: now - 1 }),
+        esToken({}, { iat: now + 6 }),
+        esToken({}, { exp: now + 61 }),
+        esToken({}, { exp: now }),
+        `${esToken().split('.').slice(0, 2).join('.')}.bad-signature`,
+      ];
+      for (const method of ['CheckPostCreation', 'CheckPostParticipation']) {
+        for (const jwt of invalid)
+          await expect(call(method, fields, jwt)).rejects.toMatchObject({
+            code: status.UNAUTHENTICATED,
+          });
+      }
+      // grpc-js rejects repeated authorization before dispatching the RPC handler.
+      const duplicate = new Metadata();
+      duplicate.add('authorization', `Bearer ${esToken()}`);
+      duplicate.add('authorization', `Bearer ${esToken()}`);
+      expect(serviceCaller(duplicate, trustedKeys())).toBeNull();
+      await expect(
+        call('CheckPostCreation', fields, `${esToken()},Bearer ${esToken()}`),
+      ).rejects.toMatchObject({ code: status.UNAUTHENTICATED });
+    } finally {
+      clock.mockRestore();
     }
-    // grpc-js rejects repeated authorization before dispatching the RPC handler.
-    const duplicate = new Metadata();
-    duplicate.add('authorization', `Bearer ${esToken()}`);
-    duplicate.add('authorization', `Bearer ${esToken()}`);
-    expect(serviceCaller(duplicate, trustedKeys())).toBeNull();
-    await expect(
-      call('CheckPostCreation', fields, `${esToken()},Bearer ${esToken()}`),
-    ).rejects.toMatchObject({ code: status.UNAUTHENTICATED });
   });
 
   it('validates JWKS at startup and allows a staged key rotation', async () => {
@@ -275,7 +281,7 @@ describe('Map HTTP and gRPC contract', () => {
         headers: { 'content-type': 'application/json', 'x-user-id': '123' },
         body: JSON.stringify({ latitude: 37.5, longitude: 127 }),
       });
-      expect(response.status).toBe(503);
+      expect(response.status).toBe(401);
     } finally {
       process.env.NODE_ENV = 'test';
     }

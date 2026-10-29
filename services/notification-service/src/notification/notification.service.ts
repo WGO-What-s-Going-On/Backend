@@ -70,6 +70,24 @@ export class NotificationService {
     return notification;
   }
 
+  async remove(userId: string, notificationId: string): Promise<void> {
+    if (!this.repository.remove)
+      throw new Error('Notification deletion unavailable');
+    await this.repository.remove(userId, notificationId);
+    await this.state?.invalidateUnread(userId);
+  }
+  async markAllRead(userId: string, cursor?: string) {
+    const page = await this.repository.list(userId, 100, cursor);
+    for (const item of page.items)
+      if (!item.isRead)
+        await this.repository.markRead(userId, item.notificationId);
+    await this.state?.invalidateUnread(userId);
+    return {
+      processed: page.items.length,
+      nextCursor: page.nextCursor ?? null,
+    };
+  }
+
   unread(userId: string): Promise<number> {
     if (!this.state) return this.repository.countUnread(userId);
     return this.state.unread(userId, () => this.repository.countUnread(userId));

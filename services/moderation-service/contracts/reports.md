@@ -2,7 +2,7 @@
 
 ## API와 인증
 
-공개 클라이언트는 사용자 Access JWT만 Gateway에 보낸다. 직접 서비스 호출은 ES256 Gateway 서비스 JWT와 Gateway가 재작성한 X-User-Id가 필수다. issuer=wgo-http-gateway, subject=http-gateway, audience=wgo-moderation-service, typ=wgo-service+jwt, 등록된 kid, iat/exp 최대 60초다. User audience와 혼용하지 않는다. MODERATION_HTTP_GATEWAY_TRUSTED_JWKS 미설정이면 개발·운영 모두 신고 경로는 401로 닫힌다. 잘못된 JWKS는 시작을 거부한다.
+공개 클라이언트는 사용자 Access JWT만 Gateway에 보낸다. 직접 서비스 호출은 ES256 Gateway 서비스 JWT와 Gateway가 재작성한 X-User-Id가 필수다. issuer=wgo-http-gateway, subject=http-gateway, audience=wgo-moderation-service, typ=wgo-service+jwt, 등록된 kid, iat/exp 최대 60초다. User audience와 혼용하지 않는다. JWT의 서명된 userId가 X-User-Id와 일치해야 한다. MODERATION_HTTP_GATEWAY_TRUSTED_JWKS 미설정이면 개발·운영 모두 신고 경로는 401로 닫힌다. 잘못된 JWKS는 시작을 거부한다.
 
 | API | 요청 | 성공 |
 | --- | --- | --- |
@@ -73,3 +73,9 @@ Worker는 1초 poll/최대20건, FOR UPDATE SKIP LOCKED를 사용한다. 같은 
 Stream 자동 trim은 없다. 운영자는 모든 Group의 확인 checkpoint와 보존 정책으로 trim한다. Redis 장애조치/최근 쓰기 손실은 PostgreSQL에 PUBLISHED로 남은 이벤트도 유실시킬 수 있다. sequence/eventId 범위를 감사해 필요한 outbox의 published_at을 NULL로 복구하고 같은 ID로 재발행한다. 운영 재처리는 소비자 멱등성을 먼저 확인해야 한다. Redis RPO와 PostgreSQL 원본 영속성을 동일시하지 않는다.
 
 기존 /health/ready는 Lifecycle/AI 의존성을 검사하며 신규 신고 DB·Post 검증의 준비 상태를 나타내지 않는다. 운영 공개 전에 신고 경로에 대한 인증된 smoke 및 outbox pending 감시를 별도로 수행한다.
+
+## 최신 dev 병합 시 계약 정리
+
+Redis-only src/reports.ts와 우회 가능한 별도 guard는 등록/유지하지 않고 단일 PostgreSQL ReportsModule로 통합했다. 과거 targetId/자유문자열 사유 본문은 postId/commentId 및 enum 사유·description으로 전환해야 한다. 기존 Redis 신고 키는 삭제하지 않지만 새 DB로 자동 이관하지도 않는다.
+
+최신 dev의 운영 Post 공개 조회는 Gateway 서비스 JWT와 서명된 사용자 ID가 필요하다. 현재 무인증 서비스 직접 읽기로는 검증할 수 없어503이 된다. Moderation→Post 단건 대상 검증 서비스 인증 계약/클라이언트를 준비한 뒤 운영 접수를 열어야 한다. [병합 후 후속 요청](gateway-handoff.md)을 따른다.

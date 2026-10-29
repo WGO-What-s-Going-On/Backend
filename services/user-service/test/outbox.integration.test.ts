@@ -1,3 +1,4 @@
+import { AddPrivateRealName1793200000000 } from '../src/database/migrations/1793200000000-AddPrivateRealName.js';
 import { Logger, type INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
@@ -57,6 +58,7 @@ describe('User Outbox PostgreSQL / Redis integration', () => {
       entities: [...USER_SERVICE_ENTITIES],
       synchronize: false,
       migrations: [
+        AddPrivateRealName1793200000000,
         InitialUserServiceSchema1789990707351,
         AddTermsCodeEffectiveAtIndex1789993249262,
       ],

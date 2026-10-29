@@ -65,7 +65,8 @@ export class DynamoDbNotificationRepository implements NotificationRepository {
             ':now': Math.floor(Date.now() / 1000),
           },
           ExpressionAttributeNames: { '#count': 'count' },
-          FilterExpression: '#count > :zero AND expiresAt > :now',
+          FilterExpression:
+            '#count > :zero AND expiresAt > :now AND attribute_not_exists(deletedAt)',
           ConsistentRead: true,
           ScanIndexForward: false,
           Limit: limit - items.length,
@@ -117,22 +118,53 @@ export class DynamoDbNotificationRepository implements NotificationRepository {
     }
   }
 
+  async remove(userId: string, notificationId: string): Promise<void> {
+    try {
+      await this.client.send(
+        new UpdateCommand({
+          TableName: this.table,
+          Key: { userId, notificationId },
+          UpdateExpression: 'SET deletedAt = :now, isRead = :true',
+          ConditionExpression: 'attribute_exists(notificationId)',
+          ExpressionAttributeValues: {
+            ':now': new Date().toISOString(),
+            ':true': true,
+          },
+        }),
+      );
+    } catch (error) {
+      if (
+        (error as { name?: string }).name !== 'ConditionalCheckFailedException'
+      )
+        throw error;
+    }
+  }
+
   async increment(
     userId: string,
     notificationId: string,
   ): Promise<Notification | null> {
-    const result = await this.client.send(
-      new UpdateCommand({
-        TableName: this.table,
-        Key: { userId, notificationId },
-        UpdateExpression: 'ADD #count :one',
-        ConditionExpression: 'attribute_exists(notificationId)',
-        ExpressionAttributeNames: { '#count': 'count' },
-        ExpressionAttributeValues: { ':one': 1 },
-        ReturnValues: 'ALL_NEW',
-      }),
-    );
-    return (result.Attributes as Notification | undefined) ?? null;
+    try {
+      const result = await this.client.send(
+        new UpdateCommand({
+          TableName: this.table,
+          Key: { userId, notificationId },
+          UpdateExpression: 'ADD #count :one',
+          ConditionExpression:
+            'attribute_exists(notificationId) AND attribute_not_exists(deletedAt)',
+          ExpressionAttributeNames: { '#count': 'count' },
+          ExpressionAttributeValues: { ':one': 1 },
+          ReturnValues: 'ALL_NEW',
+        }),
+      );
+      return (result.Attributes as Notification | undefined) ?? null;
+    } catch (error) {
+      if (
+        (error as { name?: string }).name === 'ConditionalCheckFailedException'
+      )
+        return null;
+      throw error;
+    }
   }
 
   async countUnread(userId: string): Promise<number> {
@@ -144,7 +176,7 @@ export class DynamoDbNotificationRepository implements NotificationRepository {
           TableName: this.table,
           KeyConditionExpression: 'userId = :userId',
           FilterExpression:
-            'isRead = :false AND #count > :zero AND expiresAt > :now',
+            'isRead = :false AND #count > :zero AND expiresAt > :now AND attribute_not_exists(deletedAt)',
           ExpressionAttributeNames: { '#count': 'count' },
           ExpressionAttributeValues: {
             ':userId': userId,

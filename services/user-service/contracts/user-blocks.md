@@ -36,3 +36,11 @@ POST /api/v1/users/me/blocks 본문은 `{ "blockedUserId":"123" }`, 성공은 20
 두 사용자 ID도 개인정보이므로 보존/접근 정책을 확정해야 한다. TTL/자동 trim/Outbox 삭제는 추가하지 않았다. Redis 유실은 승인된 감사 후 필요한 Outbox PUBLISHED를 PENDING으로 복구하여 같은 eventId로 재발행한다. 운영 재처리는 멱등 소비자가 전제다.
 
 [Gateway 후속 요청](../../moderation-service/contracts/gateway-handoff.md)의 allowlist/동적 DELETE 및 통합 Swagger 작업이 필요하다. 이번 작업은 Gateway/CloudFront 반영을 포함하지 않는다.
+
+## dev 병합 호환 경로
+
+기존 PUT /api/v1/users/me/blocks와 DELETE 같은 경로의 `{userId:"123"}` 본문도 지원한다. 둘 다 신규 changeBlock 트랜잭션을 호출하므로 POST/경로 DELETE와 섞어 재시도해도 실제 상태 전이당 이벤트1개만 생성한다. GET에는 기존 createdAt을 blockedAt과 같은 시각의 호환 별칭으로 추가했다.
+
+기존 숫자 cursor는 오름차순 continuation으로 해석하고 다음 opaque cursor에 direction=ASC를 보존한다. 새로운 첫 페이지는 내림차순이며 다음 cursor에 DESC를 기록한다. limit 기본30/최대100, 관계 조회는 항상 현재 소유자 조건을 적용한다.
+
+최신 Gateway는 GET/PUT/본문 DELETE를 이미 허용한다. 신규 POST/경로 DELETE의 allowlist·문서 노출은 [최신 후속 요청](../../moderation-service/contracts/gateway-handoff.md)을 따른다.

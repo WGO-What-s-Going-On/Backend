@@ -74,6 +74,7 @@ export async function buildApp(
 
   await app.register(cors, {
     origin: config.corsOrigins,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true,
   });
   await app.register(helmet);
@@ -190,7 +191,10 @@ export async function buildApp(
   for (const route of proxyRoutes) {
     await app.register(httpProxy, {
       upstream: config.services[route.service],
-      ...(route.service === 'user' ? { preHandler: authenticateUser } : {}),
+      preHandler:
+        route.service === 'user'
+          ? authenticateUser
+          : await userAuthentication(config.userAuth, route.service),
       prefix: route.prefix,
       rewritePrefix: route.prefix,
       http2: false,

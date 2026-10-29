@@ -70,6 +70,7 @@ describe('OpenAPI document', () => {
     expect(Object.keys(document.paths).sort()).toEqual(
       [
         '/api/v1/posts',
+        '/api/v1/posts/{postId}/closed',
         '/api/v1/posts/similar',
         '/api/v1/posts/media/uploads',
         '/api/v1/posts/media/uploads/{mediaId}',

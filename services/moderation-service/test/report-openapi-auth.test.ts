@@ -31,6 +31,7 @@ async function token(
     iss: 'wgo-http-gateway',
     sub: 'http-gateway',
     aud: 'wgo-moderation-service',
+    userId: '100',
     iat: now,
     exp: now + 30,
     ...claims,
@@ -119,6 +120,8 @@ describe('Report HTTP OpenAPI and Gateway trust boundary', () => {
     }
     for (const claims of [
       { aud: 'wgo-user-service' },
+      { userId: '200' },
+      { userId: undefined },
       { iss: 'other' },
       { sub: 'other' },
       { exp: 1 },

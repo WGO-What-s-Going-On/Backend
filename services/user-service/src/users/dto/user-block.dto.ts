@@ -18,6 +18,12 @@ export class BlockItem {
     | string
     | null;
   @ApiProperty({ format: 'date-time' }) blockedAt!: string;
+  @ApiProperty({
+    format: 'date-time',
+    deprecated: true,
+    description: 'Compatibility alias of blockedAt.',
+  })
+  createdAt!: string;
 }
 
 export class BlockPage {
@@ -59,6 +65,11 @@ export function parseBlockPage(owner: string, cursor: unknown, limit: unknown) {
   if (size > 100)
     throw new BadRequestException('Limit must be between 1 and 100');
   let before: string | undefined;
+  let direction: 'ASC' | 'DESC' = 'DESC';
+  // Continue numeric cursors issued by the former ascending dev API. New
+  // cursors carry the ordering so page boundaries remain stable during rollout.
+  if (parseUserId(cursor))
+    return { size, before: cursor as string, direction: 'ASC' as const };
   if (cursor !== undefined) {
     try {
       if (
@@ -70,10 +81,16 @@ export function parseBlockPage(owner: string, cursor: unknown, limit: unknown) {
       const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString());
       if (decoded.owner !== owner || !parseUserId(decoded.before))
         throw new Error();
+      if (
+        decoded.direction !== undefined &&
+        !['ASC', 'DESC'].includes(decoded.direction)
+      )
+        throw new Error();
       before = decoded.before;
+      direction = decoded.direction ?? 'DESC';
     } catch {
       throw new BadRequestException('Invalid block cursor');
     }
   }
-  return { size, before };
+  return { size, before, direction };
 }
