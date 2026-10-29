@@ -47,8 +47,10 @@ describe('PostgreSQL report source/outbox and real Redis Streams', () => {
   let service: ReportsService;
   let worker: ReportOutboxWorker;
   let other: ReportOutboxWorker;
+  let databaseCreated = false;
   beforeAll(async () => {
     await admin.query(`CREATE DATABASE "${database}"`);
+    databaseCreated = true;
     const url = new URL(base);
     url.pathname = `/${database}`;
     sql = new Pool({ connectionString: url.toString() });
@@ -76,16 +78,27 @@ describe('PostgreSQL report source/outbox and real Redis Streams', () => {
     await redis.del(stream);
   });
   afterAll(async () => {
-    await worker?.onModuleDestroy();
-    await other?.onModuleDestroy();
-    await store?.onModuleDestroy();
-    await sql?.end();
-    if (redis.isOpen) {
-      await redis.del(stream);
-      await redis.quit();
+    try {
+      await worker?.onModuleDestroy();
+      await other?.onModuleDestroy();
+      await store?.onModuleDestroy();
+      await sql?.end();
+      if (redis.isOpen) {
+        await redis.del(stream);
+        await redis.quit();
+      }
+    } finally {
+      try {
+        // Do not issue another connection attempt when CREATE DATABASE failed;
+        // preserve the setup error and still close the administrative pool.
+        if (databaseCreated)
+          await admin.query(
+            `DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`,
+          );
+      } finally {
+        await admin.end();
+      }
     }
-    await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
-    await admin.end();
   });
   async function records() {
     return (

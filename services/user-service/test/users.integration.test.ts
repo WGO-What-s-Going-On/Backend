@@ -86,7 +86,10 @@ describe('Users API integration', () => {
     }).compile();
 
     app = module.createNestApplication();
-    await app.init();
+    // Supertest auto-closes servers it starts for an individual request. Keep
+    // this shared server alive until afterAll so concurrent requests cannot race
+    // that automatic close on Node 24.
+    await app.listen(0, '127.0.0.1');
   }, 30_000);
 
   afterAll(async () => {
@@ -918,6 +921,7 @@ describe('Users API integration', () => {
       ).toEqual({ items: [], nextCursor: null });
     });
     it('preserves relationship/outbox consistency under mixed concurrent commands', async () => {
+      expect(app.getHttpServer().listening).toBe(true);
       const owner = await insertUser('Owner');
       const target = await insertUser('Target');
       await Promise.all(

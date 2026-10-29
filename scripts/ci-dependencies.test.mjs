@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-function fixture(t) {
+function fixture(t, service = 'post-service') {
   const dir = mkdtempSync(join(tmpdir(), 'wgo-ci-dependencies-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const log = join(dir, 'commands.jsonl');
@@ -29,7 +29,7 @@ if (tool === 'free' || tool === 'df') console.log('simulated runner resource sna
     writeFileSync(log, '');
     const result = spawnSync(
       process.execPath,
-      ['scripts/ci-dependencies.mjs', command, 'post-service'],
+      ['scripts/ci-dependencies.mjs', command, service],
       {
         env: {
           ...process.env,
@@ -86,6 +86,30 @@ test('successful startup and stop keep their existing commands without diagnosti
   const stopped = run('stop');
   assert.equal(stopped.status, 0);
   assert.equal(stopped.entries.length, 1);
+  assert.deepEqual(stopped.entries[0].args.slice(-3), [
+    'down',
+    '--volumes',
+    '--remove-orphans',
+  ]);
+});
+
+test('Moderation provisions PostgreSQL and Redis before report integration tests', (t) => {
+  const run = fixture(t, 'moderation-service');
+  const started = run('start');
+  assert.equal(started.status, 0, started.output);
+  assert.equal(started.entries.length, 1);
+  const args = started.entries[0].args;
+  assert.deepEqual(args.slice(args.indexOf('up')), [
+    'up',
+    '-d',
+    '--wait',
+    '--wait-timeout',
+    '360',
+    'postgres',
+    'redis6383',
+  ]);
+  const stopped = run('stop');
+  assert.equal(stopped.status, 0);
   assert.deepEqual(stopped.entries[0].args.slice(-3), [
     'down',
     '--volumes',

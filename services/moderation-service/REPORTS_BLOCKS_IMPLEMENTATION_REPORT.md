@@ -1,5 +1,13 @@
 # 사용자 차단·신고 구현 결과 (2026-10-29)
 
+## CI 후속 수정
+
+- Moderation의 PostgreSQL 신고 통합 테스트가 추가되었으나 CI 시작 의존성은 Redis만 선택하고 있었다. scripts/ci-dependencies.mjs의 moderation 의존성을 postgres/redis6383으로 보완하고, 시작·정리 명령의 회귀 테스트를 추가했다. 실제 CI 시작 스크립트로 두 컨테이너의 healthcheck 통과도 확인했다.
+- User 통합 테스트는 app.init만 호출해 Supertest가 공유 서버를 요청 단위로 자동 시작·종료했다. 동시 요청 중 자동 종료와 연결이 경쟁할 수 있어, beforeAll에서 loopback 임의 포트로 listen하고 afterAll에서 종료하도록 수정했다. 동시성 테스트가 시작될 때 listening 상태도 검증한다. 업무 트랜잭션이나 동시 요청 수를 줄이거나 실패를 retry로 감추지 않았다.
+- 신고 테스트의 CREATE DATABASE가 실패하면 생성하지 않은 DB에 DROP을 다시 시도하지 않고 administrative pool을 정리하도록 보완했다.
+- 검증: Linux Node24의 User 통합73개 통과, 같은 동시 요청 테스트10회 연속 통과. User 전체246/선택1개 생략, Moderation59, 실제 CI 의존성으로 통합56/선택1개 생략, Linux CI/CD 스크립트49개 통과. 두 서비스 typecheck/build, 루트 format과 diff 검사를 통과했다.
+- Linux 스크립트 검증은 Windows 체크아웃의 CRLF를 임시 컨테이너 복사본에서 CI와 같은 LF로 맞추어 수행했다. 원본 workflow는 변경하지 않았다. 운영 자원·Secrets·배포는 사용하지 않았다.
+
 ## 최신 dev 병합 결과
 
 최신 dev 9176d57을 현재 기능 브랜치에 병합했다. 기존 기능 커밋 a984102는 그대로 보존하며 backup/blocks-reports-before-dev-merge에서도 확인할 수 있다. User 실명/브라우저 쿠키·새 migration 및 다른 서비스의 dev 변경을 보존했다.
