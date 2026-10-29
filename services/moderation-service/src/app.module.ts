@@ -1,3 +1,4 @@
+import { ReportsController, ReportsService } from './reports.js';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
@@ -6,6 +7,8 @@ import { HealthModule } from './health/health.module.js';
 import { EventConsumerModule } from './event-consumer/event-consumer.module.js';
 
 @Module({
+  controllers: [ReportsController],
+  providers: [ReportsService],
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
