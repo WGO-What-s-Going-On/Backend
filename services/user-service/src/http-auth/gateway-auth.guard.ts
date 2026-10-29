@@ -20,6 +20,8 @@ const operations: Record<string, 'public' | 'user'> = {
   'POST /api/v1/users/me/term-consents': 'user',
   'GET /api/v1/users/me/badges': 'user',
   'POST /api/v1/users/me/withdrawal': 'user',
+  'POST /api/v1/users/me/blocks': 'user',
+  'GET /api/v1/users/me/blocks': 'user',
 };
 
 type Request = {
@@ -99,7 +101,12 @@ export class GatewayAuthGuard implements CanActivate {
         payload.exp! - payload.iat! > 60
       )
         throw new Error();
-      const policy = operations[`${request.method} ${request.path}`];
+      const policy =
+        operations[`${request.method} ${request.path}`] ??
+        (request.method === 'DELETE' &&
+        /^\/api\/v1\/users\/me\/blocks\/[1-9][0-9]{0,15}$/.test(request.path)
+          ? 'user'
+          : undefined);
       if (!policy) throw new ForbiddenException('Operation not permitted');
       if (policy === 'user') {
         if (

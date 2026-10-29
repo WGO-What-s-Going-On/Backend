@@ -76,6 +76,9 @@ describe('User OpenAPI contract', () => {
         'POST /api/v1/users/me/term-consents',
         'GET /api/v1/users/me/badges',
         'POST /api/v1/users/me/withdrawal',
+        'POST /api/v1/users/me/blocks',
+        'GET /api/v1/users/me/blocks',
+        'DELETE /api/v1/users/me/blocks/{blockedUserId}',
         'GET /api/v1/terms',
         'GET /health/live',
       ].sort(),
@@ -117,6 +120,9 @@ describe('User OpenAPI contract', () => {
     expect(
       doc.components.schemas.NicknameAvailabilityResult.properties.reason.enum,
     ).toEqual(['DUPLICATED']);
+    expect(doc.components.schemas.CreateBlockRequest.additionalProperties).toBe(
+      false,
+    );
     expect(doc.components.securitySchemes['service-jwt']).toMatchObject({
       scheme: 'bearer',
     });

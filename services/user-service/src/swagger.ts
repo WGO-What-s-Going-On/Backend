@@ -21,7 +21,7 @@ export function configureSwagger(app: INestApplication): void {
       const document = SwaggerModule.createDocument(app, config);
       for (const [path, item] of Object.entries(document.paths)) {
         if (!path.startsWith('/api/v1/')) continue;
-        for (const method of ['get', 'post', 'patch'] as const) {
+        for (const method of ['get', 'post', 'patch', 'delete'] as const) {
           const operation = item[method];
           if (operation) {
             operation.security = [{ 'service-jwt': [] }];
@@ -35,6 +35,9 @@ export function configureSwagger(app: INestApplication): void {
           }
         }
       }
+      const blockRequest = document.components?.schemas?.CreateBlockRequest;
+      if (blockRequest && 'properties' in blockRequest)
+        blockRequest.additionalProperties = false;
       return document;
     },
     { jsonDocumentUrl: 'docs/openapi.json' },

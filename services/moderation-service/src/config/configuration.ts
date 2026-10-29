@@ -29,6 +29,13 @@ export function configuration() {
       moderationConsumerGroup:
         process.env.MODERATION_CONSUMER_GROUP ?? 'post-moderation',
     },
+    reports: {
+      databaseUrl: process.env.MODERATION_REPORTS_DATABASE_URL,
+      postUrl: process.env.REPORTS_POST_SERVICE_URL,
+      eventStream:
+        process.env.MODERATION_REPORT_EVENT_STREAM ??
+        'moderation:report-events',
+    },
     openai: {
       apiKey: process.env.OPENAI_API_KEY,
     },

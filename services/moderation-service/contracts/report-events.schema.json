@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "title": "Moderation report event v1",
+  "required": [
+    "eventId",
+    "eventType",
+    "schemaVersion",
+    "producer",
+    "occurredAt",
+    "data"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "eventType": {
+      "enum": ["REPORT_CREATED", "REPORT_WITHDRAWN"]
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "producer": {
+      "const": "moderation-service"
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reportId", "reporterUserId", "targetType", "postId"],
+      "properties": {
+        "reportId": {
+          "type": "string",
+          "pattern": "^report_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "reporterUserId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,15}$",
+          "description": "Decimal BIGINT string in 1..9007199254740991."
+        },
+        "targetType": {
+          "enum": ["POST", "COMMENT"]
+        },
+        "postId": {
+          "type": "string",
+          "pattern": "^post_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "commentId": {
+          "type": "string",
+          "pattern": "^comment_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "reason": {
+          "enum": [
+            "SPAM",
+            "HARASSMENT",
+            "INAPPROPRIATE_CONTENT",
+            "FALSE_INFORMATION",
+            "OTHER"
+          ]
+        },
+        "withdrawnAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "targetType": {
+                "const": "COMMENT"
+              }
+            }
+          },
+          "then": {
+            "required": ["commentId"]
+          },
+          "else": {
+            "not": {
+              "required": ["commentId"]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "REPORT_CREATED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "required": ["reason"],
+            "not": {
+              "required": ["withdrawnAt"]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "data": {
+            "required": ["withdrawnAt"],
+            "not": {
+              "required": ["reason"]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

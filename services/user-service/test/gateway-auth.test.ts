@@ -41,7 +41,11 @@ function bearer(
     })
     .sign(key);
 }
-const users = { getProfile: vi.fn(async (userId: string) => ({ userId })) };
+const users = {
+  getProfile: vi.fn(async (userId: string) => ({ userId })),
+  changeBlock: vi.fn(async () => {}),
+  listBlocks: vi.fn(async () => ({ items: [], nextCursor: null })),
+};
 const auth = {
   loginWithKakao: vi.fn(async () => ({ accessToken: 'issued' })),
   logout: vi.fn(async () => {}),
@@ -82,6 +86,37 @@ describe('User REST Gateway trust boundary', () => {
       delete process.env.USER_HTTP_GATEWAY_TRUSTED_JWKS;
     else process.env.USER_HTTP_GATEWAY_TRUSTED_JWKS = original;
   });
+
+  it('requires verified identity for every block method, including dynamic DELETE', async () => {
+    const token = await bearer();
+    await request(app.getHttpServer())
+      .post('/api/v1/users/me/blocks')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-User-Id', '42')
+      .send({ blockedUserId: '123' })
+      .expect(204);
+    await request(app.getHttpServer())
+      .get('/api/v1/users/me/blocks')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-User-Id', '42')
+      .expect(200);
+    await request(app.getHttpServer())
+      .delete('/api/v1/users/me/blocks/123')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-User-Id', '42')
+      .expect(204);
+    expect(users.changeBlock).toHaveBeenCalledWith('42', '123', false);
+    await request(app.getHttpServer())
+      .delete('/api/v1/users/me/blocks/123')
+      .set('X-User-Id', '42')
+      .expect(401);
+    await request(app.getHttpServer())
+      .get('/api/v1/users/123/blocks')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-User-Id', '42')
+      .expect(404);
+  });
+
   it('rejects direct identity headers before calling business logic', async () => {
     users.getProfile.mockClear();
     await request(app.getHttpServer())

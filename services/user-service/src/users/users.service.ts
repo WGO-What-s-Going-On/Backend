@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   ServiceUnavailableException,
@@ -23,6 +24,8 @@ import { UserTermConsentEntity } from '../database/entities/user-term-consent.en
 import { UserBadgeEntity } from '../database/entities/user-badge.entity.js';
 import type { TermConsentsResponse } from './dto/term-consents.dto.js';
 import type { UserBadgesResponse } from './dto/user-badges-response.dto.js';
+import { UserBlockEntity } from '../database/entities/user-block.entity.js';
+import { parseBlockPage, type BlockPage } from './dto/user-block.dto.js';
 
 @Injectable()
 export class UsersService {
@@ -31,6 +34,114 @@ export class UsersService {
     private readonly usersRepository: Repository<UserEntity>,
     private readonly redisSessionStore: RedisSessionStore,
   ) {}
+
+  async changeBlock(
+    userId: string,
+    targetId: string,
+    create: boolean,
+    correlationId = randomUUID(),
+  ): Promise<void> {
+    if (userId === targetId)
+      throw new BadRequestException('Cannot block yourself');
+    await this.usersRepository.manager.transaction(async (manager) => {
+      // Lock even an absent relationship through its owner rows. Ordering also
+      // prevents reciprocal blocks from acquiring user locks in opposite order.
+      const users = await manager
+        .getRepository(UserEntity)
+        .createQueryBuilder('user')
+        .where('user.id IN (:...ids)', { ids: [userId, targetId] })
+        .orderBy('user.id', 'ASC')
+        .setLock('pessimistic_write')
+        .getMany();
+      const owner = users.find((user) => user.id === userId);
+      if (!owner) throw new NotFoundException('User not found');
+      if (owner.status !== UserStatus.ACTIVE)
+        throw new ForbiddenException('Active account required');
+      const target = users.find((user) => user.id === targetId);
+      const blocks = manager.getRepository(UserBlockEntity);
+      const existing = await blocks.findOneBy({
+        blockerUserId: userId,
+        blockedUserId: targetId,
+      });
+      if (create && existing) return;
+      if (!create && !existing) return;
+      if (
+        create &&
+        (!target ||
+          ![UserStatus.ACTIVE, UserStatus.SUSPENDED].includes(target.status))
+      )
+        throw new NotFoundException('Block target not found');
+      const now = new Date();
+      if (create)
+        await blocks.insert({
+          blockerUserId: userId,
+          blockedUserId: targetId,
+          createdAt: now,
+        });
+      else
+        await blocks.delete({ blockerUserId: userId, blockedUserId: targetId });
+      const eventId = randomUUID();
+      const type = create ? 'USER_BLOCK_CREATED' : 'USER_BLOCK_REMOVED';
+      await manager.getRepository(OutboxEventEntity).insert({
+        eventId,
+        aggregateId: userId,
+        eventType: type,
+        payload: {
+          eventId,
+          type,
+          target: { type: 'USER', id: userId },
+          occurredAt: now.toISOString(),
+          version: 1,
+          producer: 'user-service',
+          correlationId,
+          payload: { blockerUserId: userId, blockedUserId: targetId },
+        },
+        status: 'PENDING',
+        publishAttempts: 0,
+        createdAt: now,
+        publishedAt: null,
+      });
+    });
+  }
+
+  async listBlocks(
+    userId: string,
+    cursor: unknown,
+    limit: unknown,
+  ): Promise<BlockPage> {
+    const { before, size } = parseBlockPage(userId, cursor, limit);
+    if (!(await this.usersRepository.existsBy({ id: userId })))
+      throw new NotFoundException('User not found');
+    // The existing composite PK supports this owner-scoped keyset scan.
+    const query = this.usersRepository.manager
+      .getRepository(UserBlockEntity)
+      .createQueryBuilder('block')
+      .innerJoinAndSelect('block.blockedUser', 'target')
+      .where('block.blockerUserId = :userId', { userId });
+    if (before) query.andWhere('block.blockedUserId < :before', { before });
+    const rows = await query
+      .orderBy('block.blockedUserId', 'DESC')
+      .take(size + 1)
+      .getMany();
+    const page = rows.slice(0, size);
+    return {
+      items: page.map((row) => ({
+        userId: row.blockedUserId,
+        nickname: row.blockedUser.nickname,
+        profileImageKey: row.blockedUser.profileImageKey,
+        blockedAt: row.createdAt.toISOString(),
+      })),
+      nextCursor:
+        rows.length > size
+          ? Buffer.from(
+              JSON.stringify({
+                owner: userId,
+                before: page.at(-1)!.blockedUserId,
+              }),
+            ).toString('base64url')
+          : null,
+    };
+  }
 
   async checkNicknameAvailability(
     nickname: string,

@@ -1,3 +1,4 @@
+import { ReportsModule } from './reports/reports.module.js';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
@@ -12,6 +13,7 @@ import { EventConsumerModule } from './event-consumer/event-consumer.module.js';
       load: [configuration],
     }),
     HealthModule,
+    ReportsModule,
     EventConsumerModule,
   ],
 })
