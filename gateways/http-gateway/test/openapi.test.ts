@@ -8,6 +8,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig, type AppConfig } from '../src/config.js';
 import { generateDocs } from '../src/docs-generate.js';
 import {
+  documentedServices,
   mergeDocuments,
   validateDocument,
   type ApiDocument,
@@ -326,20 +327,23 @@ describe('collection and docs routes', () => {
     let calls = 0;
     let fail = true;
     const upstream = Fastify();
-    for (const [service, path] of Object.entries({
+    const paths: Record<(typeof documentedServices)[number], string> = {
       user: '/api/v1/users/me',
       post: '/api/v1/posts',
       map: '/api/v1/location',
       notification: '/api/v1/notifications',
-    })) {
+      moderation: '/api/v1/moderation/reports',
+    };
+    // Match the collector so every upstream stays inside this test server.
+    for (const service of documentedServices) {
       upstream.get(`/${service}/docs/openapi.json`, async (_request, reply) => {
         calls++;
-        return fail ? reply.code(503).send() : fixture(path);
+        return fail ? reply.code(503).send() : fixture(paths[service]);
       });
     }
     const base = await upstream.listen({ host: '127.0.0.1', port: 0 });
     cleanup.push(() => upstream.close());
-    for (const service of ['user', 'post', 'map', 'notification'] as const)
+    for (const service of documentedServices)
       cfg.services[service] = `${base}/${service}`;
     const app = await buildApp({ config: cfg, logger: false });
     cleanup.push(() => app.close());
@@ -357,15 +361,16 @@ describe('collection and docs routes', () => {
       app.inject('/docs/openapi.json'),
       app.inject('/docs/openapi.json'),
     ]);
-    expect(calls).toBe(8);
+    expect(calls).toBe(documentedServices.length * 2);
     for (const response of responses) {
       expect(response.statusCode).toBe(200);
       expect(response.json().servers).toEqual([{ url: '/' }]);
       expect(response.json().paths['/internal/test']).toBeUndefined();
-      expect(response.json().paths['/api/v1/users/me']).toBeDefined();
+      for (const path of Object.values(paths))
+        expect(response.json().paths[path]).toBeDefined();
     }
     await app.inject('/docs/openapi.json');
-    expect(calls).toBe(8);
+    expect(calls).toBe(documentedServices.length * 2);
   });
   it('collects configured URLs and preserves output on fetch/merge failure', async () => {
     const cfg = config();
