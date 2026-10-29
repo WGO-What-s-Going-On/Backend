@@ -478,3 +478,15 @@ Lifecycle은 다음 평가 시각의 Redis sorted set에서 최대 100개 ID를 
 Redis Cluster hash-tag 전환, 영속성/RPO, 활성 관계 상태의 분리와 감사 보존은
 후속 검토 대상이다. [검사 결과 계약](services/moderation-service/contracts/content-moderation-events.md)과
 [운영·마이그레이션](services/moderation-service/contracts/operations.md)을 따른다.
+
+## 프론트엔드 연동 계약 (2026-10-29)
+
+HTTP Gateway의 Access JWT 검증을 Post·Map·Notification·Moderation 공개 경로로 확대한다.
+각 서비스는 대상 audience의 ES256 서비스 JWT와 서명된 사용자 ID를 확인한다.
+Post는 기존 User gRPC BatchGetUserProfiles를 호출해 공개 닉네임을 조합하며 실명은 User의 본인 프로필에만 남긴다.
+Map의 ResolveRegion RPC가 Kakao Local H 행정동 코드를 반환하고 Post는 해당 게시글의 지역 스냅샷을 저장한다.
+행정동 랭킹과 칭호는 Post 소유 활동 데이터에서 집계한다. User DB를 직접 조회하지 않는다.
+Notification 설정은 기존 DynamoDB event-state 테이블의 별도 사용자 파티션, 신고는 기존 Moderation Redis에 저장한다.
+작성자 종료는 자동 만료와 별도의 가역 상태이며 수정·종료·재개는 PostUpdated Outbox 이벤트를 발행한다.
+Map 공간 후보는 유지하되 Post가 원본 공개 상태를 검증하고 Semantic/WS가 변경 이벤트를 소비한다.
+배포 순서, 조회 한도, 외부 설정 및 기존 데이터 보완은 [프론트엔드 연동 계약](docs/contracts/frontend-integration.md)을 따른다.
