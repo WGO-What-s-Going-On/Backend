@@ -172,7 +172,7 @@ export async function mergeDocuments(
       title: 'WGO Public HTTP API',
       version: '1.0.0',
       description:
-        'Local/dev Gateway API. Some services may have no public operations; see x-services-without-public-operations. User routes authenticate user Access JWTs; their internal identity headers are not public inputs. Other services retain their documented authentication policies. Internal service tokens are not public credentials. Gateway errors include code, message, requestId and timestamp; upstream responses pass through unchanged. Existing status codes may have an x-gateway-response describing the additional Gateway error shape.',
+        'Public Gateway API. Some services may have no public operations; see x-services-without-public-operations. User routes authenticate user Access JWTs; their internal identity headers are not public inputs. Other services retain their documented authentication policies. Internal service tokens are not public credentials. Gateway errors include code, message, requestId and timestamp; upstream responses pass through unchanged. Existing status codes may have an x-gateway-response describing the additional Gateway error shape.',
     },
     servers: [{ url: '/' }],
     paths: {},

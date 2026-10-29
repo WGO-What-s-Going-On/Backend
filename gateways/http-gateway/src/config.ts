@@ -9,7 +9,7 @@ export type ServiceName =
 export interface AppConfig {
   userAuth: UserAuthConfig | null;
   nodeEnv: 'development' | 'test' | 'production';
-  docs: { enabled: boolean; file: string; timeoutMs: number };
+  docs: { enabled: boolean; live: boolean; file: string; timeoutMs: number };
   host: string;
   port: number;
   logLevel: string;
@@ -85,7 +85,11 @@ export function loadConfig(): AppConfig {
     nodeEnv,
     userAuth: userAuthConfig(),
     docs: {
-      enabled: nodeEnv !== 'production' && boolean('DOCS_ENABLED', false),
+      enabled:
+        (nodeEnv !== 'production' ||
+          process.env.DEPLOYMENT_ENV === 'staging') &&
+        boolean('DOCS_ENABLED', false),
+      live: process.env.DEPLOYMENT_ENV === 'staging',
       file: process.env.DOCS_FILE ?? 'generated/openapi.json',
       timeoutMs: integer('DOCS_FETCH_TIMEOUT_MS', 5000, 1),
     },

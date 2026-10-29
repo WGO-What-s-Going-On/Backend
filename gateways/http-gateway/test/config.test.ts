@@ -48,3 +48,17 @@ it('rejects HTTP Redis URLs without exposing credentials', () => {
     expect(String(error)).not.toContain('do-not-print');
   }
 });
+
+it('allows staging documentation with production runtime only when explicitly enabled', () => {
+  process.env = {
+    NODE_ENV: 'production',
+    DEPLOYMENT_ENV: 'staging',
+    DOCS_ENABLED: 'true',
+  };
+  expect(loadConfig().docs.enabled).toBe(true);
+  delete process.env.DOCS_ENABLED;
+  expect(loadConfig().docs.enabled).toBe(false);
+  process.env.DOCS_ENABLED = 'true';
+  process.env.DEPLOYMENT_ENV = 'production';
+  expect(loadConfig().docs.enabled).toBe(false);
+});

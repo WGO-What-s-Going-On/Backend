@@ -1,4 +1,33 @@
-// Pure deployment validation/rendering helpers: tests never require AWS credentials.
+// Deployment helpers receive external effects explicitly so tests never need AWS credentials.
+export async function waitForDeployment(
+  readService,
+  revision,
+  pause,
+  attempts = 60,
+) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const service = readService();
+    const target = service?.deployments?.find(
+      (d) => d.taskDefinition === revision,
+    );
+    if (
+      !service ||
+      service.taskDefinition !== revision ||
+      !target ||
+      target.rolloutState === 'FAILED'
+    )
+      return false;
+    if (target.rolloutState === 'COMPLETED')
+      return (
+        service.desiredCount >= 1 &&
+        service.runningCount >= service.desiredCount &&
+        service.pendingCount === 0
+      );
+    if (attempt + 1 < attempts) await pause();
+  }
+  return false;
+}
+
 export function required(env, name) {
   const value = env[name];
   if (typeof value !== 'string' || !value.trim())
@@ -156,4 +185,37 @@ export function validateRelease(release, sha) {
     seen.add(entry.name);
   }
   return release;
+}
+
+// Keep non-secret staging access settings versioned with the deployment, not in opaque GitHub JSON.
+export function deploymentRuntime(name, mode, values) {
+  if (!values || typeof values !== 'object' || Array.isArray(values))
+    throw new Error('Runtime secret values must be a string map');
+  const runtime = { ...values, DEPLOYMENT_ENV: mode };
+  if (name === 'http-gateway')
+    runtime.DOCS_ENABLED = String(mode === 'staging');
+  if (mode === 'staging' && ['http-gateway', 'ws-gateway'].includes(name)) {
+    const key = name === 'http-gateway' ? 'CORS_ORIGINS' : 'WS_ALLOWED_ORIGINS';
+    runtime[key] = [
+      ...new Set([
+        ...(runtime[key] ?? '')
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+        'http://localhost:3000',
+        'http://localhost:5173',
+      ]),
+    ].join(',');
+  }
+  return runtime;
+}
+
+export function deploymentRuntimeChanged(name, files) {
+  // Gateway access settings live in the CD helpers and must deploy even if app source is unchanged.
+  return (
+    ['http-gateway', 'ws-gateway'].includes(name) &&
+    files.some((file) =>
+      ['scripts/cd-lib.mjs', 'scripts/cd.mjs'].includes(file),
+    )
+  );
 }
