@@ -1,3 +1,5 @@
+import { GatewayAuthGuard } from '../src/gateway-auth.js';
+import type { ExecutionContext } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NotificationController } from '../src/notification/notification.controller.js';
 import type { NotificationService } from '../src/notification/notification.service.js';
@@ -10,11 +12,18 @@ describe('Notification user context', () => {
       { list } as unknown as NotificationService,
       {} as PushSubscriptionService,
     );
-  it('rejects spoofable user headers in production until authentication is integrated', () => {
+  it('rejects spoofable user headers in production at the gateway guard', () => {
     vi.stubEnv('NODE_ENV', 'production');
-    expect(() => controller().list('1')).toThrow(
-      'authentication integration is unavailable',
-    );
+    expect(() =>
+      new GatewayAuthGuard().canActivate({
+        switchToHttp: () => ({
+          getRequest: () => ({
+            headers: { 'x-user-id': '1' },
+            rawHeaders: ['x-user-id', '1'],
+          }),
+        }),
+      } as ExecutionContext),
+    ).toThrow('Invalid gateway identity');
   });
   it.each([undefined, '', '-1', '1.5', '__TOKEN_OWNER__', ['1']])(
     'rejects invalid development user header %s',
