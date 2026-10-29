@@ -103,3 +103,42 @@ describe('HTTP gateway', () => {
     });
   });
 });
+
+it.each(['PATCH', 'DELETE'])(
+  'allows %s preflight only for configured frontend origins',
+  async (method) => {
+    const app = await buildApp({
+      config: testConfig({ corsOrigins: ['http://localhost:5173'] }),
+      logger: false,
+    });
+    apps.push(app);
+    for (const origin of [
+      'http://localhost:5173',
+      'https://untrusted.example',
+    ]) {
+      const response = await app.inject({
+        method: 'OPTIONS',
+        url: '/api/v1/posts/example',
+        headers: {
+          origin,
+          'access-control-request-method': method,
+          'access-control-request-headers': 'authorization,content-type',
+        },
+      });
+      if (origin === 'http://localhost:5173') {
+        expect(response.statusCode).toBe(204);
+        expect(response.headers['access-control-allow-origin']).toBe(origin);
+        expect(response.headers['access-control-allow-methods']).toContain(
+          method,
+        );
+        expect(response.headers['access-control-allow-credentials']).toBe(
+          'true',
+        );
+        expect(response.headers['access-control-allow-headers']).toContain(
+          'authorization',
+        );
+      } else
+        expect(response.headers['access-control-allow-origin']).toBeUndefined();
+    }
+  },
+);

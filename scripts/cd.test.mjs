@@ -3,10 +3,82 @@ import assert from 'node:assert/strict';
 import {
   parseSecretJson,
   renderTask,
+  deploymentRuntime,
+  deploymentRuntimeChanged,
   validateService,
   selectReleaseServices,
   validateRelease,
+  waitForDeployment,
 } from './cd-lib.mjs';
+
+test('stable task count can precede rollout completion without triggering rollback', async () => {
+  let reads = 0;
+  let pauses = 0;
+  assert.equal(
+    await waitForDeployment(
+      () => ({
+        taskDefinition: 'new-task',
+        desiredCount: 1,
+        runningCount: 1,
+        pendingCount: 0,
+        deployments: [
+          {
+            taskDefinition: 'new-task',
+            rolloutState: ++reads < 3 ? 'IN_PROGRESS' : 'COMPLETED',
+          },
+        ],
+      }),
+      'new-task',
+      async () => {
+        pauses++;
+      },
+    ),
+    true,
+  );
+  assert.equal(reads, 3);
+  assert.equal(pauses, 2);
+});
+test('rollout waiting is bounded and rejects rollback or failure immediately', async () => {
+  const service = {
+    taskDefinition: 'new-task',
+    desiredCount: 1,
+    runningCount: 1,
+    pendingCount: 0,
+    deployments: [{ taskDefinition: 'new-task', rolloutState: 'IN_PROGRESS' }],
+  };
+  let pauses = 0;
+  assert.equal(
+    await waitForDeployment(
+      () => service,
+      'new-task',
+      async () => {
+        pauses++;
+      },
+      3,
+    ),
+    false,
+  );
+  assert.equal(pauses, 2);
+  for (const result of [
+    undefined,
+    { ...service, taskDefinition: 'old-task' },
+    {
+      ...service,
+      deployments: [{ taskDefinition: 'new-task', rolloutState: 'FAILED' }],
+    },
+  ]) {
+    assert.equal(
+      await waitForDeployment(
+        () => result,
+        'new-task',
+        async () => {
+          assert.fail('must not wait');
+        },
+      ),
+      false,
+    );
+  }
+});
 
 const digest = `123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/wgo/user@sha256:${'a'.repeat(64)}`;
 const config = {
@@ -251,4 +323,44 @@ test('release artifact supports re-running all jobs after a production failure',
     workflow.indexOf('- name: Remove registry credentials'),
   );
   assert.match(upload, /overwrite: true/);
+});
+
+test('staging docs and frontend origins do not leak into production', () => {
+  const input = { NODE_ENV: 'production', CORS_ORIGINS: 'https://app.example' };
+  const staging = deploymentRuntime('http-gateway', 'staging', input);
+  assert.equal(staging.DOCS_ENABLED, 'true');
+  assert.equal(staging.DEPLOYMENT_ENV, 'staging');
+  assert.equal(staging.NODE_ENV, 'production');
+  assert.equal(
+    staging.CORS_ORIGINS,
+    'https://app.example,http://localhost:3000,http://localhost:5173',
+  );
+  assert.equal(input.CORS_ORIGINS, 'https://app.example');
+  const production = deploymentRuntime('http-gateway', 'production', {
+    ...input,
+    DOCS_ENABLED: 'true',
+    DEPLOYMENT_ENV: 'staging',
+  });
+  assert.equal(production.DOCS_ENABLED, 'false');
+  assert.equal(production.DEPLOYMENT_ENV, 'production');
+  assert.equal(production.CORS_ORIGINS, input.CORS_ORIGINS);
+  assert.match(
+    deploymentRuntime('ws-gateway', 'staging', input).WS_ALLOWED_ORIGINS,
+    /http:\/\/localhost:5173/,
+  );
+});
+
+test('CD runtime setting changes redeploy both gateways, not unrelated services', () => {
+  for (const name of ['http-gateway', 'ws-gateway']) {
+    assert.equal(deploymentRuntimeChanged(name, ['scripts/cd-lib.mjs']), true);
+    assert.equal(deploymentRuntimeChanged(name, ['scripts/cd.mjs']), true);
+    assert.equal(
+      deploymentRuntimeChanged(name, ['scripts/cd.test.mjs']),
+      false,
+    );
+  }
+  assert.equal(
+    deploymentRuntimeChanged('user-service', ['scripts/cd-lib.mjs']),
+    false,
+  );
 });
