@@ -29,7 +29,7 @@ describe.skipIf(process.env.RUN_INTEGRATION !== '1')(
   'report persistence',
   () => {
     it('keeps the first reason across retries and separates reporters', async () => {
-      const url = process.env.REPORT_TEST_REDIS_URL ?? 'redis://localhost:6382';
+      const url = process.env.REPORT_TEST_REDIS_URL ?? 'redis://127.0.0.1:6383';
       const service = new ReportsService(new ConfigService({ redis: { url } }));
       const client = createClient({ url });
       await client.connect();
