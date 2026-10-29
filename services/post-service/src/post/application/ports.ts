@@ -12,6 +12,7 @@ import type {
 } from '../domain/post.js';
 
 export type EventType =
+  | 'PostUpdated'
   | 'PostCreated'
   | 'PostCommentCreated'
   | 'PostReactionCreated'
@@ -115,6 +116,13 @@ export interface PostReadQueries {
 }
 
 export interface PostCommands {
+  fenceParentComment(postId: string, commentId: string): Promise<boolean>;
+  updateDetails(
+    postId: string,
+    details: { title?: string; content?: string },
+    now: Date,
+  ): Promise<void>;
+  setClosed(postId: string, closedAt: Date | null, now: Date): Promise<void>;
   recordModerationEvent(input: ModerationLifecycleEvent): Promise<boolean>;
   insertPost(post: PostRecord): Promise<void>;
   insertComment(
@@ -203,6 +211,10 @@ export interface PostUnitOfWork {
 }
 
 export interface LocationAuthorization {
+  resolveRegion?(
+    latitude: number,
+    longitude: number,
+  ): Promise<{ code: string; name: string }>;
   assertCanCreate(
     userId: number,
     latitude: number,

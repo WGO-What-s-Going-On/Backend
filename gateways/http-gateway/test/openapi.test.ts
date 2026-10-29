@@ -1,3 +1,4 @@
+import { frontendAuth, frontendBearer } from './frontend-auth-fixture.js';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +8,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig, type AppConfig } from '../src/config.js';
 import { generateDocs } from '../src/docs-generate.js';
 import {
+  documentedServices,
   mergeDocuments,
   validateDocument,
   type ApiDocument,
@@ -25,7 +27,7 @@ function config(): AppConfig {
     RATE_LIMIT_ENABLED: 'false',
     LOG_PRETTY: 'false',
   };
-  return loadConfig();
+  return { ...loadConfig(), userAuth: frontendAuth };
 }
 function fixture(path = '/api/v1/posts'): ApiDocument {
   return {
@@ -141,14 +143,14 @@ describe('public OpenAPI merge', () => {
     expect(doc.paths['/api/v1/posts'].get.operationId).toBe('post__read');
     expect(doc.paths['/api/v1/location'].get.operationId).toBe('map__read');
     expect(doc.paths['/api/v1/posts'].get.security).toEqual([
-      { post__Identity: [] },
+      { post__UserAccess: [] },
     ]);
     expect(doc.components.schemas.post__Result.properties.child.$ref).toBe(
       '#/components/schemas/post__Result',
     );
     expect(Object.keys(doc.components.securitySchemes)).toEqual([
-      'post__Identity',
-      'map__Identity',
+      'post__UserAccess',
+      'map__UserAccess',
     ]);
     expect(doc.components.schemas.post__InternalOnly).toBeUndefined();
     expect(JSON.stringify([post, map])).toBe(before);
@@ -171,8 +173,10 @@ describe('public OpenAPI merge', () => {
       [{ service: 'post', document: doc }],
       config(),
     );
-    expect(merged.paths['/api/v1/posts'].get.security).toEqual([]);
-    expect(merged.components.securitySchemes).toBeUndefined();
+    expect(merged.paths['/api/v1/posts'].get.security).toEqual([
+      { post__UserAccess: [] },
+    ]);
+    expect(merged.components.securitySchemes.post__UserAccess).toBeDefined();
     expect(
       merged.components.schemas.post__Result.discriminator.mapping.item,
     ).toBe('#/components/schemas/post__Item');
@@ -212,7 +216,7 @@ describe('public OpenAPI merge', () => {
     expect(doc['x-services-without-public-operations']).toEqual([
       'notification',
     ]);
-    expect(doc['x-undocumented-services']).toEqual(['moderation']);
+    expect(doc['x-undocumented-services']).toEqual([]);
     await expect(
       mergeDocuments([{ service: 'user', document: notification }], config()),
     ).rejects.toThrow('no Gateway public operations');
@@ -275,16 +279,23 @@ describe('public OpenAPI merge', () => {
       await expect(validateDocument(doc)).rejects.toThrow();
     }
   });
-  it('rejects internal auth used by a public operation', async () => {
+  it('replaces upstream internal auth with client Access JWT', async () => {
     const doc = fixture();
     doc.components.securitySchemes['service-jwt'] = {
       type: 'http',
       scheme: 'bearer',
     };
     doc.security = [{ 'service-jwt': [] }];
-    await expect(
-      mergeDocuments([{ service: 'post', document: doc }], config()),
-    ).rejects.toThrow('internal authentication');
+    const merged = await mergeDocuments(
+      [{ service: 'post', document: doc }],
+      config(),
+    );
+    expect(merged.paths['/api/v1/posts'].get.security).toEqual([
+      { post__UserAccess: [] },
+    ]);
+    expect(
+      merged.components.securitySchemes['post__service-jwt'],
+    ).toBeUndefined();
   });
   it('adds actual Gateway responses without replacing upstream errors', async () => {
     const cfg = config();
@@ -316,20 +327,23 @@ describe('collection and docs routes', () => {
     let calls = 0;
     let fail = true;
     const upstream = Fastify();
-    for (const [service, path] of Object.entries({
+    const paths: Record<(typeof documentedServices)[number], string> = {
       user: '/api/v1/users/me',
       post: '/api/v1/posts',
       map: '/api/v1/location',
       notification: '/api/v1/notifications',
-    })) {
+      moderation: '/api/v1/moderation/reports',
+    };
+    // Match the collector so every upstream stays inside this test server.
+    for (const service of documentedServices) {
       upstream.get(`/${service}/docs/openapi.json`, async (_request, reply) => {
         calls++;
-        return fail ? reply.code(503).send() : fixture(path);
+        return fail ? reply.code(503).send() : fixture(paths[service]);
       });
     }
     const base = await upstream.listen({ host: '127.0.0.1', port: 0 });
     cleanup.push(() => upstream.close());
-    for (const service of ['user', 'post', 'map', 'notification'] as const)
+    for (const service of documentedServices)
       cfg.services[service] = `${base}/${service}`;
     const app = await buildApp({ config: cfg, logger: false });
     cleanup.push(() => app.close());
@@ -347,15 +361,16 @@ describe('collection and docs routes', () => {
       app.inject('/docs/openapi.json'),
       app.inject('/docs/openapi.json'),
     ]);
-    expect(calls).toBe(8);
+    expect(calls).toBe(documentedServices.length * 2);
     for (const response of responses) {
       expect(response.statusCode).toBe(200);
       expect(response.json().servers).toEqual([{ url: '/' }]);
       expect(response.json().paths['/internal/test']).toBeUndefined();
-      expect(response.json().paths['/api/v1/users/me']).toBeDefined();
+      for (const path of Object.values(paths))
+        expect(response.json().paths[path]).toBeDefined();
     }
     await app.inject('/docs/openapi.json');
-    expect(calls).toBe(8);
+    expect(calls).toBe(documentedServices.length * 2);
   });
   it('collects configured URLs and preserves output on fetch/merge failure', async () => {
     const cfg = config();
@@ -363,6 +378,9 @@ describe('collection and docs routes', () => {
     const upstream = Fastify();
     let bad = false,
       invalid = false;
+    upstream.get('/moderation/docs/openapi.json', async () =>
+      fixture('/api/v1/moderation/reports'),
+    );
     upstream.get('/post/docs/openapi.json', async () =>
       invalid ? { openapi: '2.0' } : fixture(),
     );
@@ -387,6 +405,7 @@ describe('collection and docs routes', () => {
     cfg.services.notification = `${base}/notification`;
     cfg.services.post = `${base}/post`;
     cfg.services.map = `${base}/map`;
+    cfg.services.moderation = `${base}/moderation`;
     const generated = await generateDocs(cfg);
     expect(generated.paths['/api/v1/users/me'].get).toBeDefined();
     expect(generated['x-services-without-public-operations']).toEqual([
@@ -462,7 +481,9 @@ describe('collection and docs routes', () => {
       address,
     );
     expect(target.origin).toBe(address);
-    const response = await fetch(target, { headers: { 'X-User-Id': '123' } });
+    const response = await fetch(target, {
+      headers: { 'X-User-Id': '999', authorization: frontendBearer() },
+    });
     expect(await response.json()).toMatchObject({
       user: '123',
       requestId: expect.any(String),
@@ -479,7 +500,14 @@ describe('collection and docs routes', () => {
     expect((await app.inject('/health/live')).statusCode).toBe(200);
     expect((await app.inject('/docs')).statusCode).toBe(200);
     expect((await app.inject('/docs/openapi.json')).statusCode).toBe(503);
-    expect((await app.inject('/api/v1/posts')).statusCode).toBe(502);
+    expect(
+      (
+        await app.inject({
+          url: '/api/v1/posts',
+          headers: { authorization: frontendBearer() },
+        })
+      ).statusCode,
+    ).toBe(502);
   });
   it.each(['production', 'disabled'])(
     'registers no docs routes when %s',

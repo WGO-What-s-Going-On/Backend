@@ -90,6 +90,7 @@ export class WithdrawalScheduler
         user.status = UserStatus.WITHDRAWN;
         user.withdrawnAt = now;
         user.updatedAt = now;
+        user.realName = null;
         user.nickname = tombstoneNickname(user.id);
         user.profileImageKey = null;
         await users.save(user);

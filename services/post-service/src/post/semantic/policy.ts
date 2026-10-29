@@ -6,6 +6,7 @@ export const CANDIDATE_LIMIT = 200;
 export const SCOPE = { radiusM: 150, lookbackHours: 24 } as const;
 export type SourcePost = Pick<
   PostRecord,
+  | 'closedAt'
   | 'postId'
   | 'title'
   | 'content'
@@ -38,7 +39,11 @@ export function validateEmbedding(value: Embedding, version: string): number[] {
 }
 
 export function active(post: SourcePost, now: Date): boolean {
-  return post.status === 'ACTIVE' && (!post.expiresAt || post.expiresAt > now);
+  return (
+    post.status === 'ACTIVE' &&
+    !post.closedAt &&
+    (!post.expiresAt || post.expiresAt > now)
+  );
 }
 export function eligible(post: SourcePost, now: Date): boolean {
   return (

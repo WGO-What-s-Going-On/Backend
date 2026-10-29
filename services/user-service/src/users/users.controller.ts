@@ -1,3 +1,4 @@
+import { Delete, Put } from '@nestjs/common';
 import {
   BadRequestException,
   Body,
@@ -48,6 +49,60 @@ import { parseUserId } from '../user-id.js';
 @Controller('api/v1/users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
+  @userIdentityHeader()
+  @Get('me/blocks')
+  @ApiOperation({
+    summary: 'List blocked users',
+    description: 'Up to 100 records. Pass nextCursor as cursor.',
+  })
+  blocks(
+    @Headers('x-user-id') user: unknown,
+    @Query('cursor') cursor?: unknown,
+  ) {
+    return this.usersService.listBlocks(
+      requireUserId(user),
+      cursor === undefined ? undefined : requireUserId(cursor),
+    );
+  }
+  @userIdentityHeader()
+  @Put('me/blocks')
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Block a user' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['userId'],
+      additionalProperties: false,
+      properties: { userId: { type: 'string' } },
+    },
+  })
+  block(@Headers('x-user-id') user: unknown, @Body() body: unknown) {
+    return this.usersService.block(
+      requireUserId(user),
+      blockTarget(body),
+      true,
+    );
+  }
+  @userIdentityHeader()
+  @Delete('me/blocks')
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Unblock a user' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['userId'],
+      additionalProperties: false,
+      properties: { userId: { type: 'string' } },
+    },
+  })
+  unblock(@Headers('x-user-id') user: unknown, @Body() body: unknown) {
+    return this.usersService.block(
+      requireUserId(user),
+      blockTarget(body),
+      false,
+    );
+  }
 
   @Get('nickname/availability')
   @ApiOperation({
@@ -103,6 +158,7 @@ export class UsersController {
           description:
             'Trimmed, non-empty nickname; at most 30 Unicode characters after trimming.',
         },
+        realName: { type: 'string', maxLength: 100, nullable: true },
         profileImageKey: { type: 'string', maxLength: 500, nullable: true },
       },
     },
@@ -126,14 +182,29 @@ export class UsersController {
     const input = body as Record<string, unknown>;
     if (
       Object.keys(input).some(
-        (key) => key !== 'nickname' && key !== 'profileImageKey',
+        (key) =>
+          key !== 'nickname' && key !== 'profileImageKey' && key !== 'realName',
       ) ||
-      (!Object.hasOwn(input, 'nickname') &&
+      (!Object.hasOwn(input, 'realName') &&
+        !Object.hasOwn(input, 'nickname') &&
         !Object.hasOwn(input, 'profileImageKey'))
     ) {
       throw new BadRequestException('Provide nickname or profileImageKey only');
     }
     const update: UpdateUserProfile = {};
+    if (Object.hasOwn(input, 'realName')) {
+      if (
+        input.realName !== null &&
+        (typeof input.realName !== 'string' ||
+          !input.realName.trim() ||
+          [...input.realName.trim()].length > 100)
+      )
+        throw new BadRequestException(
+          'realName must be null or 1-100 characters',
+        );
+      update.realName =
+        typeof input.realName === 'string' ? input.realName.trim() : null;
+    }
     if (Object.hasOwn(input, 'nickname'))
       update.nickname = normalizeNickname(input.nickname);
     if (Object.hasOwn(input, 'profileImageKey')) {
@@ -248,4 +319,16 @@ function requireUserId(value: unknown): string {
     throw new UnauthorizedException('Invalid authentication credentials');
   }
   return userId;
+}
+
+function blockTarget(body: unknown): string {
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    Array.isArray(body) ||
+    Object.keys(body).length !== 1 ||
+    !('userId' in body)
+  )
+    throw new BadRequestException('userId required');
+  return requireUserId(body.userId);
 }

@@ -3,6 +3,7 @@ syntax = "proto3";
 package wgo.map.v1;
 
 service MapAuthorization {
+  rpc ResolveRegion (RegionRequest) returns (RegionResponse);
   rpc CheckPostCreation (LocationCheck) returns (LocationDecision);
   rpc CheckPostParticipation (ParticipationCheck) returns (LocationDecision);
 }
@@ -46,3 +47,6 @@ message NearbyPostsResponse {
   bool truncated = 2;
   string next_cursor = 3; // Empty when no further page exists.
 }
+
+message RegionRequest { double latitude = 1; double longitude = 2; }
+message RegionResponse { string code = 1; string name = 2; }

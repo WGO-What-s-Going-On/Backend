@@ -29,6 +29,10 @@ describe('Notification OpenAPI contract', () => {
     const operations = {
       '/health/live': ['get'],
       '/api/v1/notifications': ['get'],
+      '/api/v1/notifications/settings': ['get', 'patch'],
+      '/api/v1/notifications/boards/{postId}': ['get', 'put'],
+      '/api/v1/notifications/read-all': ['patch'],
+      '/api/v1/notifications/{notificationId}': ['delete'],
       '/api/v1/notifications/unread-count': ['get'],
       '/api/v1/notifications/{notificationId}/read': ['patch'],
       '/api/v1/notifications/push-subscriptions': ['delete', 'put'],
@@ -39,7 +43,11 @@ describe('Notification OpenAPI contract', () => {
     for (const [path, methods] of Object.entries(operations)) {
       expect(Object.keys(doc.paths[path]).sort()).toEqual(methods);
       for (const method of methods) {
-        expect(doc.paths[path][method].responses['200']).toBeDefined();
+        expect(
+          doc.paths[path][method].responses[
+            path === '/api/v1/notifications/{notificationId}' ? '204' : '200'
+          ],
+        ).toBeDefined();
       }
     }
     expect(

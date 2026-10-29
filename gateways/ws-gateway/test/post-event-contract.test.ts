@@ -56,3 +56,27 @@ describe('Post realtime contract', () => {
   it('skips unrelated types', () =>
     expect(realtimePostEvent(fields('PostParticipantLeft'))).toBeNull());
 });
+
+it('accepts versioned author closure updates without exposing author identity', () => {
+  const value = {
+    eventId: 'evt_update',
+    eventType: 'PostUpdated',
+    aggregateId: 'post_1',
+    producer: 'post-service',
+    schemaVersion: 1,
+    occurredAt: new Date().toISOString(),
+    postVersion: 2,
+    post: { postId: 'post_1', authorId: 123, closedAt: null },
+  };
+  const parsed = realtimePostEvent({
+    eventId: value.eventId,
+    eventType: value.eventType,
+    data: JSON.stringify(value),
+  });
+  expect(parsed).toMatchObject({
+    type: 'post.updated',
+    postVersion: 2,
+    closedAt: null,
+  });
+  expect(parsed).not.toHaveProperty('authorId');
+});

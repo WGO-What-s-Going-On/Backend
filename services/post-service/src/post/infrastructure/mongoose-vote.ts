@@ -55,7 +55,11 @@ export class MongooseVote {
         post.voteAt > now
       )
         return;
-      if (post.status !== 'ACTIVE' || (post.expiresAt && post.expiresAt <= now))
+      if (
+        post.status !== 'ACTIVE' ||
+        post.closedAt != null ||
+        (post.expiresAt && post.expiresAt <= now)
+      )
         return;
       const comments = await this.comments
         .find({ postId, status: 'ACTIVE' })
@@ -143,6 +147,7 @@ export class MongooseVote {
     if (!post) throw new PostNotFoundError('Post not found');
     if (
       post.status !== 'ACTIVE' ||
+      post.closedAt != null ||
       (post.expiresAt && post.expiresAt <= new Date()) ||
       post.vote?.status !== 'OPEN' ||
       !post.vote.candidates.some(
@@ -177,6 +182,7 @@ export class MongooseVote {
       const vote = post.vote as VoteState | null;
       if (
         post.status !== 'ACTIVE' ||
+        post.closedAt != null ||
         (post.expiresAt && post.expiresAt <= new Date()) ||
         vote?.status !== 'OPEN'
       )

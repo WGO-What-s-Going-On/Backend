@@ -48,6 +48,7 @@ class MongoQueries implements PostStateQueries {
       ? {
           postId: post.postId,
           status: post.status,
+          closedAt: post.closedAt ?? null,
           authorId: post.authorId,
           category: post.category,
           expiresAt: post.expiresAt ?? null,
@@ -70,6 +71,8 @@ class MongoQueries implements PostStateQueries {
       .lean();
     return comment
       ? {
+          parentCommentId: comment.parentCommentId ?? null,
+          verified: comment.verified ?? false,
           commentId: comment.commentId,
           postId,
           authorId,
@@ -448,6 +451,40 @@ class MongoCommands implements PostCommands {
           },
         },
       },
+      { session: this.session },
+    );
+  }
+
+  async fenceParentComment(
+    postId: string,
+    commentId: string,
+  ): Promise<boolean> {
+    const result = await this.comments.updateOne(
+      { postId, commentId, status: 'ACTIVE', parentCommentId: null },
+      { $inc: { voteSelectionFence: 1 } },
+      { session: this.session },
+    );
+    return result.matchedCount === 1;
+  }
+  async updateDetails(
+    postId: string,
+    details: { title?: string; content?: string },
+    now: Date,
+  ): Promise<void> {
+    await this.posts.updateOne(
+      { postId },
+      { $set: { ...details, updatedAt: now }, $inc: { postVersion: 1 } },
+      { session: this.session },
+    );
+  }
+  async setClosed(
+    postId: string,
+    closedAt: Date | null,
+    now: Date,
+  ): Promise<void> {
+    await this.posts.updateOne(
+      { postId },
+      { $set: { closedAt, updatedAt: now }, $inc: { postVersion: 1 } },
       { session: this.session },
     );
   }

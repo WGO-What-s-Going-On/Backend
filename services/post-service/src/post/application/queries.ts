@@ -1,3 +1,4 @@
+import type { FrontendViews } from '../infrastructure/frontend-views.js';
 import { PostNotFoundError } from '../domain/post.js';
 import type { CommentCursor, PostReadQueries, MediaReadPort } from './ports.js';
 
@@ -5,9 +6,10 @@ export class ReadPosts {
   constructor(
     private readonly queries: PostReadQueries,
     private readonly media?: MediaReadPort,
+    private readonly views?: FrontendViews,
   ) {}
 
-  async detail(postId: string) {
+  async detail(postId: string, actor?: number) {
     const post = await this.queries.findDetail(postId);
     if (
       !post ||
@@ -16,12 +18,17 @@ export class ReadPosts {
     )
       throw new PostNotFoundError('Post not found');
     return {
-      ...post,
+      ...(this.views ? (await this.views.posts([post], actor))[0]! : post),
       media: this.media ? (await this.media.forTargets([post]))[0]! : [],
     };
   }
 
-  async comments(postId: string, cursor: CommentCursor | null, limit: number) {
+  async comments(
+    postId: string,
+    cursor: CommentCursor | null,
+    limit: number,
+    actor?: number,
+  ) {
     // 목록 조회에서 부모의 이미지 URL까지 불필요하게 서명하지 않는다.
     const post = await this.queries.findStatus(postId);
     if (
@@ -37,11 +44,14 @@ export class ReadPosts {
     const media = this.media
       ? await this.media.forTargets(page.map(({ comment }) => comment))
       : [];
+    const comments = page.map(({ comment }, index) => ({
+      ...comment,
+      media: media[index] ?? [],
+    }));
     return {
-      comments: page.map(({ comment }, index) => ({
-        ...comment,
-        media: media[index] ?? [],
-      })),
+      comments: this.views
+        ? await this.views.comments(comments, actor)
+        : comments,
       nextCursor:
         rows.length > limit && last
           ? Buffer.from(

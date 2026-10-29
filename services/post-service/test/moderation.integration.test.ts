@@ -1,3 +1,4 @@
+import { UserProfiles } from '../src/post/infrastructure/user-profiles.js';
 import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
@@ -100,6 +101,11 @@ suite('Moderation v1 -> Post transaction -> Outbox', () => {
       })
       .overrideProvider(OutboxWorker)
       .useValue({ wake() {} })
+      .overrideProvider(UserProfiles)
+      .useValue({
+        names: async (ids: number[]) =>
+          new Map(ids.map((id) => [id, `user-${id}`])),
+      })
       .compile();
     app = module.createNestApplication();
     await app.init();

@@ -1,3 +1,5 @@
+import { resolveRegion } from './region.js';
+import { gatewayIdentity } from './gateway-auth.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { resolve } from 'node:path';
@@ -114,6 +116,32 @@ export function createGrpcServer(
       }
     };
   server.addService(pkg.wgo.map.v1.MapAuthorization.service, {
+    ResolveRegion: async (
+      call: ServerUnaryCall<{ latitude: number; longitude: number }, unknown>,
+      callback: sendUnaryData<unknown>,
+    ) => {
+      if (serviceCaller(call.metadata, keys, '') !== 'post-service')
+        return callback({
+          code: status.UNAUTHENTICATED,
+          message: 'ES256 post-service token required',
+        });
+      if (!validCoordinates(call.request.latitude, call.request.longitude))
+        return callback({
+          code: status.INVALID_ARGUMENT,
+          message: 'Invalid coordinates',
+        });
+      try {
+        callback(
+          null,
+          await resolveRegion(call.request.latitude, call.request.longitude),
+        );
+      } catch {
+        callback({
+          code: status.UNAVAILABLE,
+          message: 'Region resolution unavailable',
+        });
+      }
+    },
     CheckPostCreation: check(false),
     CheckPostParticipation: check(true),
   });
@@ -291,9 +319,15 @@ export function createHttpServer(
       response.writeHead(404).end();
       return;
     }
-    // 공개 신원 검증은 Gateway 인증이 도입되기 전까지 운영에서 닫아 둔다.
-    if (process.env.NODE_ENV === 'production') {
-      response.writeHead(503).end();
+    if (
+      (process.env.NODE_ENV === 'production' ||
+        request.headers.authorization) &&
+      !gatewayIdentity(
+        request.headers.authorization,
+        request.headers['x-user-id'],
+      )
+    ) {
+      response.writeHead(401).end();
       return;
     }
     const userId = Number(request.headers['x-user-id']);

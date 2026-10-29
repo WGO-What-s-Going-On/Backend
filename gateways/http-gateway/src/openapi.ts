@@ -10,8 +10,9 @@ export const documentedServices = [
   'post',
   'map',
   'notification',
+  'moderation',
 ] as const;
-export const undocumentedServices = ['moderation'] as const;
+export const undocumentedServices: readonly ServiceName[] = [];
 // Accept older health-only Notification contracts during independent service rollouts.
 const servicesWithoutPublicApis: readonly ServiceName[] = ['notification'];
 // Match @fastify/http-proxy default methods; TRACE is not exposed.
@@ -194,7 +195,7 @@ export async function mergeDocuments(
     }
     const document = structuredClone(source.document);
     // Translate the internal User service contract to the client-facing Gateway contract.
-    if (source.service === 'user') {
+    {
       document.components ??= {};
       document.components.securitySchemes ??= {};
       document.components.securitySchemes.UserAccess = {
@@ -221,7 +222,10 @@ export async function mergeDocuments(
           item.parameters = externalParameters(item.parameters);
         for (const method of methods) {
           if (!item[method]) continue;
-          const policy = userOperations[`${method.toUpperCase()} ${path}`];
+          const policy =
+            source.service === 'user'
+              ? userOperations[`${method.toUpperCase()} ${path}`]
+              : 'user';
           if (!policy) {
             delete item[method];
             continue;

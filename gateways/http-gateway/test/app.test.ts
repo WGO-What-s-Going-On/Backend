@@ -1,3 +1,4 @@
+import { frontendAuth, frontendBearer } from './frontend-auth-fixture.js';
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -18,6 +19,7 @@ function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
 
   return {
     ...base,
+    userAuth: frontendAuth,
     ...overrides,
     rateLimit: overrides.rateLimit ?? base.rateLimit,
     upstream: overrides.upstream ?? base.upstream,
@@ -66,6 +68,7 @@ describe('HTTP gateway', () => {
 
     const response = await app.inject({
       method: 'GET',
+      headers: { authorization: frontendBearer() },
       url: '/api/v1/posts/nearby?lat=37.123&lng=127.123&radius=500',
     });
 
@@ -89,6 +92,7 @@ describe('HTTP gateway', () => {
 
     const response = await app.inject({
       method: 'GET',
+      headers: { authorization: frontendBearer() },
       url: '/api/v1/posts/nearby',
     });
 

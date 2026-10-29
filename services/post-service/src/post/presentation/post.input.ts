@@ -1,9 +1,5 @@
 import { mediaIds } from '../media/media.policy.js';
-import {
-  BadRequestException,
-  ForbiddenException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { CommentReactionType, PostReactionType } from '../domain/post.js';
 import type { PostInput } from '../domain/post.js';
 
@@ -33,10 +29,6 @@ function number(value: unknown, name: string): number {
 }
 
 export function userId(header: string | undefined): number {
-  if (process.env.NODE_ENV === 'production')
-    throw new ServiceUnavailableException(
-      'Authentication integration unavailable',
-    );
   if (
     !header ||
     !/^[1-9]\d*$/.test(header) ||
@@ -55,6 +47,7 @@ export function postId(value: string): string {
 export function postInput(raw: unknown): PostInput {
   const body = object(raw);
   fields(body, [
+    'anonymous',
     'title',
     'content',
     'category',
@@ -63,11 +56,14 @@ export function postInput(raw: unknown): PostInput {
     'radiusM',
     'mediaIds',
   ]);
+  if (body.anonymous !== undefined && typeof body.anonymous !== 'boolean')
+    throw new BadRequestException('anonymous must be a boolean');
   const category = string(body.category, 'category');
   return {
     ...(body.mediaIds === undefined
       ? {}
       : { mediaIds: mediaIds(body.mediaIds) }),
+    anonymous: (body.anonymous as boolean | undefined) ?? false,
     title: string(body.title, 'title'),
     content: string(body.content, 'content'),
     category,
@@ -79,7 +75,7 @@ export function postInput(raw: unknown): PostInput {
 
 export function commentInput(raw: unknown): string {
   const body = object(raw);
-  fields(body, ['content', 'mediaIds']);
+  fields(body, ['content', 'mediaIds', 'parentCommentId']);
   mediaIds(body.mediaIds);
   return string(body.content, 'content');
 }
@@ -137,4 +133,12 @@ export function commentId(value: string): string {
 
 export function commentMediaInput(raw: unknown): string[] {
   return mediaIds(object(raw).mediaIds);
+}
+
+export function parentCommentInput(raw: unknown): string | null {
+  const value = object(raw).parentCommentId;
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string')
+    throw new BadRequestException('Invalid parentCommentId');
+  return commentId(value);
 }
