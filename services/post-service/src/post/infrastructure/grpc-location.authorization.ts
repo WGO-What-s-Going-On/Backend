@@ -26,6 +26,7 @@ type Check = (
   ) => void,
 ) => void;
 type MapClient = Client & {
+  ResolveRegion: Function;
   CheckPostCreation: Check;
   CheckPostParticipation: Check;
 };
@@ -50,6 +51,27 @@ export class GrpcLocationAuthorization
 
   onModuleDestroy(): void {
     this.client.close();
+  }
+
+  resolveRegion(
+    latitude: number,
+    longitude: number,
+  ): Promise<{ code: string; name: string }> {
+    return new Promise((resolve, reject) =>
+      this.client.ResolveRegion(
+        { latitude, longitude },
+        mapMetadata(),
+        { deadline: new Date(Date.now() + 2000) },
+        (error: Error | null, result: { code: string; name: string }) =>
+          error
+            ? reject(
+                new ParticipationUnavailableError(
+                  'Region resolution unavailable',
+                ),
+              )
+            : resolve(result),
+      ),
+    );
   }
 
   assertCanCreate(

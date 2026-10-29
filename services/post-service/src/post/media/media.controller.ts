@@ -1,3 +1,5 @@
+import { UseGuards } from '@nestjs/common';
+import { GatewayAuthGuard } from '../../gateway-auth.js';
 import {
   Body,
   Controller,
@@ -34,6 +36,7 @@ import {
   MediaStatusResponse,
 } from './media.openapi.js';
 
+@UseGuards(GatewayAuthGuard)
 @Controller('api/v1/posts/media/uploads')
 @ApiTags('Post media')
 @ApiHeader({

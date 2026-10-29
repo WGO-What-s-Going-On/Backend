@@ -57,7 +57,12 @@ export class IndexSemanticPost {
 
 export class InvalidSemanticEvent extends Error {}
 export function semanticEvent(fields: Record<string, string>): string | null {
-  const supported = ['PostCreated', 'PostExpired', 'PostDeleted'];
+  const supported = [
+    'PostUpdated',
+    'PostCreated',
+    'PostExpired',
+    'PostDeleted',
+  ];
   if (fields.eventType && !supported.includes(fields.eventType)) return null;
   try {
     const value = JSON.parse(fields.data ?? '');
@@ -73,7 +78,7 @@ export function semanticEvent(fields: Record<string, string>): string | null {
       value.schemaVersion !== 1 ||
       typeof value.occurredAt !== 'string' ||
       !Number.isFinite(Date.parse(value.occurredAt)) ||
-      (value.eventType === 'PostCreated' &&
+      (['PostCreated', 'PostUpdated'].includes(value.eventType) &&
         value.post?.postId !== value.aggregateId)
     )
       throw new Error();

@@ -3,6 +3,7 @@ export interface PostRealtimeMessage {
   type:
     | 'comment.created'
     | 'comment.deleted'
+    | 'post.updated'
     | 'post.created'
     | 'post.deleted'
     | 'post.expired'
@@ -17,9 +18,11 @@ export interface PostRealtimeMessage {
   comment?: Record<string, unknown>;
   deletedAt?: string;
   expiredAt?: string;
+  closedAt?: string | null;
 }
 export class InvalidPostEvent extends Error {}
 const types: Record<string, PostRealtimeMessage['type']> = {
+  PostUpdated: 'post.updated',
   PostCreated: 'post.created',
   PostDeleted: 'post.deleted',
   PostExpired: 'post.expired',
@@ -99,6 +102,16 @@ export function realtimePostEvent(
           throw new Error();
         message.comment = comment;
       }
+    }
+    if (message.type === 'post.updated') {
+      if (
+        !object(value.post) ||
+        value.post.postId !== message.postId ||
+        !(value.post.closedAt === null || date(value.post.closedAt))
+      )
+        throw new Error();
+      message.postVersion = version(value.postVersion);
+      message.closedAt = value.post.closedAt as string | null;
     }
     if (message.type === 'post.deleted' || message.type === 'post.expired') {
       if (!object(value.post) || value.post.postId !== message.postId)

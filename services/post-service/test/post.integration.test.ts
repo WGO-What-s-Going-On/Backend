@@ -1,3 +1,4 @@
+import { UserProfiles } from '../src/post/infrastructure/user-profiles.js';
 import { SemanticWorker } from '../src/post/semantic/worker.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -145,7 +146,13 @@ suite('post creation integration', () => {
     process.env.MAP_GRPC_ADDRESS = `127.0.0.1:${mapPort}`;
     const module = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(UserProfiles)
+      .useValue({
+        names: async (ids: number[]) =>
+          new Map(ids.map((id) => [id, `user-${id}`])),
+      })
+      .compile();
     app = module.createNestApplication();
     await app.init();
     connection = app.get(getConnectionToken());
@@ -503,12 +510,12 @@ suite('post creation integration', () => {
         .post('/api/v1/posts')
         .set(header)
         .send({})
-        .expect(503);
+        .expect(401);
       await request(app.getHttpServer())
         .post(`/api/v1/posts/${id}/participants`)
         .set(header)
         .send({})
-        .expect(503);
+        .expect(401);
       mapUnavailable = true;
       await expect(app.get(JoinPost).execute(id, 123)).rejects.toMatchObject({
         message: 'Map authorization unavailable',

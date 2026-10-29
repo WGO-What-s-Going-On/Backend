@@ -613,3 +613,15 @@ postVersion/activityVersion을 소비해 중복·역순 생성을 억제하고, 
 삭제 댓글 본문을 재노출하지 않으며 종료된 게시물 재참여의 최종 인가는 기존 Post JoinPost가 담당한다.
 [WS 계약·재연결·배포 순서](../../../gateways/ws-gateway/README.md#post-종료삭제-실시간-계약-2026-10-25)를 따른다.
 실제 Post 트랜잭션과 Outbox 발행부터 WS 전달까지 test/ws-lifecycle.integration.test.ts에서 검증한다.
+
+## 프론트엔드 연동 추가 계약: PostUpdated v1
+
+작성자 본문 수정·종료·재개는 Post 원본과 Outbox를 같은 트랜잭션에서 갱신한다.
+`PostUpdated`는 공통 envelope 외에 `post: {postId, authorId, category, closedAt}`와
+양의 정수 `postVersion`을 포함한다. closedAt은 ISO 시각 또는 null이다. 본문과 실명은 포함하지 않는다.
+Semantic 소비자는 최신 원본을 다시 읽어 종료 글을 제거한다. Map은 공간 후보를 유지하고
+Post 조회가 원본 공개 상태를 다시 검증한다. WS는 postVersion으로 이전 갱신을 무시한다.
+
+이 버전의 활동·칭호·행정동 랭킹은 Post 원본을 집계하는 조회 API다. User의 영속 배지·보상
+데이터를 쓰거나 새로운 칭호 이벤트를 만들지 않는다. 기존 성장 이벤트 제안과 구분하며
+[연동 계약](../../../docs/contracts/frontend-integration.md)에 계산 규칙을 정의한다.

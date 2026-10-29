@@ -2,7 +2,7 @@ import { createPrivateKey, createPublicKey, sign } from 'node:crypto';
 import { Metadata } from '@grpc/grpc-js';
 import { ParticipationUnavailableError } from '../application/errors.js';
 
-export function mapMetadata(): Metadata {
+export function mapMetadata(audience = 'wgo-map-service'): Metadata {
   let key: ReturnType<typeof createPrivateKey>;
   let kid: string;
   try {
@@ -42,7 +42,7 @@ export function mapMetadata(): Metadata {
   const payload = Buffer.from(
     JSON.stringify({
       iss: 'wgo-post-service',
-      aud: 'wgo-map-service',
+      aud: audience,
       sub: 'post-service',
       iat: now,
       exp: now + 30,

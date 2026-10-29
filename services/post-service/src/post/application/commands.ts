@@ -67,6 +67,16 @@ export class CreatePost {
       input.longitude,
       input.radiusM,
     );
+    if (process.env.POST_REGION_ENABLED === 'true') {
+      if (!this.authorization.resolveRegion)
+        throw new ParticipationUnavailableError(
+          'Region resolution unavailable',
+        );
+      post.region = await this.authorization.resolveRegion(
+        input.latitude,
+        input.longitude,
+      );
+    }
     await this.unitOfWork.execute(async ({ commands }) => {
       await commands.insertPost(post);
       await commands.appendEvent(
@@ -107,6 +117,7 @@ export class CreateComment {
     authorId: number,
     mutationId?: string,
     mediaIds: string[] = [],
+    parentCommentId: string | null = null,
   ): Promise<CommentRecord> {
     const post = await this.queries.findPost(postId);
     requireActive(post);
@@ -132,6 +143,21 @@ export class CreateComment {
       post.locationSnapshot.longitude,
       post.radiusM,
     );
+    let verified = post.radiusM <= 150;
+    if (!verified) {
+      try {
+        await this.authorization.assertCanJoin(
+          authorId,
+          postId,
+          post.locationSnapshot.latitude,
+          post.locationSnapshot.longitude,
+          150,
+        );
+        verified = true;
+      } catch (error) {
+        if (!(error instanceof LocationDeniedError)) throw error;
+      }
+    }
     const now = new Date();
     const comment = createComment(
       postId,
@@ -141,9 +167,29 @@ export class CreateComment {
       now,
       mediaIds,
     );
+    comment.parentCommentId = parentCommentId;
+    comment.verified = verified;
     try {
       return await this.unitOfWork.execute(async (transaction) => {
         const post = await active(transaction, postId);
+        if (parentCommentId) {
+          const parent = await transaction.queries.findComment(
+            postId,
+            parentCommentId,
+          );
+          if (
+            !parent ||
+            parent.status !== 'ACTIVE' ||
+            parent.parentCommentId ||
+            !(await transaction.commands.fenceParentComment(
+              postId,
+              parentCommentId,
+            ))
+          )
+            throw new PostNotFoundError(
+              'Active top-level parent comment required',
+            );
+        }
         // 재연결 후 같은 작성 요청이 다시 와도 댓글과 카운터를 한 번만 기록한다.
         if (mutationId) {
           const existing = await transaction.queries.findCommentByMutation(

@@ -4,7 +4,7 @@ import type { Model } from 'mongoose';
 import type { SemanticSource } from './ports.js';
 import { CANDIDATE_LIMIT, type SourcePost } from './policy.js';
 const fields =
-  'postId title content category status createdAt updatedAt expiresAt -_id';
+  'postId title content category status closedAt createdAt updatedAt expiresAt -_id';
 
 @Injectable()
 export class MongooseSemanticSource implements SemanticSource {

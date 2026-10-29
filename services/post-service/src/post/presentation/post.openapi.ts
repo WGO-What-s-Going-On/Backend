@@ -12,6 +12,7 @@ const dateTime = {
 } as const;
 
 export class CreatePostBody {
+  @ApiPropertyOptional({ default: false }) anonymous?: boolean;
   @ApiPropertyOptional({
     type: [String],
     maxItems: 5,
@@ -37,6 +38,12 @@ export class CreatePostBody {
 }
 
 export class CreateCommentBody {
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    description: 'Top-level parent in the same post; one reply level',
+  })
+  parentCommentId?: string | null;
   @ApiPropertyOptional({
     type: [String],
     maxItems: 5,
@@ -107,6 +114,24 @@ export class CountersResponse {
 }
 
 export class PostResponse {
+  @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
+  closedAt?: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) authorNickname?:
+    | string
+    | null;
+  @ApiPropertyOptional({ default: false }) anonymous?: boolean;
+  @ApiPropertyOptional({ type: Number, nullable: true }) distanceM?:
+    | number
+    | null;
+  @ApiPropertyOptional({ type: String, enum: PostReactionType, nullable: true })
+  myReaction?: string | null;
+  @ApiPropertyOptional({
+    type: Object,
+    additionalProperties: { type: 'integer' },
+    example: { CURIOUS: 0, STILL_HAPPENING: 0, HELPFUL: 0, ENDED: 0 },
+  })
+  reactionCounts?: Record<string, number>;
+
   @ApiPropertyOptional({ type: [String], maxItems: 5 }) mediaIds?: string[];
   @ApiPropertyOptional({
     type: [MediaResponse],
@@ -114,7 +139,9 @@ export class PostResponse {
   })
   media?: MediaResponse[];
   @ApiProperty({ example: postIdExample }) postId!: string;
-  @ApiProperty({ example: 123 }) authorId!: number;
+  @ApiProperty({ type: Number, example: 123, nullable: true }) authorId!:
+    | number
+    | null;
   @ApiProperty({ example: 'INCIDENT' }) category!: string;
   @ApiProperty({ example: '현장 상황' }) title!: string;
   @ApiProperty({ example: '현재 교통 상황을 공유합니다.' }) content!: string;
@@ -132,6 +159,25 @@ export class PostResponse {
 }
 
 export class CommentResponse {
+  @ApiPropertyOptional({ type: String, nullable: true }) authorNickname?:
+    | string
+    | null;
+  @ApiPropertyOptional({
+    type: String,
+    enum: CommentReactionType,
+    nullable: true,
+  })
+  myReaction?: string | null;
+  @ApiPropertyOptional({ type: String, nullable: true }) parentCommentId?:
+    | string
+    | null;
+  @ApiPropertyOptional({
+    default: false,
+    description:
+      'Verified within 150 metres at creation; old comments default false',
+  })
+  verified?: boolean;
+
   @ApiPropertyOptional({ type: [String], maxItems: 5 }) mediaIds?: string[];
   @ApiPropertyOptional({
     type: [MediaResponse],
@@ -220,4 +266,9 @@ export class PostStatusResponse {
   @ApiProperty({ ...dateTime, nullable: true, example: null }) expiresAt!:
     | string
     | null;
+}
+
+export class NearbyPageResponse {
+  @ApiProperty({ type: () => [PostResponse] }) posts!: PostResponse[];
+  @ApiProperty({ type: String, nullable: true }) nextCursor!: string | null;
 }
