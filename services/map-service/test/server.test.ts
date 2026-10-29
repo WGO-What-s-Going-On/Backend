@@ -275,7 +275,7 @@ describe('Map HTTP and gRPC contract', () => {
         headers: { 'content-type': 'application/json', 'x-user-id': '123' },
         body: JSON.stringify({ latitude: 37.5, longitude: 127 }),
       });
-      expect(response.status).toBe(503);
+      expect(response.status).toBe(401);
     } finally {
       process.env.NODE_ENV = 'test';
     }

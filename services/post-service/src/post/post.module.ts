@@ -1,3 +1,8 @@
+import { Activities, ActivityController } from './activity.controller.js';
+import { NearbyController, NearbyPosts } from './nearby.controller.js';
+import { GrpcNearbyPosts } from './semantic/grpc-candidates.js';
+import { FrontendViews } from './infrastructure/frontend-views.js';
+import { UserProfiles } from './infrastructure/user-profiles.js';
 import { MediaSchema } from './media/media.schema.js';
 import { MediaService } from './media/media.service.js';
 import { S3MediaStorage } from './media/s3-media.storage.js';
@@ -90,8 +95,19 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
       { name: 'Outbox', schema: OutboxSchema, collection: 'outbox_events' },
     ]),
   ],
-  controllers: [MediaController, PostController, InternalPostController],
+  controllers: [
+    ActivityController,
+    NearbyController,
+    MediaController,
+    PostController,
+    InternalPostController,
+  ],
   providers: [
+    Activities,
+    NearbyPosts,
+    GrpcNearbyPosts,
+    FrontendViews,
+    UserProfiles,
     MediaService,
     S3MediaStorage,
     MediaCleanupWorker,
@@ -102,9 +118,12 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
     { provide: POST_READ_QUERIES, useExisting: MongoosePostRead },
     {
       provide: ReadPosts,
-      useFactory: (queries: PostReadQueries, media: MediaService) =>
-        new ReadPosts(queries, media),
-      inject: [POST_READ_QUERIES, MediaService],
+      useFactory: (
+        queries: PostReadQueries,
+        media: MediaService,
+        views: FrontendViews,
+      ) => new ReadPosts(queries, media, views),
+      inject: [POST_READ_QUERIES, MediaService, FrontendViews],
     },
     { provide: POST_UNIT_OF_WORK, useExisting: MongoosePostStore },
     { provide: POST_STATE_QUERIES, useExisting: MongoosePostStore },

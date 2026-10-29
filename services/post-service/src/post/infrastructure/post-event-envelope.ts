@@ -43,6 +43,7 @@ export function serializePostEvent(row: Record<string, any>): string {
     )
       throw new Error('Invalid envelope');
     const types: Record<string, string> = {
+      PostUpdated: 'post',
       PostCreated: 'post',
       PostDeleted: 'post',
       PostExpired: 'post',
@@ -78,6 +79,7 @@ export function serializePostEvent(row: Record<string, any>): string {
     )
       throw new Error('Invalid reaction type');
     const requiredDates: Record<string, string[]> = {
+      PostUpdated: [],
       PostCreated: [],
       PostDeleted: ['deletedAt'],
       PostExpired: ['expiresAt', 'expiredAt'],
@@ -113,6 +115,11 @@ export function serializePostEvent(row: Record<string, any>): string {
         target.updatedAt !== null)
     )
       throw new Error('Invalid comment content or state');
+    if (
+      value.eventType === 'PostUpdated' &&
+      !(target.closedAt === null || date(target.closedAt))
+    )
+      throw new Error('Invalid author closure');
     if (value.eventType === 'PostParticipantJoined' && target.leftAt !== null)
       throw new Error('Invalid participation state');
     if (['PostDeleted', 'PostCommentDeleted'].includes(value.eventType)) {
@@ -133,7 +140,7 @@ export function serializePostEvent(row: Record<string, any>): string {
         throw new Error('Invalid deletion reason');
     }
     if (
-      ['PostDeleted', 'PostExpired'].includes(value.eventType) &&
+      ['PostDeleted', 'PostExpired', 'PostUpdated'].includes(value.eventType) &&
       !user(value.postVersion)
     )
       throw new Error('Missing post version');

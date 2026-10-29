@@ -174,7 +174,7 @@ HTTP Gateway→User REST는 이 표의 User 경로에 서비스 ES256 인증과 
 
 `MapPostQuery.SearchNearbyPosts`는 ES256으로 인증한 `post-service`만 허용한다. 기존 두 MapAuthorization RPC의 HS256 전환 예외를 신규 RPC에 확장하지 않는다. Post는 기존 두 위치 인가 클라이언트와 동일한 내부 ES256 서명 함수를 사용한다. 자세한 입력/응답은 Map `contracts/map-authorization.proto`에 정의한다.
 
-`POST /api/v1/posts/similar`는 생성과 같은 사용자 인증 정책을 따른다. 현재 로컬·테스트 X-User-Id만 지원하고 운영 사용자 인증 미연결 시 503이다. 목표 Gateway 호출자는 http-gateway이며 사용자 인증/내부 헤더 정제는 기존 전환 선행 조건이다. 모델 미연결도 명시적인 503이며 API 추가가 운영 인증 개방을 뜻하지 않는다.
+`POST /api/v1/posts/similar`는 생성과 같은 사용자 인증 정책을 따른다. Gateway가 사용자 Access JWT를 검증한 뒤 Post audience와 userId claim을 가진 ES256 서비스 토큰을 전달한다. Post는 서명과 전달 사용자 문맥의 일치를 검증한다. 모델 미연결도 명시적인 503이며 API 추가가 운영 인증 개방을 뜻하지 않는다.
 
 ## HTTP Gateway → User REST 적용 상태
 
@@ -193,7 +193,7 @@ HTTP Gateway→User REST는 이 표의 User 경로에 서비스 ES256 인증과 
   User는 신뢰 키 설정이 없거나 잘못되면 시작하지 않는다. 개발용 우회는 없다.
 - User 직접 호출은 로그인·Refresh도 서비스 JWT가 필요하다. 원본 OpenAPI는 내부
   계약이며 Gateway 병합 문서는 사용자 Bearer만 노출한다. 약관 조회도 프록시한다.
-- HS256 사용자 토큰의 운영 WS 호환성(WGO-ARCH-03), 다른 서비스 인증 전환,
+- HS256 사용자 토큰의 운영 WS 호환성(WGO-ARCH-03),
   계정 상태 정책 변경·즉시 Access JWT 폐기는 이 작업에 포함하지 않는다.
 - 배포 시 사설 접근·TLS를 구성하고 외부 User 진입을 제한한 상태에서 Guard와 Gateway를
   함께 전환한다. 키 교체는 신·구 공개키 등록 → Gateway 서명 키 교체 → 기존 Task 종료와
@@ -213,3 +213,11 @@ Post의 새 댓글 쓰기는 HTTP·WS 모두 활성 참여 및 최신 위치를 
 성공한 mutation 재시도에는 기존 결과를 반환하며 새 쓰기·이벤트를 만들지 않는다.
 Room leave 또는 소켓 종료는 도메인 탈퇴를 의미하지 않는다. 재연결 join은 위치를
 다시 확인하되 이미 활성인 참여자의 수·이벤트를 추가하지 않는다.
+
+## 프론트엔드 공개 API 인증 확대
+
+Post·Map·Notification·Moderation 공개 REST 경로도 Gateway의 사용자 Access JWT 검증을 사용한다.
+수신 키, audience, 배포 순서와 브라우저 쿠키 설정은 [프론트엔드 연동 계약](frontend-integration.md)을 따른다.
+비운영 직접 호출 harness만 기존 신원 헤더를 허용하고 운영은 서비스 서명을 필수로 검증한다.
+`MapAuthorization.ResolveRegion`은 `post-service`의 ES256 호출만 허용하며 HS256 전환 예외가 없다.
+반환값은 행정동 H의 10자리 code와 name이고, 좌표 범위·외부 API 실패를 검증한다.

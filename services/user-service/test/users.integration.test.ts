@@ -1,3 +1,4 @@
+import { AddPrivateRealName1793200000000 } from '../src/database/migrations/1793200000000-AddPrivateRealName.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -61,6 +62,7 @@ describe('Users API integration', () => {
       database: testDatabaseName,
       entities: [...USER_SERVICE_ENTITIES],
       migrations: [
+        AddPrivateRealName1793200000000,
         InitialUserServiceSchema1789990707351,
         AddTermsCodeEffectiveAtIndex1789993249262,
       ],
@@ -108,6 +110,58 @@ describe('Users API integration', () => {
       'TRUNCATE TABLE "users" RESTART IDENTITY CASCADE',
     );
     await testDataSource.query('TRUNCATE TABLE "outbox_events"');
+  });
+
+  it('stores own real name privately and keeps blocks isolated and idempotent', async () => {
+    const owner = await insertUser('owner'),
+      target = await insertUser('target');
+    const profile = await request(app.getHttpServer())
+      .patch('/api/v1/users/me')
+      .set('x-user-id', owner)
+      .send({ realName: '  홍길동  ' })
+      .expect(200);
+    expect(profile.body.realName).toBe('홍길동');
+    expect(JSON.stringify(await outbox())).not.toContain('홍길동');
+    await request(app.getHttpServer())
+      .patch('/api/v1/users/me')
+      .set('x-user-id', owner)
+      .send({ realName: 7 })
+      .expect(400);
+    for (let i = 0; i < 2; i++)
+      await request(app.getHttpServer())
+        .put('/api/v1/users/me/blocks')
+        .set('x-user-id', owner)
+        .send({ userId: target })
+        .expect(204);
+    const blocks = await request(app.getHttpServer())
+      .get('/api/v1/users/me/blocks')
+      .set('x-user-id', owner)
+      .expect(200);
+    expect(blocks.body.items).toHaveLength(1);
+    expect(blocks.body.items[0]).toMatchObject({
+      userId: target,
+      nickname: 'target',
+    });
+    const other = await request(app.getHttpServer())
+      .get('/api/v1/users/me/blocks')
+      .set('x-user-id', target)
+      .expect(200);
+    expect(other.body.items).toEqual([]);
+    await request(app.getHttpServer())
+      .put('/api/v1/users/me/blocks')
+      .set('x-user-id', owner)
+      .send({ userId: owner })
+      .expect(400);
+    await request(app.getHttpServer())
+      .delete('/api/v1/users/me/blocks')
+      .set('x-user-id', owner)
+      .send({ userId: target })
+      .expect(204);
+    await request(app.getHttpServer())
+      .patch('/api/v1/users/me')
+      .set('x-user-id', owner)
+      .send({ realName: null })
+      .expect(200);
   });
 
   it('returns available when the nickname does not exist', async () => {
@@ -240,6 +294,7 @@ describe('Users API integration', () => {
       .expect(200)
       .expect({
         userId: id,
+        realName: null,
         nickname: 'Temporary',
         profileImageKey: null,
         status: 'ACTIVE',

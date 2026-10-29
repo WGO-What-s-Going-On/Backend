@@ -2,6 +2,7 @@ import { mediaIds as validateMediaIds } from '../media/media.policy.js';
 export type PostStatus = 'ACTIVE' | 'EXPIRED' | 'DELETED';
 
 export interface PostState {
+  closedAt?: Date | null;
   postId: string;
   status: PostStatus;
   bucketCount: number;
@@ -14,6 +15,7 @@ export interface PostState {
 }
 
 export interface PostInput {
+  anonymous?: boolean;
   mediaIds?: string[];
   title: string;
   content: string;
@@ -24,6 +26,9 @@ export interface PostInput {
 }
 
 export interface PostRecord {
+  region?: { code: string; name: string };
+  closedAt?: Date | null;
+  anonymous?: boolean;
   mediaIds?: string[];
   postId: string;
   status: PostStatus;
@@ -45,6 +50,8 @@ export interface PostRecord {
 }
 
 export interface CommentRecord {
+  parentCommentId?: string | null;
+  verified?: boolean;
   mediaIds?: string[];
   commentId: string;
   postId: string;
@@ -145,11 +152,16 @@ function requireRange(
 }
 
 export function requireActive<
-  T extends { status: PostStatus; expiresAt?: Date | null },
+  T extends {
+    status: PostStatus;
+    expiresAt?: Date | null;
+    closedAt?: Date | null;
+  },
 >(post: T | null): asserts post is T {
   if (!post) throw new PostNotFoundError('Post not found');
   if (
     post.status !== 'ACTIVE' ||
+    post.closedAt != null ||
     (post.expiresAt && post.expiresAt.getTime() <= Date.now())
   )
     throw new PostInactiveError('Post is not active');
@@ -174,6 +186,7 @@ export function createPost(
     postId,
     authorId,
     ...(attachments.length ? { mediaIds: attachments } : {}),
+    anonymous: input.anonymous ?? false,
     title: input.title,
     content: input.content,
     category: input.category,

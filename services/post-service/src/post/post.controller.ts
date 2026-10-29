@@ -1,3 +1,7 @@
+import { distanceM } from './nearby.controller.js';
+import { UseGuards } from '@nestjs/common';
+import { GatewayAuthGuard } from '../gateway-auth.js';
+import { Patch } from '@nestjs/common';
 import { Header } from '@nestjs/common';
 import { MediaResponse } from './media/media.openapi.js';
 import { MediaService } from './media/media.service.js';
@@ -62,6 +66,7 @@ import { PostErrorFilter } from './presentation/post-error.filter.js';
 import {
   commentInput,
   commentMediaInput,
+  parentCommentInput,
   commentReactionInput,
   commentReactionType,
   commentId,
@@ -103,6 +108,7 @@ import {
   ReactionResponse,
 } from './presentation/post.openapi.js';
 
+@UseGuards(GatewayAuthGuard)
 @Controller('api/v1/posts')
 @ApiTags('Posts')
 @ApiBadRequestResponse({ description: '입력값 또는 게시물 ID가 유효하지 않음' })
@@ -122,6 +128,79 @@ export class PostController {
     @Inject(POST_STATE_QUERIES) private readonly postQueries: PostStateQueries,
   ) {}
 
+  @Patch(':postId')
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Edit own active post title/content' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      minProperties: 1,
+      additionalProperties: false,
+      properties: {
+        title: { type: 'string', minLength: 1, maxLength: 120 },
+        content: { type: 'string', minLength: 1, maxLength: 5000 },
+      },
+    },
+  })
+  async edit(
+    @Param('postId') id: string,
+    @Headers('x-user-id') header: string,
+    @Body() raw: unknown,
+  ) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+      throw new BadRequestException('Edit object required');
+    const body = raw as Record<string, unknown>;
+    if (
+      !Object.keys(body).length ||
+      Object.keys(body).some((k) => !['title', 'content'].includes(k))
+    )
+      throw new BadRequestException('Invalid edit fields');
+    const details: { title?: string; content?: string } = {};
+    for (const key of ['title', 'content'] as const)
+      if (body[key] !== undefined) {
+        const value = body[key];
+        if (
+          typeof value !== 'string' ||
+          !value.trim() ||
+          value.trim().length > (key === 'title' ? 120 : 5000)
+        )
+          throw new BadRequestException('Invalid text');
+        details[key] = value.trim();
+      }
+    await this.lifecycle.update(postId(id), userId(header), details);
+  }
+  @Put(':postId/closed')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: 'Close or reopen own board',
+    description:
+      'Body: {closed:boolean}. Expiry/deletion cannot be reversed. Reopening preserves the finalized vote.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['closed'],
+      additionalProperties: false,
+      properties: { closed: { type: 'boolean' } },
+    },
+  })
+  async close(
+    @Param('postId') id: string,
+    @Headers('x-user-id') header: string,
+    @Body() body: unknown,
+  ) {
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      Object.keys(body).length !== 1 ||
+      !('closed' in body) ||
+      typeof body.closed !== 'boolean'
+    )
+      throw new BadRequestException('closed boolean required');
+    await this.lifecycle.setClosed(postId(id), userId(header), body.closed);
+  }
+
   @Get(':postId/vote')
   @ApiOperation({
     summary: '투표 및 합의 결과 조회',
@@ -140,12 +219,7 @@ export class PostController {
     @Param('postId') id: string,
     @Headers('x-user-id') header: string | undefined,
   ) {
-    return this.votes.read(
-      postId(id),
-      header && process.env.NODE_ENV !== 'production'
-        ? userId(header)
-        : undefined,
-    );
+    return this.votes.read(postId(id), header ? userId(header) : undefined);
   }
 
   @Put(':postId/vote')
@@ -202,7 +276,7 @@ export class PostController {
   @ApiOperation({
     summary: '작성자 본인의 게시물 삭제',
     description:
-      '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. 운영 인증 연동 전에는 503입니다.',
+      '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. Gateway 사용자 인증이 필요합니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiHeader({
@@ -225,7 +299,7 @@ export class PostController {
   @ApiOperation({
     summary: '작성자 본인의 댓글 삭제',
     description:
-      '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. 운영 인증 연동 전에는 503입니다.',
+      '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. Gateway 사용자 인증이 필요합니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiParam({ name: 'commentId' })
@@ -285,7 +359,7 @@ export class PostController {
   @ApiOperation({
     summary: '기존 LIKE 공감 취소',
     description:
-      '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. 운영 인증 연동 전에는 503입니다.',
+      '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. Gateway 사용자 인증이 필요합니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiHeader({
@@ -336,7 +410,7 @@ export class PostController {
   @ApiOperation({
     summary: '본인의 게시물 참여 종료',
     description:
-      '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. 운영 인증 연동 전에는 503입니다.',
+      '반복 요청은 추가 이벤트 없이 204. 삭제·만료된 게시물의 본인 활동 정리도 허용합니다. Gateway 사용자 인증이 필요합니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiHeader({
@@ -370,7 +444,7 @@ export class PostController {
   @ApiForbiddenResponse({ description: '사용자 또는 위치 인가 거부' })
   @ApiServiceUnavailableResponse({
     description:
-      'SIMILARITY_CHECK_UNAVAILABLE: 모델·임계값 미준비, 의존성 오류 또는 timeout. 운영 사용자 인증 미연결도 503.',
+      'SIMILARITY_CHECK_UNAVAILABLE: 모델·임계값 미준비, 의존성 오류 또는 timeout.',
   })
   similar(
     @Headers('x-user-id') header: string | undefined,
@@ -430,8 +504,42 @@ export class PostController {
   })
   @ApiOkResponse({ type: PostResponse })
   @ApiNotFoundResponse({ description: '게시물이 없거나 비활성 상태' })
-  detail(@Param('postId') id: string) {
-    return this.readPosts.detail(postId(id));
+  @ApiQuery({ name: 'latitude', type: Number, required: false })
+  @ApiQuery({ name: 'longitude', type: Number, required: false })
+  async detail(
+    @Param('postId') id: string,
+    @Headers('x-user-id') header?: string,
+    @Query('latitude') latitude?: unknown,
+    @Query('longitude') longitude?: unknown,
+  ) {
+    const coordinates = latitude !== undefined || longitude !== undefined;
+    if (
+      coordinates &&
+      (typeof latitude !== 'string' ||
+        typeof longitude !== 'string' ||
+        !latitude.trim() ||
+        !longitude.trim() ||
+        !Number.isFinite(Number(latitude)) ||
+        !Number.isFinite(Number(longitude)) ||
+        Math.abs(Number(latitude)) > 90 ||
+        Math.abs(Number(longitude)) > 180)
+    )
+      throw new BadRequestException('Both valid coordinates required');
+    const post = await this.readPosts.detail(
+      postId(id),
+      header ? userId(header) : undefined,
+    );
+    return {
+      ...post,
+      distanceM: coordinates
+        ? distanceM(
+            Number(latitude),
+            Number(longitude),
+            post.locationSnapshot.latitude,
+            post.locationSnapshot.longitude,
+          )
+        : null,
+    };
   }
 
   @Get(':postId/comments')
@@ -460,12 +568,14 @@ export class PostController {
     @Param('postId') id: string,
     @Query('cursor') cursor: unknown,
     @Query('limit') limit: unknown,
+    @Headers('x-user-id') header?: string,
   ) {
     const validatedId = postId(id);
     return this.readPosts.comments(
       validatedId,
       commentCursor(cursor, validatedId),
       commentLimit(limit),
+      header ? userId(header) : undefined,
     );
   }
 
@@ -473,7 +583,7 @@ export class PostController {
   @ApiOperation({
     summary: '게시물 작성',
     description:
-      '로컬·테스트 전용 X-User-Id로 작성합니다. Map Service가 최근 위치를 확인합니다. 운영에서는 인증 연동 전까지 503을 반환합니다.',
+      'Gateway가 검증한 사용자로 작성하며 Map Service가 최근 위치를 확인합니다.',
   })
   @ApiHeader({
     name: 'X-User-Id',
@@ -527,6 +637,7 @@ export class PostController {
       authorId,
       undefined,
       commentMediaInput(body),
+      parentCommentInput(body),
     );
   }
 
@@ -851,6 +962,7 @@ export class InternalPostController {
       authorId,
       input.mutationId,
       commentMediaInput(input),
+      parentCommentInput(input),
     );
   }
 }

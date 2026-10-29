@@ -8,10 +8,12 @@ export const PostSchema = new Schema(
     postId: { type: String, required: true, unique: true },
     mediaIds: { type: [String], default: [] },
     authorId: { type: Number, required: true },
+    anonymous: { type: Boolean, default: false },
     category: { type: String, required: true },
     title: { type: String, required: true },
     content: { type: String, required: true },
     status: { type: String, required: true },
+    region: { code: String, name: String },
     locationSnapshot: { latitude: Number, longitude: Number },
     radiusM: { type: Number, required: true },
     counters: {
@@ -23,6 +25,7 @@ export const PostSchema = new Schema(
     createdAt: { type: Date, required: true },
     updatedAt: { type: Date, required: true },
     expiresAt: { type: Date, default: null },
+    closedAt: { type: Date, default: null },
     voteAt: { type: Date, default: null },
     vote: { type: Schema.Types.Mixed, default: null },
     voteRevision: { type: Number, default: 0 },
@@ -33,6 +36,8 @@ export const PostSchema = new Schema(
   },
   options,
 );
+PostSchema.index({ 'region.code': 1, 'vote.status': 1 });
+PostSchema.index({ authorId: 1, createdAt: -1, _id: -1 });
 PostSchema.index({ status: 1, expiresAt: 1 });
 PostSchema.index({ 'vote.status': 1, voteAt: 1 });
 
@@ -45,6 +50,7 @@ export const VoteSelectionSchema = new Schema(
   },
   options,
 );
+VoteSelectionSchema.index({ userId: 1, updatedAt: -1, _id: -1 });
 VoteSelectionSchema.index({ postId: 1, userId: 1 }, { unique: true });
 
 export const CommentSchema = new Schema(
@@ -54,6 +60,8 @@ export const CommentSchema = new Schema(
     postId: { type: String, required: true },
     bucketId: { type: Number, required: true, default: 0 },
     authorId: { type: Number, required: true },
+    parentCommentId: { type: String, default: null },
+    verified: { type: Boolean, default: false },
     mutationId: { type: String },
     activityVersion: { type: Number, default: 1 },
     voteSelectionFence: { type: Number, default: 0 },
@@ -70,6 +78,7 @@ export const CommentSchema = new Schema(
   },
   options,
 );
+CommentSchema.index({ authorId: 1, status: 1, createdAt: -1, _id: -1 });
 CommentSchema.index({ postId: 1, bucketId: 1, createdAt: -1, _id: -1 });
 // 기존 HTTP 댓글에는 mutationId가 없으므로 값이 있는 WS 요청에만 유일성을 적용한다.
 CommentSchema.index(
@@ -97,6 +106,7 @@ export const ReactionSchema = new Schema(
   },
   options,
 );
+ReactionSchema.index({ userId: 1, removedAt: 1, createdAt: -1, _id: -1 });
 ReactionSchema.index({ postId: 1, userId: 1, type: 1 }, { unique: true });
 // 취소 이력은 남기되 같은 사용자의 활성 게시물 공감은 하나만 허용한다.
 ReactionSchema.index(
@@ -119,6 +129,12 @@ export const CommentReactionSchema = new Schema(
   },
   options,
 );
+CommentReactionSchema.index({
+  userId: 1,
+  removedAt: 1,
+  createdAt: -1,
+  _id: -1,
+});
 CommentReactionSchema.index(
   { commentId: 1, userId: 1, type: 1 },
   { unique: true },

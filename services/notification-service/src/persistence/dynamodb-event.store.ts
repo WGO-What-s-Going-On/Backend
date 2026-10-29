@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   GetCommand,
+  PutCommand,
   QueryCommand,
   ScanCommand,
   TransactWriteCommand,
@@ -81,6 +82,70 @@ export class DynamoDbEventStore {
     return { Put: { TableName: this.table, Item: { ...item, postId, key } } };
   }
 
+  async preferences(userId: string) {
+    const value = await this.get<{
+      nearby?: boolean;
+      replies?: boolean;
+      reactions?: boolean;
+      lifecycle?: boolean;
+    }>(`USER#${userId}`, 'PREFERENCES');
+    return {
+      nearby: value?.nearby ?? true,
+      replies: value?.replies ?? true,
+      reactions: value?.reactions ?? true,
+      lifecycle: value?.lifecycle ?? true,
+    };
+  }
+  async savePreferences(userId: string, input: Record<string, boolean>) {
+    const names = Object.keys(input);
+    await this.client.send(
+      new UpdateCommand({
+        TableName: this.table,
+        Key: { postId: `USER#${userId}`, key: 'PREFERENCES' },
+        UpdateExpression:
+          'SET ' + names.map((_, i) => `#k${i} = :v${i}`).join(', '),
+        ExpressionAttributeNames: Object.fromEntries(
+          names.map((name, i) => [`#k${i}`, name]),
+        ),
+        ExpressionAttributeValues: Object.fromEntries(
+          names.map((name, i) => [`:v${i}`, input[name]]),
+        ),
+      }),
+    );
+    return this.preferences(userId);
+  }
+  async boardPreference(userId: string, postId: string) {
+    const value = await this.get<{ enabled: boolean }>(
+      `USER#${userId}`,
+      `BOARD#${postId}`,
+    );
+    return { postId, enabled: value?.enabled ?? true };
+  }
+  async setBoardPreference(userId: string, postId: string, enabled: boolean) {
+    await this.client.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { postId: `USER#${userId}`, key: `BOARD#${postId}`, enabled },
+      }),
+    );
+    return { postId, enabled };
+  }
+  async allowed(userId: string, postId: string, type: string) {
+    const [preferences, board] = await Promise.all([
+      this.preferences(userId),
+      this.boardPreference(userId, postId),
+    ]);
+    const key =
+      type === 'PostCommentCreated' || type === 'POST_COMMENTED'
+        ? 'replies'
+        : type === 'PostReactionCreated' || type === 'POST_REACTED'
+          ? 'reactions'
+          : type === 'POST_CREATED'
+            ? 'nearby'
+            : 'lifecycle';
+    return board.enabled && preferences[key];
+  }
+
   async apply(event: PostEvent, now = new Date()): Promise<string | undefined> {
     const postId = event.aggregateId;
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -132,7 +197,12 @@ export class DynamoDbEventStore {
               ? { terminal: true }
               : {}),
           };
-          if (active && recipient !== event.actorId) {
+          if (
+            active &&
+            recipient !== event.actorId &&
+            (!recipient ||
+              (await this.allowed(recipient, postId, event.eventType)))
+          ) {
             if (!recipient)
               throw new Error(
                 'Legacy post author unavailable; recipient reconciliation required',
@@ -447,7 +517,7 @@ export class DynamoDbEventStore {
 
   async finish(
     delivery: Delivery,
-    status: 'SENT' | 'FAILED' | 'PENDING',
+    status: 'SENT' | 'FAILED' | 'PENDING' | 'CANCELED',
     retryTokens?: string[],
     now = new Date(),
   ): Promise<void> {

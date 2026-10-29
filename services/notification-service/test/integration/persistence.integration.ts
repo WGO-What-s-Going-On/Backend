@@ -1,3 +1,4 @@
+import { DynamoDbEventStore } from '../../src/persistence/dynamodb-event.store.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { harness } from './harness.js';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
@@ -8,6 +9,50 @@ describe('real DynamoDB Local persistence', () => {
   });
   afterEach(async () => {
     if (h?.redis.isOpen) await h.cleanup();
+  });
+  it('deletes only own inbox, marks pages read and persists notification preferences', async () => {
+    h.ownedKeys.add('notification:unread:1');
+    h.ownedKeys.add('notification:unread:2');
+    const first = await h.notifications.create({
+      userId: '1',
+      type: 'POST_COMMENTED',
+      title: 'a',
+      body: 'a',
+    });
+    await h.notifications.create({
+      userId: '1',
+      type: 'POST_COMMENTED',
+      title: 'b',
+      body: 'b',
+    });
+    await h.notifications.remove('2', first!.notificationId);
+    expect((await h.notifications.list('1')).items).toHaveLength(2);
+    await h.notifications.markAllRead('1');
+    expect(await h.notifications.unread('1')).toBe(0);
+    await h.notifications.remove('1', first!.notificationId);
+    expect((await h.notifications.list('1')).items).toHaveLength(1);
+    expect(await h.repository.increment('1', first!.notificationId)).toBeNull();
+    const settings = new DynamoDbEventStore(h.client, h.config);
+    await Promise.all([
+      settings.savePreferences('1', { replies: false }),
+      settings.savePreferences('1', { reactions: false }),
+    ]);
+    expect(await settings.preferences('1')).toEqual({
+      nearby: true,
+      replies: false,
+      reactions: false,
+      lifecycle: true,
+    });
+    expect(await settings.allowed('1', 'post_test', 'POST_COMMENTED')).toBe(
+      false,
+    );
+    expect(await settings.allowed('2', 'post_test', 'POST_COMMENTED')).toBe(
+      true,
+    );
+    await settings.setBoardPreference('2', 'post_test', false);
+    expect(await settings.allowed('2', 'post_test', 'POST_COMMENTED')).toBe(
+      false,
+    );
   });
   it('conditionally creates, paginates newest first, isolates users and stores 30 day TTL', async () => {
     const now = new Date();

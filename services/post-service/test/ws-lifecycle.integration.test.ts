@@ -1,3 +1,4 @@
+import { UserProfiles } from '../src/post/infrastructure/user-profiles.js';
 import 'reflect-metadata';
 import { createRequire } from 'node:module';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
@@ -129,6 +130,11 @@ suite('Post lifecycle -> Outbox -> WS', () => {
       })
       .overrideProvider(OutboxWorker)
       .useValue({ wake() {} })
+      .overrideProvider(UserProfiles)
+      .useValue({
+        names: async (ids: number[]) =>
+          new Map(ids.map((id) => [id, `user-${id}`])),
+      })
       .compile();
     app = module.createNestApplication();
     await app.listen(0, '127.0.0.1');

@@ -1,3 +1,4 @@
+import { UserProfiles } from '../src/post/infrastructure/user-profiles.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
@@ -74,6 +75,11 @@ suite('post activity event contracts', () => {
       })
       .overrideProvider(OutboxWorker)
       .useValue({ wake })
+      .overrideProvider(UserProfiles)
+      .useValue({
+        names: async (ids: number[]) =>
+          new Map(ids.map((id) => [id, `user-${id}`])),
+      })
       .compile();
     app = module.createNestApplication();
     await app.listen(0, '127.0.0.1');

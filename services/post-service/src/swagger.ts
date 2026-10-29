@@ -5,7 +5,7 @@ export function configureSwagger(app: INestApplication): void {
   const config = new DocumentBuilder()
     .setTitle('WGO Post Service API')
     .setDescription(
-      '게시물·댓글·반응·참여 API와 서비스 간 내부 조회/작성 계약. 공개 생성 API의 X-User-Id는 로컬·테스트 전용입니다.',
+      '게시물·댓글·반응·참여 API와 서비스 간 내부 조회/작성 계약. 공개 API는 Gateway Access JWT 인증과 서비스 서명을 사용합니다.',
     )
     .setVersion('1.0')
     .addBearerAuth(

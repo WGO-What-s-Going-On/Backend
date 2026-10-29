@@ -28,6 +28,8 @@ export class MongoosePostRead implements PostReadQueries {
     return {
       postId: post.postId,
       authorId: post.authorId,
+      anonymous: post.anonymous ?? false,
+      closedAt: post.closedAt ?? null,
       category: post.category,
       title: post.title,
       content: post.content,
@@ -96,6 +98,8 @@ export class MongoosePostRead implements PostReadQueries {
     return rows.map((row) => ({
       id: String(row._id),
       comment: {
+        parentCommentId: row.parentCommentId ?? null,
+        verified: row.verified ?? false,
         commentId: row.commentId,
         postId: row.postId,
         authorId: row.authorId,
@@ -136,13 +140,13 @@ export class MongoosePostRead implements PostReadQueries {
     const post = await this.posts
       .findOne(
         { postId },
-        'postId status category locationSnapshot radiusM expiresAt -_id',
+        'postId status closedAt category locationSnapshot radiusM expiresAt -_id',
       )
       .lean();
     return post
       ? {
           postId: post.postId,
-          status: post.status,
+          status: post.closedAt ? ('EXPIRED' as const) : post.status,
           category: post.category,
           locationSnapshot: {
             latitude: post.locationSnapshot.latitude,

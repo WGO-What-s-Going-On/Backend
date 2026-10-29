@@ -170,3 +170,11 @@ post-realtime:dead에 보존하고 ACK하며, 비구독 유형은 ACK한다. 일
 검증은 WS에서 RUN_INTEGRATION=1 pnpm test, 두 서비스 빌드 후 Post에서
 RUN_INTEGRATION=1 RUN_WS_INTEGRATION=1 pnpm exec vitest run test/ws-lifecycle.integration.test.ts로 실행한다.
 후자는 실제 Post 상태 변경·Outbox·Redis·WS를 사용하며 위치 인가만 fixture다.
+
+### 프론트엔드 쿠키 및 글 갱신
+
+User 로그인/refresh가 발급한 HttpOnly `wgo_access_token`을 브라우저 WebSocket에서 사용한다.
+HTTP/WS의 도메인, `JWT_COOKIE_NAME`, 허용 Origin과 사용자 JWT 설정을 맞춘다.
+`PostUpdated` 이벤트는 `post.updated` 메시지의 postId, postVersion, closedAt으로 전달한다.
+종료 시 Room을 정리하고 재개 후 클라이언트가 다시 구독한다.
+세부 설정과 종료·재개 정책은 [프론트엔드 연동 계약](../../docs/contracts/frontend-integration.md)을 따른다.

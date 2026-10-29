@@ -1,3 +1,4 @@
+import { UserProfiles } from '../src/post/infrastructure/user-profiles.js';
 import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
@@ -83,6 +84,11 @@ suite('media HTTP and MongoDB transactions (S3 adapter stubbed)', () => {
       .useValue({ wake() {} })
       .overrideProvider(S3MediaStorage)
       .useValue(s3)
+      .overrideProvider(UserProfiles)
+      .useValue({
+        names: async (ids: number[]) =>
+          new Map(ids.map((id) => [id, `user-${id}`])),
+      })
       .compile();
     app = module.createNestApplication();
     await app.init();
@@ -123,19 +129,19 @@ suite('media HTTP and MongoDB transactions (S3 adapter stubbed)', () => {
         .post('/api/v1/posts/media/uploads')
         .set('X-User-Id', '123')
         .send(upload)
-        .expect(503);
+        .expect(401);
       await api()
         .get(`/api/v1/posts/media/uploads/${id}`)
         .set('X-User-Id', '123')
-        .expect(503);
+        .expect(401);
       await api()
         .post(`/api/v1/posts/media/uploads/${id}/complete`)
         .set('X-User-Id', '123')
-        .expect(503);
+        .expect(401);
       await api()
         .delete(`/api/v1/posts/media/uploads/${id}`)
         .set('X-User-Id', '123')
-        .expect(503);
+        .expect(401);
     } finally {
       vi.stubEnv('NODE_ENV', 'test');
     }
