@@ -1,3 +1,4 @@
+import type { ServiceName } from '../src/config.js';
 import type { IncomingHttpHeaders } from 'node:http';
 import Fastify from 'fastify';
 import { generateKeyPairSync } from 'node:crypto';
@@ -19,7 +20,7 @@ afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((close) => close()));
   process.env = { ...originalEnv };
 });
-async function setup(configured = true) {
+async function setup(configured = true, service: ServiceName = 'user') {
   process.env = {
     NODE_ENV: 'test',
     RATE_LIMIT_ENABLED: 'false',
@@ -34,11 +35,12 @@ async function setup(configured = true) {
         algorithms: ['ES256'],
         issuer: 'wgo-http-gateway',
         subject: 'http-gateway',
-        audience: 'wgo-user-service',
+        audience: `wgo-${service}-service`,
         typ: 'wgo-service+jwt',
       },
     );
     return {
+      signedUserId: payload.userId ?? null,
       userId: request.headers['x-user-id'] ?? null,
       sessionId: request.headers['x-session-id'] ?? null,
       lifetime: payload.exp! - payload.iat!,
@@ -49,7 +51,7 @@ async function setup(configured = true) {
   const url = await upstream.listen({ host: '127.0.0.1', port: 0 });
   cleanup.push(() => upstream.close());
   const config = loadConfig();
-  config.services.user = url;
+  config.services[service] = url;
   if (configured)
     config.userAuth = {
       accessSecret: new TextDecoder().decode(secret),
@@ -80,6 +82,40 @@ function access(overrides: Record<string, unknown> = {}, key = secret) {
     .sign(key);
 }
 describe('User route authentication', () => {
+  it.each([
+    ['post', 'posts'],
+    ['map', 'location'],
+    ['notification', 'notifications'],
+    ['moderation', 'moderation/reports'],
+  ] as const)(
+    'authenticates %s and binds the signed user claim',
+    async (service, path) => {
+      const app = await setup(true, service);
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/v1/${path}`,
+        headers: {
+          authorization: `Bearer ${await access()}`,
+          'x-user-id': '999',
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        userId: '42',
+        signedUserId: '42',
+        lifetime: 30,
+      });
+      expect(
+        (
+          await app.inject({
+            method: 'GET',
+            url: `/api/v1/${path}`,
+            headers: { 'x-user-id': '42' },
+          })
+        ).statusCode,
+      ).toBe(401);
+    },
+  );
   it('replaces forged identity with JWT claims and a separate Gateway credential', async () => {
     const app = await setup();
     const response = await app.inject({
