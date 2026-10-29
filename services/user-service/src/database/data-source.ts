@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { AddPrivateRealName1793200000000 } from './migrations/1793200000000-AddPrivateRealName.js';
 
 import { existsSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
@@ -26,6 +27,7 @@ export default new DataSource({
   database: database.name,
   entities: [...USER_SERVICE_ENTITIES],
   migrations: [
+    AddPrivateRealName1793200000000,
     InitialUserServiceSchema1789990707351,
     AddTermsCodeEffectiveAtIndex1789993249262,
   ],

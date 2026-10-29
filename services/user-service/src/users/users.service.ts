@@ -1,3 +1,4 @@
+import { UserBlockEntity } from '../database/entities/user-block.entity.js';
 import {
   BadRequestException,
   ConflictException,
@@ -31,6 +32,52 @@ export class UsersService {
     private readonly usersRepository: Repository<UserEntity>,
     private readonly redisSessionStore: RedisSessionStore,
   ) {}
+
+  async listBlocks(userId: string, after?: string) {
+    const query = this.usersRepository.manager
+      .getRepository(UserBlockEntity)
+      .createQueryBuilder('block')
+      .leftJoinAndSelect('block.blockedUser', 'blocked')
+      .where('block.blockerUserId = :userId', { userId })
+      .orderBy('block.blockedUserId', 'ASC')
+      .take(101);
+    if (after) query.andWhere('block.blockedUserId > :after', { after });
+    const rows = await query.getMany();
+    const page = rows.slice(0, 100);
+    return {
+      items: page.map((row) => ({
+        userId: row.blockedUserId,
+        nickname: row.blockedUser.nickname,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      nextCursor: rows.length > 100 ? page.at(-1)!.blockedUserId : null,
+    };
+  }
+  async block(userId: string, targetId: string, blocked: boolean) {
+    if (userId === targetId)
+      throw new BadRequestException('Cannot block yourself');
+    const repository =
+      this.usersRepository.manager.getRepository(UserBlockEntity);
+    if (!blocked) {
+      await repository.delete({
+        blockerUserId: userId,
+        blockedUserId: targetId,
+      });
+      return;
+    }
+    if (!(await this.usersRepository.existsBy({ id: targetId })))
+      throw new NotFoundException('User not found');
+    await repository
+      .createQueryBuilder()
+      .insert()
+      .values({
+        blockerUserId: userId,
+        blockedUserId: targetId,
+        createdAt: new Date(),
+      })
+      .orIgnore()
+      .execute();
+  }
 
   async checkNicknameAvailability(
     nickname: string,
@@ -241,11 +288,13 @@ export class UsersService {
             throw new ConflictException('Nickname is already in use');
         }
         const changed =
+          (input.realName !== undefined && input.realName !== user.realName) ||
           (input.nickname !== undefined && input.nickname !== user.nickname) ||
           (input.profileImageKey !== undefined &&
             input.profileImageKey !== user.profileImageKey);
         if (!changed && !completesOnboarding) return toProfile(user);
         const now = new Date();
+        if (input.realName !== undefined) user.realName = input.realName;
         if (input.nickname !== undefined) user.nickname = input.nickname;
         if (input.profileImageKey !== undefined)
           user.profileImageKey = input.profileImageKey;
@@ -300,6 +349,7 @@ export class UsersService {
 function toProfile(user: UserEntity): UserProfileResponse {
   return {
     userId: user.id,
+    realName: user.realName ?? null,
     nickname: user.nickname,
     profileImageKey: user.profileImageKey,
     status: user.status,

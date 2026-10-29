@@ -1,3 +1,4 @@
+import { AddPrivateRealName1793200000000 } from '../src/database/migrations/1793200000000-AddPrivateRealName.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -44,6 +45,7 @@ describe('GET /api/v1/terms', () => {
       database: testDatabaseName,
       entities: [...USER_SERVICE_ENTITIES],
       migrations: [
+        AddPrivateRealName1793200000000,
         InitialUserServiceSchema1789990707351,
         AddTermsCodeEffectiveAtIndex1789993249262,
       ],

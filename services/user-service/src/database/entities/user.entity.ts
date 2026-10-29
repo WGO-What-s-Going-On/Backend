@@ -22,6 +22,9 @@ export class UserEntity {
   })
   id!: string;
 
+  @Column({ name: 'real_name', type: 'varchar', length: 100, nullable: true })
+  realName!: string | null;
+
   @Column({ type: 'varchar', length: 30 })
   nickname!: string;
 

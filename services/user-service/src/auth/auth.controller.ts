@@ -1,3 +1,4 @@
+import { Res } from '@nestjs/common';
 import {
   BadRequestException,
   Body,
@@ -60,9 +61,10 @@ export class AuthController {
     [401, 'Kakao authentication failed or account unavailable.'],
     [503, 'Account creation or authentication session unavailable.'],
   )
-  loginWithKakao(
+  async loginWithKakao(
     @Body() body: unknown,
     @Headers('x-request-id') requestId: unknown,
+    @Res({ passthrough: true }) response?: CookieResponse,
   ): Promise<KakaoLoginResponse> {
     if (!isRecord(body) || typeof body.authorizationCode !== 'string') {
       throw new BadRequestException('authorizationCode is required');
@@ -73,10 +75,12 @@ export class AuthController {
       throw new BadRequestException('authorizationCode must not be empty');
     }
 
-    return this.authService.loginWithKakao(
+    const result = await this.authService.loginWithKakao(
       authorizationCode,
       typeof requestId === 'string' && requestId.trim() ? requestId : undefined,
     );
+    setAccessCookie(response, result.accessToken, result.expiresIn);
+    return result;
   }
 
   @Post('refresh')
@@ -104,11 +108,16 @@ export class AuthController {
     [503, 'Authentication session unavailable.'],
   )
   @HttpCode(200)
-  refresh(@Body() body: unknown): Promise<RefreshResponse> {
+  async refresh(
+    @Body() body: unknown,
+    @Res({ passthrough: true }) response?: CookieResponse,
+  ): Promise<RefreshResponse> {
     if (!isRecord(body) || typeof body.refreshToken !== 'string') {
       throw new UnauthorizedException('Invalid authentication credentials');
     }
-    return this.authService.refresh(body.refreshToken);
+    const result = await this.authService.refresh(body.refreshToken);
+    setAccessCookie(response, result.accessToken, result.expiresIn);
+    return result;
   }
 
   // Internal endpoint: only the trusted Gateway may supply these verified claims.
@@ -135,9 +144,10 @@ export class AuthController {
     [503, 'Authentication session unavailable.'],
   )
   @HttpCode(204)
-  logout(
+  async logout(
     @Headers('x-user-id') userId: unknown,
     @Headers('x-session-id') sessionId: unknown,
+    @Res({ passthrough: true }) response?: CookieResponse,
   ): Promise<void> {
     const parsedUserId = parseUserId(userId);
     if (
@@ -147,10 +157,28 @@ export class AuthController {
     ) {
       throw new UnauthorizedException('Invalid authentication credentials');
     }
-    return this.authService.logout(parsedUserId, sessionId);
+    await this.authService.logout(parsedUserId, sessionId);
+    setAccessCookie(response, '', 0);
   }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+type CookieResponse = { setHeader(name: string, value: string): unknown };
+export function setAccessCookie(
+  response: CookieResponse | undefined,
+  token: string,
+  seconds: number,
+): void {
+  if (!response) return;
+  const domain = process.env.AUTH_COOKIE_DOMAIN;
+  if (domain && !/^\.?[a-zA-Z0-9.-]+$/.test(domain))
+    throw new Error('Invalid AUTH_COOKIE_DOMAIN');
+  const secure = process.env.NODE_ENV === 'production';
+  response.setHeader(
+    'Set-Cookie',
+    `wgo_access_token=${encodeURIComponent(token)}; Path=/; HttpOnly; Max-Age=${Math.max(0, Math.floor(seconds))}; SameSite=${secure ? 'None; Secure' : 'Lax'}${domain ? `; Domain=${domain}` : ''}`,
+  );
 }
