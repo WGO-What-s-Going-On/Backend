@@ -1,3 +1,5 @@
+> 이 문서는 최초 PostgreSQL 구현 당시의 이력이다. 현재 Moderation 신고 저장·복구는 Redis로 전환했다. 최신 동작·이벤트 호환성·검증 결과는 [Redis 전환 보고](REDIS_REPORTS_IMPLEMENTATION_REPORT.md)를 따른다. User 서비스의 PostgreSQL·Outbox는 그대로다.
+
 # 사용자 차단·신고 구현 결과 (2026-10-29)
 
 ## CI 후속 수정

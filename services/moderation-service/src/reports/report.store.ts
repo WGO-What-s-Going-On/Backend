@@ -1,65 +1,165 @@
 import {
+  ConflictException,
+  Inject,
   Injectable,
-  OnModuleDestroy,
+  NotFoundException,
+  type OnModuleDestroy,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Pool, type PoolClient } from 'pg';
+import { createHash } from 'node:crypto';
+import { createClient } from 'redis';
 import type { CreateReportRequest, StoredReport } from './report.dto.js';
+import { reportScript } from './report-script.js';
+
+export const REPORT_REDIS_CLIENT = Symbol('REPORT_REDIS_CLIENT');
+export const REPORT_KEY_PREFIX = 'moderation:reports:v1';
 
 @Injectable()
 export class ReportStore implements OnModuleDestroy {
-  private readonly pool: Pool | undefined;
-  constructor(config: ConfigService) {
-    const url = config.get<string>('reports.databaseUrl');
-    // No fallback to User's database or a TTL cache. Infrastructure must provision
-    // a Moderation-owned database and apply the explicit migration first.
-    if (url) {
-      this.pool = new Pool({
-        connectionString: url,
-        max: 5,
-        connectionTimeoutMillis: 2000,
-        idleTimeoutMillis: 10000,
-        statement_timeout: 5000,
-        query_timeout: 7000,
+  private readonly redis;
+  private connecting: Promise<unknown> | undefined;
+  readonly configured: boolean;
+  readonly recordsKey: string;
+  readonly pendingKey: string;
+  readonly stream: string;
+  constructor(
+    config: ConfigService,
+    @Optional()
+    @Inject(REPORT_REDIS_CLIENT)
+    client?: ReturnType<typeof createClient>,
+  ) {
+    const url = config.get<string>('redis.url');
+    this.configured = !!url;
+    this.stream =
+      config.get<string>('reports.eventStream') ?? 'moderation:report-events';
+    // Preserve legacy moderation:report:<hash> records in their own namespace.
+    const prefix = config.get<string>('reports.keyPrefix') ?? REPORT_KEY_PREFIX;
+    if (!/^moderation:reports:v1(?::[a-zA-Z0-9_-]+)?$/.test(prefix))
+      throw new Error('Invalid report storage namespace');
+    this.recordsKey = `${prefix}:records`;
+    this.pendingKey = `${prefix}:pending`;
+    if (
+      [
+        config.get<string>('redis.postEventStream') ?? 'post:events',
+        config.get<string>('redis.moderationEventStream') ??
+          'moderation:events',
+        config.get<string>('redis.contentEventStream') ??
+          'moderation:content-events',
+        this.recordsKey,
+        this.pendingKey,
+      ].includes(this.stream)
+    )
+      throw new Error('Report events require a separate stream');
+    this.redis =
+      client ??
+      createClient({
+        url: url ?? 'redis://localhost:6383',
+        disableOfflineQueue: true,
+        commandOptions: { timeout: 2000 },
+        commandsQueueMaxLength: 100,
+        socket: { connectTimeout: 2000, reconnectStrategy: false },
       });
-      this.pool.on('error', () => undefined);
-    }
-  }
-  get configured(): boolean {
-    return this.pool !== undefined;
-  }
-  async transaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
-    if (!this.pool)
-      throw new ServiceUnavailableException(
-        'Report database is not configured',
-      );
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const result = await work(client);
-      await client.query('COMMIT');
-      return result;
-    } catch (error) {
-      await client.query('ROLLBACK').catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
-    }
+    this.redis.on('error', () => undefined);
   }
   async find(
     userId: string,
     input: CreateReportRequest,
   ): Promise<StoredReport | null> {
-    return this.transaction(async (client) => {
-      const found = await client.query<{ document: StoredReport }>(
-        'SELECT document FROM moderation_reports WHERE reporter_user_id=$1 AND target_type=$2 AND post_id=$3 AND comment_id=$4',
-        [userId, input.targetType, input.postId, input.commentId ?? ''],
-      );
-      return found.rows[0]?.document ?? null;
+    return this.execute('find', this.digest(userId, input), userId);
+  }
+  async create(report: StoredReport, eventId: string): Promise<StoredReport> {
+    return (await this.execute(
+      'create',
+      this.digest(report.reporterUserId, report),
+      report.reporterUserId,
+      report,
+      eventId,
+      report.createdAt,
+    ))!;
+  }
+  async withdraw(
+    userId: string,
+    reportId: string,
+    eventId: string,
+    now: string,
+  ): Promise<StoredReport> {
+    const report = await this.execute(
+      'withdraw',
+      reportId,
+      userId,
+      undefined,
+      eventId,
+      now,
+    );
+    if (!report) throw new NotFoundException('Report not found');
+    return report;
+  }
+  async pending(cursor: string) {
+    await this.connect();
+    return this.redis.sScan(this.pendingKey, cursor, { COUNT: 20 });
+  }
+  async recover(digest: string): Promise<void> {
+    await this.execute('recover', digest, '');
+  }
+  private digest(userId: string, input: CreateReportRequest): string {
+    return createHash('sha256')
+      .update(
+        JSON.stringify([
+          userId,
+          input.targetType,
+          input.postId,
+          input.commentId ?? '',
+        ]),
+      )
+      .digest('hex');
+  }
+  private async execute(
+    action: string,
+    lookup: string,
+    userId: string,
+    report?: StoredReport,
+    eventId = '',
+    now = '',
+  ): Promise<StoredReport | null> {
+    await this.connect();
+    const raw = await this.redis.eval(reportScript, {
+      keys: [this.recordsKey, this.pendingKey, this.stream],
+      arguments: [
+        action,
+        lookup,
+        userId,
+        report ? JSON.stringify(report) : '',
+        eventId,
+        now,
+      ],
     });
+    const result = JSON.parse(String(raw)) as {
+      code: string;
+      report?: StoredReport;
+    };
+    if (result.code === 'WITHDRAWN')
+      throw new ConflictException('Withdrawn target cannot be reported again');
+    if (result.code === 'REVIEWED')
+      throw new ConflictException('Reviewed report cannot be withdrawn');
+    if (result.code === 'NOT_FOUND') return null;
+    if (result.code !== 'OK' || !result.report)
+      throw new Error('Invalid report storage response');
+    return result.report;
+  }
+  private async connect(): Promise<void> {
+    if (!this.configured)
+      throw new ServiceUnavailableException('Report Redis is not configured');
+    if (this.redis.isReady) return;
+    this.connecting ??= this.redis.connect().finally(() => {
+      this.connecting = undefined;
+    });
+    await this.connecting;
   }
   async onModuleDestroy(): Promise<void> {
-    await this.pool?.end();
+    await this.connecting?.catch(() => undefined);
+    if (this.redis.isOpen)
+      await this.redis.quit().catch(() => this.redis.destroy());
   }
 }

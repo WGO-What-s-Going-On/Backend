@@ -54,7 +54,7 @@ import { ReportsService } from './reports.service.js';
   status: 503,
   type: ReportHttpError,
   description:
-    'Report database or target verification unavailable/unconfigured.',
+    'Report Redis storage or target verification unavailable/unconfigured.',
 })
 @UseGuards(GatewayAuthGuard)
 @Controller('api/v1/moderation/reports')

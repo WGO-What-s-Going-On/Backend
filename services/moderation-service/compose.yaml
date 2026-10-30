@@ -9,23 +9,3 @@ services:
       interval: 2s
       timeout: 2s
       retries: 10
-
-  reports-postgres:
-    image: postgres:18-alpine
-    profiles: ['reports-db']
-    environment:
-      POSTGRES_USER: wgo
-      POSTGRES_PASSWORD: wgo
-      POSTGRES_DB: wgo_moderation
-    ports:
-      - '127.0.0.1:5434:5432'
-    volumes:
-      - reports-postgres-data:/var/lib/postgresql
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U wgo -d wgo_moderation']
-      interval: 2s
-      timeout: 2s
-      retries: 10
-
-volumes:
-  reports-postgres-data:

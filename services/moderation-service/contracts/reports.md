@@ -19,20 +19,24 @@
 
 신고자/대상별 평생 1건이다. PENDING/REVIEWED에 재요청하면 최초 신고를 반환하고 사유·설명을 바꾸지 않는다. WITHDRAWN 이후 재신고는 409다. 중복 취소는 최초 시각을 유지하며 이벤트가 없다. 응답 유실 재시도와 의도적인 재신고를 구분하는 별도 키 계약이 없으므로 이 정책을 택했다. 삭제·만료 대상이라도 기존 신고 재요청/취소는 감사 기록을 기준으로 처리한다.
 
-## 원본 저장과 운영 선행 작업
+## Redis 원본과 발행 복구
 
-**신규 Moderation 전용 PostgreSQL**을 원본으로 사용한다. 현재 배포는 Redis 기반이므로 신규 운영 DB가 이미 준비되었다고 가정하지 않는다. 기존 Lifecycle/AI Redis 구조는 변경하지 않는다. User/Post의 데이터베이스를 직접 사용하지 않는다.
+신고 원본·불변 이벤트 journal·발행 확인을 기존 REDIS_URL의 Redis에 저장한다. PostgreSQL 연결, pg 의존성, SQL migration 및 reports-db Compose profile은 제거했다. User 서비스 DB·Outbox나 다른 서비스 저장소는 변경하지 않는다.
 
-- moderation_reports: report_id PK, reporter_user_id BIGINT, target_type, post_id, comment_id(POST는 빈 문자열), 원본 document JSONB. reporter/target/post/comment UNIQUE. document에 최초 사유·설명·생성 시각, 상태·취소 시각을 보존한다.
-- moderation_report_outbox: 증가 sequence PK, event_id UUID UNIQUE, report FK, event_type, 불변 envelope JSONB, attempts, published_at. pending 및 report별 pending 인덱스.
-- 생성과 이벤트 insert, 취소와 이벤트 insert는 각각 동일 DB 트랜잭션이다. 없는 행의 경쟁은 advisory transaction lock+UNIQUE, 취소는 소유자 조건 FOR UPDATE로 직렬화한다.
-- 원본/이벤트에 TTL·자동 삭제는 없다. 운영 공개 전 개인정보 담당자가 설명·신고자 ID·이벤트의 보존 기간, 접근 통제, 삭제/익명화, 법적 보존 예외를 확정해야 한다. published Outbox도 자동 청소하지 않는다.
+- `moderation:reports:v1:records` HASH: `target:<신고자/targetType/postId/commentId tuple의 SHA-256>`에 `{format:1, stream, report, events}`를 저장하고 `id:<report_UUID>`에 해당 digest를 저장한다. 생성 시 두 필드를 한 HSET으로 기록한다.
+- `moderation:reports:v1:pending` SET: 발행 복구 대상 digest. canonical HSET **전에** 등록한다. 그 사이 Lua가 실패하면 미커밋 queue 항목만 남으며 Worker가 제거한다. canonical 상태와 이벤트 journal은 한 값이므로 따로 커밋될 수 없다.
+- Lua는 records/pending/stream 타입과 기존 journal을 쓰기 전에 검사한다. 동일 Lua 실행에서 상태 변경 → 기존 XADD → journal의 streamId 확인 순서로 처리한다. 취소 전에 생성 이벤트의 발행 확인을 끝낸다.
+- Lua는 실행 중 오류를 롤백하지 않는다. HSET 이후 실패하면 기존 reportId·eventId·발생 시각·payload를 유지한 journal과 pending에서 재시도한다. XADD 이후 확인 HSET이 실패하면 같은 eventId가 중복 발행될 수 있지만 취소보다 뒤에 생성 이벤트를 재발행하지 않는다.
+- ReportOutboxWorker는 **제거하지 않았다**. SQL polling 대신 SSCAN cursor/overflow buffer로 tick당 최대20개 신고를 복구한다. 1초 주기와 시작 시 복구를 유지하고, 여러 인스턴스도 동일 Lua를 사용한다. 클라이언트가 다시 요청하지 않아도 미발행 이벤트를 복구한다.
+- 원본·journal·중복 방지 정보에는 TTL이나 자동 삭제가 없다. reportId와 이벤트 UUID, 응답 스키마, 신고/취소 멱등 정책을 유지한다. 설명은 원본에만 남고 이벤트에는 넣지 않는다.
 
-인프라 담당자는 전용 DB/계정/최소 권한, 검증 가능한 TLS·CA, 네트워크, 백업/PITR·복구 훈련, Secret 배포를 준비한다. MODERATION_REPORTS_DATABASE_URL을 주입하고 `pnpm reports:migrate`를 한 번 실행한다. 마이그레이션은 시작 시 자동 실행하지 않으며 이미 적용된 DB에 재실행하면 테이블 존재 오류로 중단한다. 두 테이블/인덱스는 DDL 트랜잭션으로 함께 생성한다. pg URL의 TLS 인증서 검증을 끄지 않는다. 새 어댑터의 RDS IAM 토큰 자동 회전은 미구현이다.
+REDIS_URL, REPORTS_POST_SERVICE_URL, MODERATION_HTTP_GATEWAY_TRUSTED_JWKS를 설정한다. Redis 미설정/연결 장애·손상된 키는503이며 메모리나 User DB로 우회하지 않는다. Redis 장애 중 신규 신고를 PostgreSQL에 접수하던 이전 동작은 사라진다. 서버에서 상태 전이가 실행되고 응답만 실패한 경우에는 원본이 남을 수 있으므로 재요청은 저장된 결과를 따른다.
 
-런타임에 DB URL, REPORTS_POST_SERVICE_URL(Post HTTP origin), REDIS_URL, MODERATION_HTTP_GATEWAY_TRUSTED_JWKS를 준비한다. DB/대상 검증 미설정·장애는 503이다. Redis 장애 중에도 DB 커밋된 신고는 성공하며 Outbox에서 재발행한다. REDIS_URL이 없으면 worker를 시작하지 않으므로 공개 전에 반드시 설정한다. Gateway 인증·문서 변경은 별도 담당자 작업이다.
+기존 `moderation:report:<64자리 hash>` 및 다른 Redis 키·스트림·Consumer Group은 건드리지 않는다. 과거 형식과 새 report_UUID 계약을 자동 변환하지 않는다. 실제 PostgreSQL 데이터가 있다면 전환 전에 reportId·eventId·원본 payload·발행 이력을 보존하는 별도 검토 이관이 필요하다. 이번 로컬 작업은 기존 DB나 Redis 데이터를 이관·삭제하지 않았다. 설정·Compose 정의 제거도 기존 PostgreSQL 볼륨/테이블 삭제를 실행하지 않는다.
 
-로컬 Compose는 reports-db profile의 PostgreSQL 5434를 제공한다. 예: MODERATION_REPORTS_DATABASE_URL=postgres://wgo:wgo@127.0.0.1:5434/wgo_moderation. 테스트 기본값 5432와 다르므로 통합 테스트에서는 MODERATION_TEST_DATABASE_URL=postgres://wgo:wgo@127.0.0.1:5434/postgres를 지정한다.
+운영은 원본이 eviction되지 않는 정책, Redis persistence/backup/복구 훈련, TLS/ACL과 보존/익명화 정책을 마련해야 한다. 공용 Redis 전체 정책을 앱이 CONFIG SET으로 바꾸지 않는다. 현재 standalone/cluster-mode-disabled 연결을 전제로 하며 다른 hash slot에 걸친 Redis Cluster Lua는 지원하지 않는다. event stream 설정을 바꿔 기존 journal을 다른 스트림에 자동 재발행하지 않도록 저장된 stream과 다르면 거부한다.
+
+Redis 원본과 journal이 함께 영구 유실되면 독립 PostgreSQL 원본에서 복구하던 보장은 없다. Lua의 실행 격리와 디스크 영속성은 다르다. 로컬 AOF appendfsync=always 강제 종료/재시작 통과가 운영 ElastiCache의 영속성·failover/RPO 검증을 대신하지 않는다.
 
 ## Post 대상 검증
 
@@ -66,16 +70,14 @@ XADD 필드: eventId(UUID), eventType(REPORT_CREATED/REPORT_WITHDRAWN), data(아
 
 취소는 eventType=REPORT_WITHDRAWN이며 data.reason 대신 data.withdrawnAt(occurredAt과 같은 시각)을 포함한다. commentId는 댓글에서만 있다. description/본문/기타 개인정보는 이벤트에 넣지 않는다. 필드 계약은 report-events.schema.json에도 기록했다.
 
-Worker는 1초 poll/최대20건, FOR UPDATE SKIP LOCKED를 사용한다. 같은 report의 미발행 선행 sequence가 있으면 후행 이벤트가 기다린다. XADD 성공 후에만 published_at을 기록한다. Redis 실패는 attempts 증가/pending 보존 후 다음 poll에 재시도한다. XADD 성공·DB 확인 실패 또는 응답 유실이면 **동일 eventId**로 중복 전달할 수 있다. at-least-once이며 소비자는 eventId 영속 UNIQUE와 부작용을 같은 트랜잭션으로 저장한 뒤 XACK한다.
+REPORT_CREATED는 신규 신고 전이에서만, REPORT_WITHDRAWN은 본인 PENDING→WITHDRAWN 전이에서만 journal에 생성한다. 정상 경로는 Lua에서 즉시 XADD한다. Worker와 재요청 모두 같은 journal을 복구하며 이미 확인된 이벤트는 다시 보내지 않는다. 발행 확인 직전의 부분 실패는 동일 eventId 중복을 허용하는 **at-least-once** 계약이다. 같은 신고의 생성 이벤트 확인 전에 취소 이벤트를 발행하지 않는다. 서로 다른 신고 사이의 전체 순서는 계약하지 않는다.
 
-무기한 retry로 원본을 자동 폐기하지 않는다. pending/attempts/sequence 지연과 로그를 감시한다. 생산자 DLQ는 미구현이며 원본을 남긴다. 미래 소비자는 독립 Group(예: moderation-report-review-v1), Pending reclaim, 제한된 backoff/retry 후 자체 DLQ, 같은 eventId의 검토 재처리를 구현해야 한다. 이 Group은 제안이며 현재 생성·소비되지 않는다. Post/Notification이 자동으로 소비한다고 가정하지 않는다.
+미발행 journal을 무기한 자동 폐기하지 않으며 생산자 DLQ는 추가하지 않았다. pending 개수·지연과 복구 실패 로그를 관측한다. 미래 소비자는 별도 Group(예: moderation-report-review-v1), eventId 영속 중복 방지와 부작용 원자 저장, 저장 후 XACK, Pending reclaim·backoff·자체 DLQ를 준비해야 한다. 해당 Group은 제안이며 이번에 새 소비자를 등록하지 않는다.
 
-Stream 자동 trim은 없다. 운영자는 모든 Group의 확인 checkpoint와 보존 정책으로 trim한다. Redis 장애조치/최근 쓰기 손실은 PostgreSQL에 PUBLISHED로 남은 이벤트도 유실시킬 수 있다. sequence/eventId 범위를 감사해 필요한 outbox의 published_at을 NULL로 복구하고 같은 ID로 재발행한다. 운영 재처리는 소비자 멱등성을 먼저 확인해야 한다. Redis RPO와 PostgreSQL 원본 영속성을 동일시하지 않는다.
-
-기존 /health/ready는 Lifecycle/AI 의존성을 검사하며 신규 신고 DB·Post 검증의 준비 상태를 나타내지 않는다. 운영 공개 전에 신고 경로에 대한 인증된 smoke 및 outbox pending 감시를 별도로 수행한다.
+Stream 자동 trim/삭제, Redis 기존 데이터 초기화는 하지 않는다. 현재 /health/ready는 Lifecycle/AI readiness이며 신고 대상 Post 접근 권한까지 보증하지 않는다. 인증된 신고 smoke와 pending 관측이 필요하다.
 
 ## 최신 dev 병합 시 계약 정리
 
-Redis-only src/reports.ts와 우회 가능한 별도 guard는 등록/유지하지 않고 단일 PostgreSQL ReportsModule로 통합했다. 과거 targetId/자유문자열 사유 본문은 postId/commentId 및 enum 사유·description으로 전환해야 한다. 기존 Redis 신고 키는 삭제하지 않지만 새 DB로 자동 이관하지도 않는다.
+Redis-only src/reports.ts와 우회 가능한 별도 guard는 등록/유지하지 않고 단일 ReportsModule의 Redis 원본·journal로 통합했다. 과거 targetId/자유문자열 사유 본문은 postId/commentId 및 enum 사유·description으로 전환해야 한다. 기존 Redis 신고 키는 삭제하지 않지만 새 namespace로 자동 이관하지도 않는다.
 
 최신 dev의 운영 Post 공개 조회는 Gateway 서비스 JWT와 서명된 사용자 ID가 필요하다. 현재 무인증 서비스 직접 읽기로는 검증할 수 없어503이 된다. Moderation→Post 단건 대상 검증 서비스 인증 계약/클라이언트를 준비한 뒤 운영 접수를 열어야 한다. [병합 후 후속 요청](gateway-handoff.md)을 따른다.

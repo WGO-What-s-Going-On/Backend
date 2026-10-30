@@ -23,16 +23,16 @@
 
 신고는 이번 작업의 검증 가능한 계약인 `{targetType, postId, commentId?, reason, description?}`으로 통합했다. 예전 dev의 `{targetType,targetId,reason:자유문자열}` Redis-only 컨트롤러를 함께 등록하지 않는다. 프론트는 POST 대상에 postId, COMMENT 대상에 부모 postId와 commentId를 보내고 enum 사유·선택 설명을 사용해야 한다. targetId만으로는 댓글의 부모/실제 존재 검증을 충족할 수 없다. 해당 본문은400을 반환하며 무검증 Redis 저장으로 우회하지 않는다. docs/contracts/frontend-integration.md의 기존 신고 항목은 이 계약으로 갱신이 필요하다.
 
-기존 Redis-only 신고 원본 키는 삭제하지 않는다. 새 API는 PostgreSQL을 원본으로 사용하므로 기존 64자리 hash reportId/신고 이력의 운영 이관·감사 정책은 별도 확정해야 한다. 기존 Redis 데이터를 자동으로 변환하거나 삭제하지 않았다.
+기존 Redis-only 신고 원본 키는 삭제하지 않는다. 새 API는 Redis의 moderation:reports:v1 namespace를 원본으로 사용하므로 기존 64자리 hash reportId/신고 이력의 운영 이관·감사 정책은 별도 확정해야 한다. 기존 Redis 데이터를 자동으로 변환하거나 삭제하지 않았다.
 
 ## Post 담당자
 
-최신 dev의 공개 Post 조회도 운영에서 Gateway 서명/userId를 요구한다. 현재 ReportTarget의 서비스 직접 읽기는 이 권한을 갖지 않으므로 운영에서는 검증503으로 안전하게 거부된다. Moderation용 단건 post/comment 대상 검증 API와 서비스 인증 허용 계약을 확정하고 전용 클라이언트를 연결해야 한다. Moderation용 토큰을 Post audience로 재사용하거나 Gateway 키를 Moderation에 배포하지 않는다. 기존 ws-gateway 내부 권한도 사용하지 않는다. 이 부분과 Moderation DB가 준비되기 전 신고 운영 접수는 완료가 아니다.
+최신 dev의 공개 Post 조회도 운영에서 Gateway 서명/userId를 요구한다. 현재 ReportTarget의 서비스 직접 읽기는 이 권한을 갖지 않으므로 운영에서는 검증503으로 안전하게 거부된다. Moderation용 단건 post/comment 대상 검증 API와 서비스 인증 허용 계약을 확정하고 전용 클라이언트를 연결해야 한다. Moderation용 토큰을 Post audience로 재사용하거나 Gateway 키를 Moderation에 배포하지 않는다. 기존 ws-gateway 내부 권한도 사용하지 않는다. 이 부분과 Redis 영속성·복구 정책이 준비되기 전 신고 운영 접수는 완료가 아니다.
 
 로컬 Post 테스트 환경에서는 기존 읽기 계약으로 부모 ACTIVE/미만료·댓글 소속/ACTIVE를 전체3초·최대10페이지 안에 검사한다. 401/403/장애·탐색 한도는503이며 미검증 신고를 저장하지 않는다. 취소는 Post 가용성에 의존하지 않는다.
 
 ## 인프라·제품·소비 서비스
 
-Moderation 전용 PostgreSQL/계정/TLS/백업/PITR/복구·migration/Secret/JWK, Redis ACL·관측, 신고 이력·설명·사용자 ID의 보존/익명화를 준비한다. DB 미설정503/JWKS 미설정401을 우회하지 않는다. 신규 DB 어댑터의 RDS IAM 자동 회전은 별도 작업이다.
+Moderation의 기존 Redis에 원본·journal을 보존하므로 persistence/backup/복구·eviction 방지/TLS/ACL·관측과 신고 이력·설명·사용자 ID 보존/익명화, Secret/JWK를 준비한다. Redis 미설정503/JWKS 미설정401을 우회하지 않는다. 별도 PostgreSQL·migration·RDS IAM 연결은 요구하지 않는다.
 
 Notification/Post/리뷰 도구의 신규 이벤트 소비는 아직 없다. 서비스별 Group·eventId 중복 방지/부작용 원자 저장, 저장 후 XACK, Pending 회수/DLQ, 관계 원본 재동기화 계약을 합의한다. 단순 신고는 제재 결정이 아니다.

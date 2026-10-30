@@ -93,7 +93,7 @@ test('successful startup and stop keep their existing commands without diagnosti
   ]);
 });
 
-test('Moderation provisions PostgreSQL and Redis before report integration tests', (t) => {
+test('Moderation provisions only Redis for report integration tests', (t) => {
   const run = fixture(t, 'moderation-service');
   const started = run('start');
   assert.equal(started.status, 0, started.output);
@@ -105,7 +105,6 @@ test('Moderation provisions PostgreSQL and Redis before report integration tests
     '--wait',
     '--wait-timeout',
     '360',
-    'postgres',
     'redis6383',
   ]);
   const stopped = run('stop');

@@ -143,8 +143,12 @@ pnpm test:openai-smoke
 
 ## 사용자 신고 API
 
-게시글·댓글 신고/본인 취소, PostgreSQL 원본·Transactional Outbox 및 moderation:report-events를 구현했다. 기존 Lifecycle/AI 저장소는 유지한다. /docs, /docs/openapi.json에서 서비스 계약을 확인할 수 있다.
+게시글·댓글 신고/본인 취소는 기존 REDIS_URL을 원본과 이벤트 저장소로 사용한다. Lua에서 상태·불변 journal 기록과 moderation:report-events XADD를 처리하며, ReportOutboxWorker는 Redis pending journal의 재시도를 계속 담당한다. 기존 Lifecycle/AI 저장소·입출력 스트림·Consumer Group은 변경하지 않았다. /docs, /docs/openapi.json과 Gateway 공개 API 계약도 유지한다.
 
-전용 DB·마이그레이션·JWKS·Gateway 인증/문서 연동은 운영 선행 조건이다. [신고 계약](contracts/reports.md), [Gateway·팀 후속 요청](contracts/gateway-handoff.md)을 따른다. 운영 반영 완료를 뜻하지 않는다.
+별도 PostgreSQL과 reports:migrate는 필요 없다. REDIS_URL, REPORTS_POST_SERVICE_URL, MODERATION_HTTP_GATEWAY_TRUSTED_JWKS가 필요하며 미설정/장애를 우회하지 않는다. 기존 Post 대상 검증의 운영 서비스 인증 연동은 여전히 후속 작업이다. [신고 계약](contracts/reports.md), [Redis 전환 검증 보고](REDIS_REPORTS_IMPLEMENTATION_REPORT.md), [팀 후속 요청](contracts/gateway-handoff.md)을 따른다.
 
-로컬 신규 DB는 Compose reports-db profile(5434)로 준비한 뒤 MODERATION_REPORTS_DATABASE_URL을 주입하고 pnpm reports:migrate를 실행한다. pnpm test는 단위/HTTP/OpenAPI, pnpm test:integration은 기존 Redis 및 신고 PostgreSQL/Redis 장애 테스트다. 신고 통합 테스트는 MODERATION_TEST_DATABASE_URL(기본 로컬5432 postgres 관리 연결)로 임시 DB를 생성·삭제하며 원격 endpoint는 거부한다. Compose 5434 사용 시 해당 포트를 테스트 URL에 지정한다.
+pnpm test는 단위/HTTP/OpenAPI, pnpm test:integration은 실제 Redis 장애/동시성/이벤트/Lifecycle/AI 회귀 테스트다. 신고 테스트 기본 주소는 redis://127.0.0.1:6383/13이고 MODERATION_TEST_REDIS_URL로 변경할 수 있다. 원격 주소와 데이터가 들어 있는 테스트 DB는 거부한다. FLUSHDB/FLUSHALL을 사용하지 않고 이 테스트가 만든 키만 정리한다. 운영 Redis에서 실행하지 않는다.
+
+강제 종료/AOF 재시작 테스트는 새 전용 컨테이너를 생성한 경우에만 MODERATION_REPORT_RESTART_CONTAINER로 선택한다. 이름은 wgo-report-redis-test- 접두사, label com.wgo.moderation-report-test=1, AOF=yes/appendfsync=always여야 한다. 실제 endpoint run_id까지 컨테이너와 대조한 후에만 kill/start한다. 기존 Compose Redis 재시작 테스트는 별도 opt-in이며 기본은 실행하지 않는다.
+
+신고 원본·journal에는 임의 TTL이 없다. 공용 Redis에 CONFIG SET/초기화/기존 데이터 이관을 실행하지 않는다. 원본 eviction 방지, 운영 persistence/backup/RPO·보존 정책을 확인해야 하며 Redis 원본 전체 유실을 PostgreSQL에서 복구할 수는 없다.

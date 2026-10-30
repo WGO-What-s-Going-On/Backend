@@ -4,11 +4,26 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { parseReport } from '../src/reports/report.dto.js';
 import { ReportTarget } from '../src/reports/report-target.js';
+import { ReportStore } from '../src/reports/report.store.js';
 const postId = 'post_123e4567-e89b-42d3-a456-426614174000';
 const commentId = 'comment_123e4567-e89b-42d3-a456-426614174000';
 const input = { targetType: 'POST', postId, reason: 'SPAM' };
 afterEach(() => vi.restoreAllMocks());
 describe('report validation and live Post read adapter', () => {
+  it.each([
+    'post:events',
+    'moderation:events',
+    'moderation:content-events',
+    'moderation:reports:v1:records',
+    'moderation:reports:v1:pending',
+  ])(
+    'refuses to use existing stream/storage key %s as report output',
+    (eventStream) => {
+      expect(
+        () => new ReportStore(new ConfigService({ reports: { eventStream } })),
+      ).toThrow('Report events require a separate stream');
+    },
+  );
   it('validates discriminated target fields, reasons, IDs and description bounds', () => {
     expect(parseReport(input)).toEqual(input);
     expect(
