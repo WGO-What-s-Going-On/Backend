@@ -3,9 +3,9 @@
 기준일: 2026-10-06. Post Service가 Redis Streams로 발행하는 활동 이벤트와
 Notification·User Service 연동을 위한 확장안을 기록한다.
 
-**현재 계약**은 코드에서 실제 발행하는 9개 이벤트와 Post의 상태 변경·Outbox 복구다.
+**현재 계약**은 코드에서 실제 발행하는 13개 이벤트와 Post의 상태 변경·Outbox 복구다.
 **확장 제안**은 대댓글 등 선택 기능과 Notification·User의 후속 구현을 의미한다.
-댓글 공감 저장·조회·취소는 구현되어 있지만 댓글 공감 이벤트는 발행하지 않는다.
+댓글 공감 생성·취소와 투표 승리도 같은 MongoDB 트랜잭션의 Outbox로 발행한다.
 Post는 소비자의 알림·경험치·칭호 처리를 구현하지 않는다.
 
 ## 1. 책임과 이벤트 흐름
@@ -55,13 +55,13 @@ Redis Stream ID는 전달 위치이며, 도메인 이벤트 식별자인 `eventI
 | 필드 | 현재 타입·값 | 의미 |
 | --- | --- | --- |
 | `eventId` | string, `evt_<UUID>` | 이벤트 고유 ID. 발행 재시도에서 유지 |
-| `eventType` | string | 아래 아홉 가지 현재 이벤트 중 하나 |
+| `eventType` | string | 아래 현재 이벤트 중 하나 |
 | `schemaVersion` | number, `1` | 이벤트 스키마 버전. 도메인 상태의 변경 순서가 아님 |
 | `producer` | string, `post-service` | 생산 서비스 |
 | `aggregateId` | string, `post_<UUID>` | 생성·취소·삭제·만료 이벤트 모두 게시물 ID |
 | `correlationId` | string, `req_<UUID>` | 현재 이벤트 생성 시 새로 생성. 요청의 ID 전파는 미구현 |
 | `occurredAt` | string, ISO-8601 UTC | 해당 command에서 생성한 사건 시각. Redis 발행·소비·DB 커밋 시각이 아님 |
-| `post` / `comment` / `reaction` / `participant` | object | 이벤트별 데이터. 해당 이벤트의 객체 하나 포함 |
+| `post` / `comment` / `reaction` / `participant` / `commentReaction` / `vote` | object | 이벤트별 데이터. 해당 이벤트의 객체 하나 포함 |
 
 **Outbox 내부의 `payload`와 Redis wire format을 구분한다.** Outbox에는
 `payload: { comment: ... }`처럼 저장하지만 Worker는 이를 envelope 최상위에
@@ -77,12 +77,12 @@ Redis Stream ID는 전달 위치이며, 도메인 이벤트 식별자인 `eventI
 
 | 서비스 | 확인된 상태 |
 | --- | --- |
-| Post | 생성 4종과 취소·삭제·이탈·만료 5종을 MongoDB Outbox에 저장하고 `post:events`로 발행 |
+| Post | 게시물 수정·댓글 공감·승리를 포함한 13종을 MongoDB Outbox에 저장하고 `post:events`로 발행 |
 | Map | `post-map` 그룹에서 `PostCreated` 소비. `PostExpired`, `PostDeleted`로 비활성 상태 적용 |
 | Realtime Gateway | `post-realtime` 그룹에서 네 현재 이벤트를 소비하고 연결된 보드에 전파 |
 | Post Semantic Worker | 설정된 독립 그룹에서 `PostCreated` 소비. `PostExpired`, `PostDeleted`도 원본 재확인 후 처리 |
 | Notification | Post 이벤트 소비·알림 비즈니스 로직 미구현 |
-| User | Post 이벤트 소비·활동 기반 보상 미구현. 기존 배지 저장·조회와 User Outbox는 존재 |
+| User | 별도 `feat/user-activity-rewards` 브랜치에 기존 보상 소비자가 존재. 이번 3종 이벤트의 실제 파서 연결은 후속 작업이며 이 PR에 포함하지 않음 |
 
 Realtime은 새 취소·삭제 이벤트의 클라이언트 전파를 아직 구현하지 않았다.
 Semantic 그룹 및 복구 규칙은 [semantic-search.md](./semantic-search.md)를 참고한다.
@@ -350,7 +350,7 @@ Map에는 기한 예약 이벤트를 보내지 않으며, 실제 `PostExpired`�
 | 기능 | 이벤트·계약 제안 | 도입 조건 |
 | --- | --- | --- |
 | 대댓글 | `PostCommentCreated`에 부모 댓글 문맥 추가 | 답글 저장·조회·알림 기능 도입 시. 별도 생성 이벤트로 중복 발행하지 않음 |
-| 댓글 공감 이벤트 | `PostCommentReactionCreated`, `PostCommentReactionRemoved` | 현재 이벤트 미발행. 도입 시 `commentId`, 댓글 작성자, 공감 사용자·종류·상태 버전 계약 필요 |
+| 댓글 공감 이벤트 | `PostCommentReactionCreated`, `PostCommentReactionRemoved` | 구현 완료. 아래 댓글 공감·투표 승리 계약 참고 |
 | 수정 | `PostUpdated`, `PostCommentUpdated` | 변경 대상 ID, 작성자, 변경 시각·버전 및 소비자에게 필요한 변경 값. 단순 수정에 반복 경험치 지급은 비추천 |
 | 숨김·복구 | `PostHidden`, `PostRestored`, 필요 시 댓글 대응 이벤트 | 상태 모델 및 Moderation 연동 확정 후. 현재 Post 상태에는 HIDDEN이 없음 |
 | 멘션 | 댓글의 멘션 대상 필드 또는 별도 멘션 이벤트 | 수정으로 추가·제거되는 멘션까지 알릴지 결정 후 계약 확정 |
@@ -625,3 +625,35 @@ Post 조회가 원본 공개 상태를 다시 검증한다. WS는 postVersion으
 이 버전의 활동·칭호·행정동 랭킹은 Post 원본을 집계하는 조회 API다. User의 영속 배지·보상
 데이터를 쓰거나 새로운 칭호 이벤트를 만들지 않는다. 기존 성장 이벤트 제안과 구분하며
 [연동 계약](../../../docs/contracts/frontend-integration.md)에 계산 규칙을 정의한다.
+
+## 14. 댓글 공감·투표 승리 (2026-10-30)
+
+공통 envelope와 `post:events`의 `eventId/eventType/data` 형식은 유지한다.
+`data`의 최상위에 아래 객체와 문맥을 둔다. ID와 시각 타입은 기존 v1 계약을 따른다.
+
+| eventType | 필수 데이터 |
+| --- | --- |
+| PostCommentReactionCreated | `commentReaction: {postId, commentId, userId, type, createdAt}`, `commentAuthorId`, `activityVersion` |
+| PostCommentReactionRemoved | `commentReaction: {postId, commentId, userId, type, createdAt, removedAt}`, `commentAuthorId`, `activityVersion` |
+| PostVoteWon | `vote: {postId, resultId, commentId, winnerAuthorId, votes, closedAt}`, `activityVersion: 1` |
+
+- 공감 종류는 HELPFUL/AGREE/DIFFERENT. 댓글 작성자 `commentAuthorId`가 지급 대상이며
+  반응한 `userId`나 게시물 작성자가 아니다. User 정책이 종류별 지급량과 자기 공감 제외를 결정한다.
+- 공감 관계 `(commentId,userId,type)`의 activityVersion은 1에서 시작해 취소·재활성화마다 증가한다.
+  기존 Mongo 관계에 버전이 없으면 1로 간주한다. 반복 요청·실패·롤백에는 새 이벤트가 없다.
+- 투표는 게시물당 하나이고 `resultId = postId`로 불변이다. 최초 단독 최다 득표 확정에만
+  PostVoteWon을 저장한다. votes는 양의 정수, winnerAuthorId는 승리 댓글 작성자다.
+  동률·0표·NONE·CANCELLED에는 승리 이벤트가 없고 재종료·재시도에도 추가 생성하지 않는다.
+- 작성자 종료·만료·삭제는 모두 같은 확정 경로를 사용한다. 삭제와 승리 이벤트의 소비 순서는
+  보장하지 않는다. User 후속 구현은 PostDeleted/PostCommentDeleted 상태를 보존해 지연 이벤트에도
+  동일한 회수 정책을 적용해야 한다. 만료 시 회수 여부는 User 정책이며 Post가 임의로 정하지 않는다.
+- User 후속 구현은 eventId 중복과 활동 버전을 함께 검사해야 한다. 단일 승리 보상 키는
+  `vote:resultId`를 권장하며 같은 resultId에 다른 작성자·댓글이 도착하면 격리해야 한다. User DB를 Post에서 직접 접근하지 않는다.
+- 새 이벤트의 생산 전 User의 마이그레이션·파서부터 배포한다. 이전 User 파서는 새 타입을
+  INVALID_EVENT로 DLQ 처리한다. 정책 미설정 시 활동만 저장하며 지급하지 않는다.
+- 과거 Mongo 활동은 자동 소급 발행하지 않는다. 적용 기준은 배포 후 발생한 상태 전이이며,
+  과거 지급은 별도의 Post 소유 backfill 계약과 멱등 키를 검토한 후 실행한다.
+
+이번 변경은 Post 생산자만 구현한다. User의 실제 파서 연결·정책 설정·필요한 마이그레이션은
+User 담당자가 기존 보상 브랜치에서 진행한다.
+Post `/me/level` 조회 계산과 User 정책 기반 영속 배지는 이번 연결로 통합되지 않는다.

@@ -18,6 +18,15 @@ async function existingPost(transaction: PostTransaction, postId: string) {
   return post;
 }
 
+// 종료 경로와 관계없이 승자 확정과 이벤트를 함께 커밋한다.
+async function closeVote(tx: PostTransaction, postId: string, now: Date) {
+  const vote = await tx.commands.closeVote(postId, now);
+  if (vote)
+    await tx.commands.appendEvent(
+      event(postId, 'PostVoteWon', { vote, activityVersion: 1 }, now),
+    );
+}
+
 type Deletion =
   | { actor: { type: 'USER'; userId: number }; reason: 'USER_REQUEST' }
   | {
@@ -73,7 +82,7 @@ export class PostLifecycle {
       if (Boolean(post.closedAt) === closed) return;
       const now = new Date();
       await tx.commands.fenceActivities(postId, post.bucketCount);
-      if (closed) await tx.commands.closeVote(postId, now);
+      if (closed) await closeVote(tx, postId, now);
       await tx.commands.setClosed(postId, closed ? now : null, now);
       await tx.commands.appendEvent(
         event(
@@ -157,11 +166,14 @@ export class PostLifecycle {
         type,
       );
       if (!reaction || reaction.removedAt) return;
+      const now = new Date();
+      const activityVersion = (reaction.activityVersion ?? 1) + 1;
       await tx.commands.removeCommentReaction(
         commentId,
         userId,
         type,
-        new Date(),
+        now,
+        activityVersion,
       );
       await tx.commands.incrementCommentReaction(postId, commentId, type, -1);
       await tx.commands.increment(
@@ -169,6 +181,25 @@ export class PostLifecycle {
         comment.bucketId ?? 0,
         'commentReactionCount',
         -1,
+      );
+      await tx.commands.appendEvent(
+        event(
+          postId,
+          'PostCommentReactionRemoved',
+          {
+            commentReaction: {
+              postId,
+              commentId,
+              userId,
+              type,
+              createdAt: reaction.createdAt,
+              removedAt: now,
+            },
+            commentAuthorId: comment.authorId,
+            activityVersion,
+          },
+          now,
+        ),
       );
     });
   }
@@ -318,7 +349,7 @@ export class PostLifecycle {
       const now = new Date();
       const postVersion = post.postVersion + 1;
       await tx.commands.fenceActivities(postId, post.bucketCount);
-      await tx.commands.closeVote(postId, now);
+      await closeVote(tx, postId, now);
       await tx.commands.changePostStatus(postId, 'DELETED', now, postVersion);
       // 하위 활동을 대량 삭제하거나 가짜 취소 이벤트를 만들지 않는다. 소비자는 postId로 무효화한다.
       await tx.commands.appendEvent(
@@ -362,7 +393,7 @@ export class PostLifecycle {
         return;
       const postVersion = post.postVersion + 1;
       await tx.commands.fenceActivities(postId, post.bucketCount);
-      await tx.commands.closeVote(postId, now);
+      await closeVote(tx, postId, now);
       await tx.commands.changePostStatus(postId, 'EXPIRED', now, postVersion);
       await tx.commands.appendEvent(
         event(

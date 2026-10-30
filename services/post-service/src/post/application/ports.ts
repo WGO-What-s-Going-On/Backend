@@ -12,6 +12,9 @@ import type {
 } from '../domain/post.js';
 
 export type EventType =
+  | 'PostCommentReactionCreated'
+  | 'PostCommentReactionRemoved'
+  | 'PostVoteWon'
   | 'PostUpdated'
   | 'PostCreated'
   | 'PostCommentCreated'
@@ -22,6 +25,15 @@ export type EventType =
   | 'PostDeleted'
   | 'PostParticipantLeft'
   | 'PostExpired';
+
+export interface VoteWin {
+  postId: string;
+  resultId: string;
+  commentId: string;
+  winnerAuthorId: number;
+  votes: number;
+  closedAt: Date;
+}
 
 export interface OutboxEvent {
   eventId: string;
@@ -42,6 +54,7 @@ export type StoredReaction = StoredActivity<ReactionRecord> & {
   removedAt?: Date | null;
 };
 export type StoredCommentReaction = CommentReactionRecord & {
+  activityVersion?: number;
   removedAt?: Date | null;
 };
 
@@ -133,12 +146,16 @@ export interface PostCommands {
     reaction: ReactionRecord & { bucketId: number },
   ): Promise<void>;
   insertCommentReaction(reaction: CommentReactionRecord): Promise<void>;
-  reactivateCommentReaction(reaction: CommentReactionRecord): Promise<void>;
+  reactivateCommentReaction(
+    reaction: CommentReactionRecord,
+    activityVersion: number,
+  ): Promise<void>;
   removeCommentReaction(
     commentId: string,
     userId: number,
     type: CommentReactionType,
     now: Date,
+    activityVersion: number,
   ): Promise<void>;
   incrementCommentReaction(
     postId: string,
@@ -173,7 +190,7 @@ export interface PostCommands {
     commentId: string,
     now: Date,
   ): Promise<void>;
-  closeVote(postId: string, now: Date): Promise<void>;
+  closeVote(postId: string, now: Date): Promise<VoteWin | null>;
   leaveParticipant(
     postId: string,
     userId: number,
