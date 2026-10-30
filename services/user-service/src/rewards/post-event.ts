@@ -1,4 +1,12 @@
 export class InvalidRewardEvent extends Error {}
+export class ConflictingRewardEvent extends InvalidRewardEvent {}
+export class UnsupportedRewardEvent extends InvalidRewardEvent {}
+export interface PostRegionSnapshot {
+  code: string;
+  name: string;
+  type: 'H';
+  version: number;
+}
 export interface ActivityInput {
   eventId: string;
   correlationId: string;
@@ -16,6 +24,11 @@ export interface ActivityInput {
   reactionType: string | null;
   version: number;
   active: boolean;
+  commentId?: string;
+  resultId?: string;
+  occurredAt?: string;
+  postRegion?: PostRegionSnapshot;
+  regionUpdate?: { version: number; region: PostRegionSnapshot | null };
   postStatus?: 'ACTIVE' | 'DELETED' | 'EXPIRED';
 }
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -32,7 +45,10 @@ function check(v: unknown): asserts v {
 }
 
 // Retain identifiers and state only: content, location and profile data stay with Post.
-export function parsePostEvent(fields: Record<string, string>): ActivityInput {
+export function parsePostEvent(
+  fields: Record<string, string>,
+  regionContract: 'none' | 'post-region-v1' = 'none',
+): ActivityInput | null {
   let v: unknown;
   try {
     v = JSON.parse(fields.data!);
@@ -41,7 +57,9 @@ export function parsePostEvent(fields: Record<string, string>): ActivityInput {
   }
   check(record(v));
   check(
-    id(v.eventId, 'evt') &&
+    typeof v.eventType === 'string' &&
+      v.eventType.length > 0 &&
+      id(v.eventId, 'evt') &&
       id(v.aggregateId, 'post') &&
       v.schemaVersion === 1 &&
       v.producer === 'post-service' &&
@@ -51,6 +69,103 @@ export function parsePostEvent(fields: Record<string, string>): ActivityInput {
       fields.eventId === v.eventId &&
       fields.eventType === v.eventType,
   );
+  if (
+    v.eventType === 'PostRegionResolved' &&
+    regionContract === 'post-region-v1'
+  ) {
+    check(positive(v.postAuthorId) && positive(v.regionVersion));
+    const region =
+      v.postRegion === null ? null : parseRegionSnapshot(v.postRegion);
+    check(region === null || region.version === v.regionVersion);
+    return {
+      eventId: String(v.eventId),
+      correlationId: String(v.correlationId),
+      postId: String(v.aggregateId),
+      key: String(v.aggregateId),
+      kind: 'POST',
+      actorId: String(v.postAuthorId),
+      beneficiaryId: null,
+      reactionType: null,
+      version: v.regionVersion as number,
+      active: false,
+      regionUpdate: { version: v.regionVersion as number, region },
+    };
+  }
+  if (v.eventType === 'PostUpdated') {
+    check(
+      record(v.post) &&
+        v.post.postId === v.aggregateId &&
+        positive(v.post.authorId) &&
+        typeof v.post.category === 'string' &&
+        positive(v.postVersion) &&
+        (v.post.closedAt === null || date(v.post.closedAt)),
+    );
+    // Closing/reopening an existing post does not create a new reward or delete it.
+    return null;
+  }
+  if (
+    v.eventType === 'PostCommentReactionCreated' ||
+    v.eventType === 'PostCommentReactionRemoved'
+  ) {
+    const r = v.commentReaction;
+    const active = v.eventType === 'PostCommentReactionCreated';
+    check(
+      record(r) &&
+        r.postId === v.aggregateId &&
+        id(r.commentId, 'comment') &&
+        positive(r.userId) &&
+        positive(v.commentAuthorId) &&
+        positive(v.activityVersion) &&
+        ['HELPFUL', 'AGREE', 'DIFFERENT'].includes(String(r.type)) &&
+        date(r.createdAt) &&
+        (active || date(r.removedAt)),
+    );
+    return {
+      eventId: String(v.eventId),
+      correlationId: String(v.correlationId),
+      postId: String(v.aggregateId),
+      key: `${r.commentId}:reaction:${r.userId}:${r.type}`,
+      kind: 'COMMENT_REACTION',
+      commentId: String(r.commentId),
+      actorId: String(r.userId),
+      beneficiaryId: String(v.commentAuthorId),
+      reactionType: String(r.type),
+      version: v.activityVersion as number,
+      active,
+      occurredAt: String(v.occurredAt),
+    };
+  }
+  if (v.eventType === 'PostVoteWon') {
+    const vote = v.vote;
+    check(
+      record(vote) &&
+        vote.postId === v.aggregateId &&
+        vote.resultId === v.aggregateId &&
+        id(vote.commentId, 'comment') &&
+        positive(vote.winnerAuthorId) &&
+        positive(vote.votes) &&
+        date(vote.closedAt) &&
+        v.activityVersion === 1,
+    );
+    return {
+      eventId: String(v.eventId),
+      correlationId: String(v.correlationId),
+      postId: String(v.aggregateId),
+      key: `vote:${vote.resultId}`,
+      kind: 'VOTE_WIN',
+      commentId: String(vote.commentId),
+      resultId: String(vote.resultId),
+      actorId: String(vote.winnerAuthorId),
+      beneficiaryId: String(vote.winnerAuthorId),
+      reactionType: null,
+      version: 1,
+      active: true,
+      occurredAt: String(vote.closedAt),
+      ...(regionContract === 'post-region-v1' && v.postRegion !== undefined
+        ? { postRegion: parseRegionSnapshot(v.postRegion) }
+        : {}),
+    };
+  }
   const types: Record<string, [ActivityInput['kind'], string, boolean]> = {
     PostCreated: ['POST', 'post', true],
     PostDeleted: ['POST', 'post', false],
@@ -62,7 +177,8 @@ export function parsePostEvent(fields: Record<string, string>): ActivityInput {
     PostParticipantJoined: ['PARTICIPATION', 'participant', true],
     PostParticipantLeft: ['PARTICIPATION', 'participant', false],
   };
-  check(typeof v.eventType === 'string' && Object.hasOwn(types, v.eventType));
+  if (typeof v.eventType !== 'string' || !Object.hasOwn(types, v.eventType))
+    throw new UnsupportedRewardEvent('Unsupported Post reward event');
   const [kind, field, active] = types[v.eventType]!;
   const target = v[field];
   check(record(target) && target.postId === v.aggregateId);
@@ -169,6 +285,8 @@ export function parsePostEvent(fields: Record<string, string>): ActivityInput {
     reactionType: kind === 'POST_REACTION' ? String(target.type) : null,
     version,
     active,
+    occurredAt: String(v.occurredAt),
+    ...(kind === 'COMMENT' ? { commentId: String(target.commentId) } : {}),
     ...(kind === 'POST'
       ? {
           postStatus:
@@ -182,7 +300,26 @@ export function parsePostEvent(fields: Record<string, string>): ActivityInput {
   };
 }
 
-// Proposed inputs only. The live consumer intentionally accepts only the nine published types.
+export function parseRegionSnapshot(v: unknown): PostRegionSnapshot {
+  check(
+    record(v) &&
+      typeof v.code === 'string' &&
+      /^[0-9]{10}$/.test(v.code) &&
+      typeof v.name === 'string' &&
+      v.name.trim().length > 0 &&
+      v.name.length <= 200 &&
+      v.type === 'H' &&
+      positive(v.version),
+  );
+  return {
+    code: v.code as string,
+    name: v.name as string,
+    type: 'H',
+    version: v.version as number,
+  };
+}
+
+// Internal/reconciliation fixture adapter. Live producers use parsePostEvent above.
 export function parseFutureRewardInput(value: unknown): ActivityInput {
   check(record(value));
   check(
@@ -214,7 +351,7 @@ export function parseFutureRewardInput(value: unknown): ActivityInput {
     postId: String(value.postId),
     key:
       kind === 'VOTE_WIN'
-        ? `vote:${value.resultId}:${value.beneficiaryId}`
+        ? `vote:${value.resultId}`
         : `${value.commentId}:reaction:${value.actorId}:${value.reactionType}`,
     kind,
     actorId: String(value.actorId),
@@ -222,5 +359,7 @@ export function parseFutureRewardInput(value: unknown): ActivityInput {
     reactionType: kind === 'VOTE_WIN' ? null : String(value.reactionType),
     version: value.version as number,
     active: value.active as boolean,
+    commentId: String(value.commentId),
+    ...(kind === 'VOTE_WIN' ? { resultId: String(value.resultId) } : {}),
   };
 }

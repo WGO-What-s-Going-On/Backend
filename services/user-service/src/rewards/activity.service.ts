@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { TitleService } from './title.service.js';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { InvalidRewardEvent, type ActivityInput } from './post-event.js';
+import { ConflictingRewardEvent, type ActivityInput } from './post-event.js';
 import { RewardEngine, type ActivityRow } from './reward-engine.js';
 import { levelFor } from './reward-policy.js';
 import type {
@@ -12,10 +13,14 @@ import type {
 
 @Injectable()
 export class ActivityService {
+  private readonly titles: TitleService;
   constructor(
     @InjectDataSource() private readonly db: DataSource,
     private readonly engine: RewardEngine,
-  ) {}
+    @Optional() titles?: TitleService,
+  ) {
+    this.titles = titles ?? new TitleService();
+  }
 
   async record(input: ActivityInput): Promise<void> {
     await this.db.transaction(async (m) => {
@@ -28,9 +33,28 @@ export class ActivityService {
       await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
         input.postId,
       ]);
+      await this.titles.lock(m);
+      if (input.regionUpdate) {
+        await this.titles.recordRegion(
+          m,
+          input.postId,
+          input.regionUpdate.version,
+          input.regionUpdate.region,
+          input.eventId,
+        );
+        return;
+      }
+      if (input.postRegion)
+        await this.titles.recordRegion(
+          m,
+          input.postId,
+          input.postRegion.version,
+          input.postRegion,
+          input.eventId,
+        );
       const [previous] = await m.query(
-        'SELECT * FROM user_activities WHERE activity_key=$1',
-        [input.key],
+        'SELECT * FROM user_activities WHERE activity_key=$1 OR ($2::text IS NOT NULL AND result_id=$2)',
+        [input.key, input.resultId ?? null],
       );
       if (
         previous &&
@@ -41,13 +65,19 @@ export class ActivityService {
             input.beneficiaryId !== null &&
             previous.beneficiary_id !== input.beneficiaryId) ||
           previous.reaction_type !== input.reactionType ||
+          (previous.comment_id !== null &&
+            input.commentId !== undefined &&
+            previous.comment_id !== input.commentId) ||
+          (previous.result_id !== null &&
+            previous.result_id !== (input.resultId ?? null)) ||
           (BigInt(previous.version) === BigInt(input.version) &&
             previous.active !== input.active))
       ) {
-        throw new InvalidRewardEvent(
+        throw new ConflictingRewardEvent(
           'Conflicting activity identity or version',
         );
       }
+      if (previous) input = { ...input, key: previous.activity_key };
       if (input.postStatus)
         await m.query(
           `INSERT INTO reward_posts(post_id,version,status) VALUES($1,$2,$3)
@@ -55,13 +85,21 @@ export class ActivityService {
         WHERE reward_posts.version<EXCLUDED.version`,
           [input.postId, input.version, input.postStatus],
         );
-      await m.query(
-        `INSERT INTO user_activities(activity_key,post_id,kind,actor_id,beneficiary_id,reaction_type,version,active,event_id,correlation_id)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      const changedActivities = await m.query(
+        `INSERT INTO user_activities(activity_key,post_id,kind,actor_id,beneficiary_id,reaction_type,version,active,event_id,correlation_id,comment_id,result_id,occurred_at,source_time_verified)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
         ON CONFLICT(activity_key) DO UPDATE SET version=EXCLUDED.version,active=EXCLUDED.active,
-          beneficiary_id=COALESCE(user_activities.beneficiary_id,EXCLUDED.beneficiary_id),event_id=EXCLUDED.event_id,
+          beneficiary_id=COALESCE(user_activities.beneficiary_id,EXCLUDED.beneficiary_id),
+          comment_id=COALESCE(user_activities.comment_id,EXCLUDED.comment_id),
+          result_id=COALESCE(user_activities.result_id,EXCLUDED.result_id),event_id=EXCLUDED.event_id,
+          occurred_at=CASE WHEN NOT user_activities.source_time_verified AND EXCLUDED.source_time_verified THEN EXCLUDED.occurred_at ELSE user_activities.occurred_at END,
+          source_time_verified=user_activities.source_time_verified OR EXCLUDED.source_time_verified,
           correlation_id=EXCLUDED.correlation_id,updated_at=now()
-        WHERE user_activities.version<EXCLUDED.version`,
+        WHERE user_activities.version<EXCLUDED.version OR (user_activities.version=EXCLUDED.version AND (
+          (user_activities.beneficiary_id IS NULL AND EXCLUDED.beneficiary_id IS NOT NULL) OR
+          (user_activities.comment_id IS NULL AND EXCLUDED.comment_id IS NOT NULL) OR
+          (user_activities.result_id IS NULL AND EXCLUDED.result_id IS NOT NULL) OR
+          (NOT user_activities.source_time_verified AND EXCLUDED.source_time_verified))) RETURNING activity_key`,
         [
           input.key,
           input.postId,
@@ -73,39 +111,179 @@ export class ActivityService {
           input.active,
           input.eventId,
           input.correlationId,
+          input.commentId ?? null,
+          input.resultId ?? null,
+          input.occurredAt ?? new Date().toISOString(),
+          input.kind === 'VOTE_WIN' && input.occurredAt !== undefined,
         ],
       );
-      const [post] = await m.query(
-        'SELECT status FROM reward_posts WHERE post_id=$1',
-        [input.postId],
+      if (changedActivities.length && input.kind === 'VOTE_WIN')
+        await this.titles.markRankingDirty(m);
+      await this.evaluatePost(
+        m,
+        input.postId,
+        input.eventId,
+        input.correlationId,
+        input,
       );
-      const activities: ActivityRow[] = await m.query(
-        'SELECT * FROM user_activities WHERE post_id=$1 ORDER BY beneficiary_id,activity_key',
-        [input.postId],
-      );
-      // Sorted user locks avoid cycles when different posts reward the same users.
-      const beneficiaries = [
-        ...new Set(
-          activities
-            .map((a) => a.beneficiary_id)
-            .filter((id): id is string => id !== null),
-        ),
-      ].sort((a, b) => (BigInt(a) < BigInt(b) ? -1 : 1));
-      for (const id of beneficiaries)
-        await m.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [id]);
-      for (const a of activities)
-        await this.engine.evaluate(
-          m,
-          {
-            ...a,
-            event_id: input.eventId,
-            correlation_id: input.correlationId,
-          },
-          post?.status ?? 'ACTIVE',
-        );
     });
   }
+  private async evaluatePost(
+    m: import('typeorm').EntityManager,
+    postId: string,
+    eventId: string,
+    correlationId: string,
+    trigger?: ActivityInput,
+  ) {
+    const [post] = await m.query(
+      'SELECT status FROM reward_posts WHERE post_id=$1',
+      [postId],
+    );
+    const activities: ActivityRow[] = await m.query(
+      'SELECT * FROM user_activities WHERE post_id=$1 ORDER BY beneficiary_id,activity_key',
+      [postId],
+    );
+    // Sorted user locks avoid cycles when different posts reward the same users.
+    const beneficiaries = await this.lockRewardUsers(m, [
+      ...new Set(
+        activities
+          .flatMap((a) => [a.beneficiary_id, a.actor_id])
+          .filter((id): id is string => id !== null),
+      ),
+    ]);
+    for (const a of activities)
+      await this.engine.evaluate(
+        m,
+        {
+          ...a,
+          event_id: eventId,
+          correlation_id: correlationId,
+        },
+        post?.status ?? 'ACTIVE',
+        a.comment_id !== null &&
+          activities.some(
+            (c) =>
+              c.kind === 'COMMENT' &&
+              c.comment_id === a.comment_id &&
+              !c.active,
+          ),
+      );
+    for (const id of beneficiaries)
+      if (activities[0])
+        await this.engine.syncBadges(m, {
+          ...activities[0],
+          beneficiary_id: id,
+          event_id: eventId,
+          correlation_id: correlationId,
+        });
+    // A reaction changes its actor and recipient, not every previous participant's
+    // title metrics. Parent deletion is the case that invalidates all affected children.
+    const affected =
+      !trigger || (trigger.postStatus && trigger.postStatus !== 'ACTIVE')
+        ? beneficiaries
+        : trigger.kind === 'COMMENT' && !trigger.active
+          ? activities
+              .filter((a) => a.comment_id === trigger.commentId)
+              .flatMap((a) => [a.actor_id, a.beneficiary_id])
+          : [trigger.actorId, trigger.beneficiaryId];
+    for (const id of new Set(affected))
+      if (id !== null)
+        await this.titles.syncUser(m, id, { eventId, correlationId });
+  }
+  private async lockRewardUsers(
+    m: import('typeorm').EntityManager,
+    ids: string[],
+  ): Promise<string[]> {
+    if (
+      this.engine.policy.enabled &&
+      this.engine.policy.badges.some((b) => b.rankTop !== undefined)
+    ) {
+      // Ranked titles can displace another user. Serialize that decision and refresh holders
+      // in the same transaction so concurrent winners cannot retain the same top slot.
+      await m.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('user-reward-ranking',0))",
+      );
+      const holders: Array<{ user_id: string }> = await m.query(
+        `SELECT DISTINCT ub.user_id FROM user_badges ub JOIN badges b ON b.id=ub.badge_id
+        WHERE ub.revoked_at IS NULL AND b.code=ANY($1::text[])`,
+        [
+          this.engine.policy.badges
+            .filter((b) => b.rankTop !== undefined)
+            .map((b) => b.code),
+        ],
+      );
+      ids.push(...holders.map((h) => h.user_id));
+    }
+    const sorted = [...new Set(ids)].sort((a, b) =>
+      BigInt(a) < BigInt(b) ? -1 : 1,
+    );
+    for (const id of sorted)
+      await m.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [id]);
+    return sorted;
+  }
+  // Explicit reconciliation keeps the same activity identities; it never deletes inbox receipts.
+  async reconcileUser(userId: string, operationId: string): Promise<void> {
+    if (!this.engine.policy.enabled && !this.titles.settings.enabled) return;
+    const posts: Array<{ post_id: string }> = await this.db.query(
+      'SELECT DISTINCT post_id FROM user_activities WHERE beneficiary_id=$1 ORDER BY post_id',
+      [userId],
+    );
+    for (const { post_id } of posts)
+      await this.db.transaction(async (m) => {
+        await m.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+          post_id,
+        ]);
+        await this.titles.lock(m);
+        await this.evaluatePost(
+          m,
+          post_id,
+          `reward-reconcile:${operationId}`,
+          `reward-reconcile:${operationId}`,
+        );
+      });
+  }
 
+  async refreshUserTitles(userId: string): Promise<void> {
+    if (!this.engine.policy.enabled && !this.titles.settings.enabled) return;
+    await this.db.transaction(async (m) => {
+      await this.titles.lock(m);
+      const users = await this.lockRewardUsers(m, [userId]);
+      const [a] = await m.query(
+        'SELECT * FROM user_activities WHERE actor_id=$1 OR beneficiary_id=$1 ORDER BY activity_key LIMIT 1',
+        [userId],
+      );
+      if (a)
+        for (const id of users)
+          await this.engine.syncBadges(m, {
+            ...a,
+            beneficiary_id: id,
+            event_id: `reward-title:${userId}:${Date.now()}`,
+            correlation_id: 'reward-title-reconciliation',
+          });
+      await this.titles.syncUser(m, userId, {
+        eventId: `reward-title:${userId}:${Date.now()}`,
+        correlationId: 'reward-title-reconciliation',
+      });
+    });
+  }
+  async badgeHistory(userId: string, limit: number, before: string | null) {
+    await this.summary(userId);
+    const rows = await this.db.query(
+      `SELECT h.id,h.badge_id AS "badgeId",b.code,b.name,h.action,h.policy_version AS "policyVersion",h.created_at AS "createdAt",
+        h.region_code AS "regionCode",h.ranking_run_id AS "rankingRunId",h.reason
+      FROM user_badge_history h JOIN badges b ON b.id=h.badge_id WHERE h.user_id=$1 AND ($2::bigint IS NULL OR h.id<$2)
+      ORDER BY h.id DESC LIMIT $3`,
+      [userId, before, limit + 1],
+    );
+    const items = rows.slice(0, limit).map((r: { createdAt: Date }) => ({
+      ...r,
+      createdAt: r.createdAt.toISOString(),
+    }));
+    return {
+      items,
+      nextCursor: rows.length > limit ? rows[limit - 1].id : null,
+    };
+  }
   async summary(userId: string): Promise<GrowthResponse> {
     // A single snapshot keeps balances and their progress calculation consistent.
     const [row] = await this.db.query(
@@ -128,6 +306,7 @@ export class ActivityService {
         level === null || p.levels[level + 1] === undefined
           ? null
           : String(p.levels[level + 1]),
+      titles: await this.titles.progress(this.db.manager, userId),
     };
   }
   async history(

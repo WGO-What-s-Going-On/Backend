@@ -1,205 +1,177 @@
-# User Service 완성도 및 잔여 작업 보고서
+# WGO User 확정 칭호 정책 구현·검증 보고서
 
-기준일: 2026-10-17 (Asia/Seoul). 기준 dev: `6aed180e4026828bc78ed1498927d8af7c740a4c`.
-작업 브랜치: `feat/user-activity-rewards`. Issue #35는 open 상태를 유지한다. PR은 생성하지 않는다.
+기준: 2026-10-31. 현재 브랜치 `feat/user-activity-rewards`, HEAD `de72f1e` 위의 로컬 변경을 보존·확장했다. commit/push/PR/merge/배포는 수행하지 않았다.
 
-판정 기준: ① 완료 및 검증, ② 구현됨/추가 검증 필요, ③ User 독립 구현 가능,
-④ 외부 계약 필요, ⑤ 제품·운영 정책 결정 필요. 여러 의존성이 있으면 함께 표시한다.
-단위·DB/Redis 통합 테스트가 통과해도 실제 Kakao·Gateway·타 서비스 E2E 완료를 의미하지 않는다.
+**소식통·리포터·특파원은 성장 점수와 분리하여 기본 자동 평가 ON으로 구현했다. 천리안의 지역별 계산·저장·지급/회수는 User 측에서 구현·검증했지만, 실제 Post 이벤트의 행정동 수신 계약이 없어 현재 운영 지역 연동은 미완료다.**
 
-## A. 현재 구현 완료 항목
+상세 정책·이벤트 예시·외부 계약 인계·운영 절차는 [WGO_TITLE_POLICY.md](WGO_TITLE_POLICY.md), 기존 입력/출력 계약은 [REWARDS_CONTRACT.md](REWARDS_CONTRACT.md)를 참조한다.
 
-| 기능                           | 주요 구현 파일(src 기준)                                       | 검증                                             | 사용 가능 범위 / 분류                                                                                   |
-| ------------------------------ | -------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Kakao 신규/기존 로그인         | auth/auth.service.ts, kakao-oauth.client.ts                    | auth.integration, kakao-oauth.client             | Kakao HTTP mock + 실제 DB/Redis 검증. 실제 provider 설정/리다이렉트 E2E 필요 ②                          |
-| Access JWT 발급                | auth/access-token.service.ts                                   | auth.integration                                 | 서명·claim·TTL 검증. Gateway 검증은 별도 ①/④                                                            |
-| Refresh rotation               | auth/refresh-token.ts, redis-session.store.ts                  | refresh-token, auth.integration                  | hash 저장·원자 교체·동시 재사용 거부·장애 503 ①                                                         |
-| 로그아웃                       | auth/auth.controller.ts, auth.service.ts                       | auth.integration                                 | 본인 세션 삭제/반복 204. 기존 access JWT는 만료까지 유효 ①/⑤                                            |
-| 프로필 조회·수정/온보딩        | users/users.controller.ts, users.service.ts                    | users.integration                                | PATCH validation, 최초 USER_CREATED, atomic outbox ①                                                    |
-| 닉네임 중복 검사               | users/nickname.ts, users.service.ts                            | users.integration                                | 대소문자 무시 DB unique, 입력 검증 ①                                                                    |
-| 현재 약관/동의                 | terms/\*, users/users.service.ts                               | terms.integration, users.integration             | 현재 필수 약관·동의 멱등성·동시성 ①                                                                     |
-| 기존 칭호 목록                 | users/users.service.ts                                         | users.integration, rewards.integration           | 활성·미회수 목록 및 자동 지급 연동 ①                                                                    |
-| 계정 상태 조회/로그인 제한     | database/entities/user.entity.ts, grpc/user-queries.service.ts | auth, finalization-grpc                          | ACTIVE/SUSPENDED/WITHDRAWAL_PENDING/WITHDRAWN. 제재 명령은 없음 ①/④/⑤                                   |
-| 탈퇴 요청·30일 복구            | users/users.service.ts, auth/auth.service.ts                   | auth.integration                                 | 세션 폐기·마감 경합·rollback 검증 ①                                                                     |
-| 최종 탈퇴 scheduler            | withdrawal/withdrawal.scheduler.ts                             | finalization-grpc.integration                    | tombstone·OAuth/관계 정리·skip locked·중복 방지 ①                                                       |
-| User gRPC 3개 RPC              | grpc/\*, contracts/user.proto                                  | service-auth, finalization-grpc                  | ES256 신뢰 키/호출자·RPC 권한, legacy HS256 분기 ①; 실제 호출 서비스 E2E ④                              |
-| Transactional Outbox           | outbox/\*                                                      | outbox.integration, rewards.integration          | 실제 Redis 발행, DB rollback/중복 발행/복구 ①                                                           |
-| Post 9종 Consumer              | rewards/post-event.ts, post-rewards.consumer.ts                | reward-policy, rewards.integration               | 실제 Stream, XREADGROUP/XACK/XAUTOCLAIM, pending, DLQ, 다중 소비 ①                                      |
-| 활동 projection·집계           | rewards/activity.service.ts                                    | rewards.integration                              | eventId 멱등·버전·terminal fence·actor별 집계 ①                                                         |
-| 원장/크레딧·성장 점수          | rewards/reward-engine.ts                                       | rewards.integration                              | grant/revoke·동시성·일관성 점검 ①. 운영 기본 OFF ⑤                                                      |
-| 레벨·칭호 자동 판정            | rewards/reward-policy.ts, reward-engine.ts                     | reward-policy, rewards.integration               | fixture 경계·획득 중복·회수·역순 검증 ①. 실제 기준·seed 없음 ⑤                                          |
-| 성장 REST 3개 route            | rewards/rewards.controller.ts                                  | rewards.integration                              | credits/growth/history, 400/401/404, keyset ①. trusted Gateway 필요 ④                                   |
-| 성장 이벤트 4종                | rewards/reward-engine.ts                                       | rewards.integration                              | 기존 envelope의 원자 생성·실제 Outbox 발행 ①. Notification 소비 없음 ④                                  |
-| 댓글 공감·투표 보상 인터페이스 | rewards/post-event.ts parseFutureRewardInput                   | reward-policy, rewards.integration               | fixture 검증·원장 멱등 처리만 구현. live consumer 미연결 ④                                              |
-| Migration 및 seed              | database/migrations/\*, database/seeds/seed-terms.ts           | 기존+신규 DB integration, 신규 migration up/down | 신규 빈 DB 및 migration rollback 검증 ①. seed 스크립트 실행·기존 운영 데이터 upgrade 검증은 추가 필요 ② |
-| 환경/Docker                    | .env.example, compose.yaml, Dockerfile                         | DB/Redis Docker, typecheck/build                 | 실제 이미지·운영 비밀·배포 rehearsal은 검증 결과 절 참조 ②                                              |
-| 사용자 차단                    | database/entities/user-block.entity.ts                         | 기존 schema 및 탈퇴 정리 회귀만                  | **Entity만 존재. 차단/해제/목록 API·도메인 실행 경로 없음** ④/⑤                                         |
+## 1. 이번 확정 정책의 구현 상태
 
-### 검증 결과 기록
+| 칭호 | 실제 구현 조건 | 현재 자격 회수 / 과거 달성 |
+| --- | --- | --- |
+| 소식통 | 유효 작성·댓글·공감 참여 10회 | 취소·삭제로 10회 미만 또는 비활성 계정이면 회수; 과거 달성 보존 |
+| 리포터 | 서로 다른 본인 댓글 10개가 각각 서로 다른 타인 AGREE 10개 이상 | 기준 충족 댓글이 10개 미만 또는 비활성 계정이면 회수; 최초 달성·최고 단계 보존 |
+| 특파원 | 서로 다른 postId/resultId의 유효 대표 의견 선정 5건 | 게시물/댓글 삭제로 5건 미만 또는 비활성 계정이면 회수; 과거 달성 보존 |
+| 천리안 | 각 행정동에서 최근 30일 실적이 있는 ACTIVE 특파원 N>=10 중 floor(N/10) | 지역 순위 이탈·특파원 자격 상실·계정 비활성·지역 귀속 철회 등으로 지역별 회수. 다른 지역 자격과 특파원 자격은 별도 유지 |
 
-기존 201개 회귀 테스트는 실제 PostgreSQL/Redis를 실행한 상태에서 전부 통과했다.
-신규 검증은 `test/reward-policy.test.ts`(순수 함수)와
-`test/rewards.integration.test.ts`(실제 PostgreSQL, Redis, Nest HTTP, Outbox)를 구분한다.
-최종 검증: **11개 파일, 272개 테스트 전부 통과**(기존 201개 + 신규 71개).
-신규 71개는 정책·입력 단위 35개와 실제 PostgreSQL/Redis 통합 36개다.
-DB commit 실패 후 미ACK/재처리, ACK 실패 후 중복 방지, DLQ 쓰기 실패,
-여러 worker, 역순 회수/유지, bigint 안전 정수 초과, 원장 불일치 탐지도 포함한다.
+사용자 추가 답변에 따라 자연 만료된 게시물의 실적은 유지한다. 현재 자격과 과거 달성 이력을 구별했다. 칭호는 각 조건을 독립 판정하며, 특파원에 리포터 보유를 추가 필수 조건으로 붙이지 않았다.
 
-- Windows Node 22.17.0: `typecheck`, 전체 `test`, `build` 통과. 현재 GitHub test workflow도 Node 22를 사용한다.
-- Node 24.22.0 Docker: 기존 Dockerfile의 `pnpm install --frozen-lockfile`, production build 통과.
-  완성된 이미지에서 임시 PostgreSQL DB의 전체 migration과 **AppModule 실제 부팅**,
-  정책 미설정의 0 credits/null level 응답을 확인했다. fixture 비밀만 사용했으며 임시 DB/key를 정리했다.
-- 루트 `npm run format` 실행 완료. 타 서비스에 생긴 format diff는 복원했다.
-  신규 문서도 Prettier로 정리했다. dependency/lockfile 변경은 없다.
-- Linux Node 24 컨테이너에서 실제 `scripts/ci.mjs detect|format`을 기준 dev SHA에 대해 실행했다.
-  PR 전체 diff 포맷 통과, matrix는 `services/user-service` 한 개뿐이다. `git diff --check`도 통과했다.
-  GitHub 원격 CI 실행과 전체 서비스 E2E는 이번 로컬 검증에 포함하지 않는다.
+소식통 참여는 게시물/댓글 고유 ID와 사용자별 공감 대상 ID로 집계한다. 공감 종류를 바꾸거나 취소·재공감해도 같은 대상의 참여를 중복 계산하지 않는다. PostParticipantJoined/Left는 기존 상태 projection으로 보존하되 칭호 카운터에 더하지 않아 댓글과 동반되는 입장 이벤트를 이중 계산하지 않는다.
 
-## B. User 자체 잔여 작업
+Post README/상태 문서, CommentReactionType enum과 PR #72 wire 계약에서 AGREE=맞아요를 대조했다. HELPFUL/DIFFERENT와 자기 공감은 리포터에 합산하지 않는다. 단일 댓글의 AGREE 100개는 리포터의 조건 충족 댓글 1개다.
 
-| 작업/미구현 이유                                                       | 구현 대상 / DB·API 변경                                                                  | 난이도·우선순위              | 테스트 완료 조건                                                          |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------- |
-| 일일 지급 한도·반복 공감 제한: 기준·시간대·대상 미확정                 | reward-policy, reward-engine; 원자적 일별 quota 테이블/unique key, 승인된 설정 추가      | 중/P0(활성화 전), ⑤          | 날짜 경계·서로 다른 Post 동시 지급·한도 초과·회수 후 quota 복구 기준 검증 |
-| 운영 정책/레벨/칭호 seed: 수치·표시명 승인 없음                        | reward-policy 설정 및 badges seed, 검토된 migration/seed                                 | 중/P0, ⑤                     | 실제 승인 fixture·level 경계·중복 seed·철회 시나리오                      |
-| PENDING_POLICY/CONTEXT/ACCOUNT 전체 재평가 job: 소급 지급 범위 미확정  | activity.service, 별도 관리 CLI/worker; scan cursor/index·replay 감사 정보               | 중/P0 활성화, ③/⑤            | 중단 재개·dry-run·여러 worker·기지급 무변경·정확한 대상 수                |
-| 정책 버전 전환/성장 기준 재산정: 기존 지급은 재가격하지 않음           | reward-engine, version rollout job; history/변경 계획 API 또는 CLI                       | 상/P1, ⑤                     | 정책 변경 중 이벤트 동시 처리·rollback·badge/level 전환 일관성            |
-| 댓글 삭제에 따른 미래 댓글 공감 무효화: 아직 해당 이벤트 없음          | post-event, activity.service; commentId projection/FK 또는 인덱스                        | 중/P0 댓글 공감 활성화 전, ④ | delete 먼저/나중·자기 공감·수정 이벤트·동시성 결과 동일                   |
-| 투표 결과 정정/취소·동률·여러 승자: 계약 없음                          | future adapter, activity.service, ledger unique identity 보강 가능                       | 상/P0 투표 활성화 전, ④/⑤    | result replay/새 버전/취소·다중 winner·삭제 경합                          |
-| 사용자 차단 실행 경로: Entity 외 사양 없음                             | users 하위 block service/controller/DTO; 기존 user_blocks 재사용, 목록 인덱스 검토       | 중/P1, ④/⑤                   | 자기 차단·차단 중복·해제·목록·차단 전후 Post/알림/검색 노출의 공통 E2E    |
-| 계정 제재/해제와 자동 만료: 상태 필드 외 명령 없음                     | moderation adapter, users status transition service; decision inbox·version·audit        | 상/P0 운영, ④/⑤              | 명령 인증·중복/역순·중복 복구·세션 폐기 실패·예약 해제 경합               |
-| REST 계정 상태별 인가: 기존 GET/PATCH에 별도 제한 없음                 | 공통 authorization guard + 기존/신규 controller; 승인된 상태별 매트릭스                  | 중/P0 운영, ④/⑤              | SUSPENDED/탈퇴 중/최종 탈퇴의 read/write/복구 예외 검증                   |
-| OAuth state/PKCE 책임·실 provider E2E: 현재 code exchange만 있음       | auth 계약 및 frontend callback/Gateway 연동; state/codeVerifier 필요성 합의              | 중/P0 운영, ④                | CSRF/state 불일치·code 재사용·redirect 불일치·실제 Kakao staging 로그인   |
-| 이벤트 보존·원장/활동 개인정보 처리: 보존 기준 미확정                  | withdrawal scheduler, ledger/inbox/outbox purge job; anonymization/retention column 검토 | 상/P0 운영, ⑤                | 30일 복구 내 보존·최종 탈퇴 후 승인된 익명화·재처리 멱등성 유지           |
-| 전용 모니터링·readiness·재처리 runbook: 현재 liveness와 경고 로그 중심 | health, consumer/outbox metric export, 내부 reconcile 실행 CLI                           | 중/P1, ③                     | lag/PEL/DLQ/outbox 지연·DB/Redis 장애 경보 및 실제 복구 drill             |
-| 큰 Post의 재평가 비용: 현재 Post의 활동 전체를 한 transaction에서 평가 | activity.service; 변경 대상만 평가/terminal chunk job 및 fence 보강                      | 중/P1 규모 검증, ③           | 큰 fanout 부하에서 transaction timeout·순서/누락·lock 대기 측정           |
-| PostgreSQL 운영 upgrade/rollback rehearsal·backup                      | migration runbook, staging DB                                                            | 중/P0 배포, ③                | 기존 데이터 보존·신구 버전 공존·FK/index 검증·복원 drill                  |
-| legacy 서비스 JWT 제거·키 회전/전송 보안                               | grpc/service-auth, config 및 deploy secret 설정                                          | 중/P0 운영, ④                | 호출자 ES256 전환 확인·미허용 alg/issuer 차단·구키 제거·내부 TLS 확인     |
+## 2. 기존 방식에서 바뀐 점과 스위치
 
-독립적으로 확정된 핵심 구현은 이번 변경에 포함했다. 위 ③ 중 운영 수집 시스템/트래픽 목표/
-배포 DB 등 저장소 밖의 환경이 필요한 작업은 검증 조건 없이 임의 구성하지 않았다.
-개인정보 파기·차단·제재 규칙도 추측으로 추가하지 않았다.
+- 공식 네 칭호의 점수 임계값 판정을 제거하고 실제 활동 지표를 계산하는 TitleService로 분리했다. 임의 code의 기존 테스트/레거시 badge 규칙과 credit/growth 계산은 보존했다.
+- 기존 Consumer/Inbox/Projection/원장/Growth/Outbox 및 멱등성·역순 방어를 재사용했다. UserRewardEvent emitter를 공유하여 기존 envelope를 유지했다.
+- 소식통/리포터/특파원은 credit 지급 OFF여도 평가·부여·회수한다.
+- `USER_TITLES_ENABLED=true`가 기본이며 명시적 false만 평가를 중단한다.
+- `USER_REGIONAL_RANKING_ENABLED=true`가 기본이다. 지역 계약 준비 상태는 별도 검증한다.
+- `USER_TITLE_REGION_CONTRACT=none`이 기본이며 현재 실제 지역 수신은 불가하다. `post-region-v1`은 제안 생산자가 구현·검증된 뒤에만 설정한다.
+- `USER_REWARD_POLICY_JSON`이 없으면 credit/growth 지급은 계속 OFF다. 실제 지급량·일일 한도·레벨 임계값의 새 승인 근거는 없으므로 운영 수치를 발명하지 않았다.
 
-## C. 다른 서비스 요청 사항
+현재 기존 미커밋 작업 트리를 확인·백업한 뒤 진행했다. 다른 브랜치로 이동하거나 reset/rebase하지 않았다. User 테이블에 거주지·선호 지역·소속 지역 필드를 추가하지 않았다. 실제 .env도 변경하지 않았다.
 
-### Post Service
+## 3. 지역별 랭킹·재현성·동시성
 
-| 정확한 요청 / 이유                                          | 계약 / 현재 상태                                                                                                                                                                                                                                                              | Post 구현 후 User 작업 / 완료 조건                                                                                                      |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| 댓글 공감 생성·취소 outbox 발행; 댓글 작성자 보상 식별 필요 | PostCommentReactionCreated/Removed, envelope eventId/eventType/schemaVersion/producer/aggregateId/correlationId/occurredAt, commentReaction{postId,commentId,userId,type,createdAt,removedAt?}, commentAuthorId, activityVersion, postAuthorId, postCategory. **현재 미발행** | adapter→parseFutureRewardInput→record 연결, comment terminal projection. 실제 Post mutation→Stream→User 원장 E2E 및 역순/자기 공감 검증 |
-| 투표 확정 결과 outbox; 승리자/회차 멱등 식별 필요           | 제안 PostVoteResultFinalized, voteId/resultId/resultVersion/postId/finalizedAt/winners[{commentId,authorId}], 동률·정정/취소 의미. **현재 HTTP 후보 투표만 있고 결과 이벤트 없음**                                                                                            | winner별 normalize 및 불변 key 매핑; 정정 adapter; 동일 result 재발행 무지급·승리자만 지급 E2E                                          |
-| 이벤트 원자성/보존·누락 replay 범위 합의                    | 현재 9종은 Mongo outbox. 구 v1은 create context 선택적. stream retention/backfill 계약 필요                                                                                                                                                                                   | 현재 parser 유지, legacy context 해소·시점 watermark 합의. 삭제/만료·late event·재시작 E2E                                              |
+지역은 대표 의견으로 선정된 **게시물의 행정동 H snapshot**이다. 현재 사용자 GPS/프로필 이동으로 과거 실적을 재귀속하지 않는다. 한 사용자가 여러 행정동 천리안을 동시에 보유할 수 있다.
 
-Post DB 직접 조회/HTTP polling은 해결책으로 사용하지 않는다. 구체적 제안과 연결 지점은
-[REWARDS_CONTRACT.md](REWARDS_CONTRACT.md)의 마지막 입력 계약 절을 따른다.
+KST 자정 T의 `[T-30일,T)`에서 `vote.closedAt` 기준 대표 의견 1건=1점이다. 득표수 가중치는 없다. 유효 선정 5건으로 특파원 자격이 있고 해당 지역 창에 최소1건 있는 ACTIVE 사용자만 경쟁 인원이다. 5/9명→0명, 10/19명→1명, 20명→2명, 50명→5명, 100명→10명을 선정한다.
 
-### HTTP Gateway
+동률은 기존 팀 합의가 확인되지 않아 **점수 DESC → 마지막 선정 시각 ASC → userId ASC** 초안을 적용했다. 같은 점수를 먼저 달성한 사용자를 우선하며, 같은 시각까지 동률이면 작은 ID가 우선한다. 이때 오래된 계정에 유리할 수 있다는 영향을 명시했다.
 
-- 요청: User Access JWT의 signature/허용 algorithm/iss/aud/exp 및 sub/sid 검증,
-  외부 `x-user-id`, `x-session-id` 제거 후 검증 claim으로 덮어쓰기. 인증되지 않은 보호 route 401.
-  `/api/v1/terms` 공개 프록시 경로도 추가해야 한다. 현재 route 목록은 auth/users만 User로 전달한다.
-- 이유: 현재 Gateway는 개발 프록시이며 README가 JWT 연기를 명시한다. User REST는 헤더의
-  형식만 확인하므로 현재 외부 헤더를 신뢰한 운영은 불가능하다.
-- 전달 계약: canonical decimal x-user-id=sub, x-session-id=sid, x-request-id는 Gateway 생성 ID.
-  신규 credits/growth/history는 기존 `/api/v1/users` proxy 범위 안이다.
-- User 추가 작업: 인증 context/계정 상태 인가 합의, 필요 시 내부 요청 인증 guard.
-  현재의 S2S gRPC JWT 검증은 사용자 Access JWT 검증을 대신하지 않는다.
-- 완료: 위조 헤더/JWT 만료·서명·aud 오류 E2E 거부, 정상 프로필/보상 조회·logout 성공,
-  외부에서 User 직접 접근 불가, 공개 약관 조회 성공.
+계산 결과는 날짜·입력 revision·정책·창·경쟁/선정 인원과 개별 resultId/postId/commentId/closedAt/regionVersion 근거를 불변 snapshot으로 저장한다. 새 revision으로 정정할 때도 과거 snapshot을 덮어쓰지 않는다. User에 없는 전체 원본 과거 변경 이력을 복원했다고 주장하지 않는다.
 
-### Moderation
+DB advisory lock·지역 job lock·정렬된 사용자 row lock과 트랜잭션으로 중복 scheduler와 지급/회수를 보호한다. 동일 결과 재평가는 이벤트를 추가하지 않는다. 1초 주기 최대20개 지역 배치이며 오래된 checkpoint부터 처리하여 지역 starvation을 방지한다. 재시작 시 최신 한국 자정 창으로 catch-up한다. 지연 이벤트·계정 상태·삭제·정정은 재계산을 요청하며 과거 날짜 작업이 최신 지급 상태를 덮어쓰는 것은 거부한다.
 
-- 요청: 사용자 제재 부여/해제의 소유권과 인증된 명령 또는 이벤트 확정.
-  현재 Moderation은 Post lifecycle/삭제를 다루며 User 상태 전환 consumer는 없다.
-- 제안 계약: `UserSanctionApplied` / `UserSanctionRevoked` 또는 동일 의미의 인증 RPC.
-  decisionId/eventId, schemaVersion, producer, correlationId, occurredAt,
-  userId, sanctionVersion, action, reasonCode, effectiveAt, suspendedUntil(nullable),
-  소급 보상 무효화 여부 및 대상 sourceEvent/result ID. 최종 이름은 합의 필요.
-- 이유: SUSPENDED 필드만으로 행위자·기간·순서·복구·재지급 근거를 알 수 없다.
-- User 후속: decision inbox/version fence, 상태 변경·세션 정리, 해제 scheduler,
-  승인된 보상 hold/revoke 처리. 현재 보상 엔진은 non-ACTIVE 지급을 보류한다.
-- 완료: 인증된 결정만 반영, 중복/역순 무시, 해제 경합/세션 실패 복구,
-  제재 대상의 기존·신규 보상 결과가 승인 정책과 일치.
+활동 평가에서는 해당 입력으로 지표가 바뀌는 사용자만 칭호를 재평가하여, 공감이 많은 댓글에서 무관한 참여자를 매번 평가하던 비용을 줄였다. 집계/랭킹 SQL·부분 인덱스·지역 배치도 추가했다. 대규모 운영 부하/HA 검증은 아직 수행하지 않았으며 정책 전역 fence의 직렬화 비용은 운영 전 측정 대상이다.
 
-### Notification
+## 4. 지역 정보 출처와 실제 외부 연동 상태
 
-- 요청: `user:events` 전용 consumer group 및 4종 성장 이벤트 parser/멱등 처리/알림 저장.
-  현재 User 성장 이벤트 소비는 없다. 기존 Post 소비 경로가 이를 대체하지 않는다.
-- 필드: User envelope의 type/version/target.id/correlationId/occurredAt/eventId 및 payload
-  userId/sourceEventId/policyVersion; credit은 ledgerId/delta/credits/growthScore,
-  level은 previousLevel/level/growthScore, badge는 badgeId.
-- 이유: User가 보상 결과를 소유하며 알림은 Notification 책임이다.
-- User 후속: 합의된 스키마 fixture 공유·staging E2E. 현재 이벤트 발행은 완료되어 있다.
-- 완료: 동일 eventId 재전송 알림 1개, level 최초 산정·강등·credit 회수의 표시/억제 규칙
-  확인, 비활성 policy에서는 거짓 성장 알림 없음, 순서 역전은 REST 최신 값 또는 ledgerId 처리.
+| 항목 | 확인 결과 |
+| --- | --- |
+| Post 원본 지역 | PostRecord/PostSchema에 선택적 region `{code,name}` 존재 |
+| Post의 지역 저장 | POST_REGION_ENABLED=true에서 기존 Map ResolveRegion 후 저장 |
+| Map ResolveRegion | 좌표→행정동 H. Post ES256 호출자 전용이며 User의 postId 조회가 아님 |
+| Post 기존 지역/랭킹 REST | 현재 사용자 좌표 조회 또는 다른 정책의 집계. 원본 선정 게시물 지역 수신 계약으로 재사용 불가 |
+| PostVoteWon | 확인한 PR #72 계약에 행정동 없음 |
+| User→Post/Map 인증 조회 | 선정 postId→보존 행정동을 User가 조회할 기존 계약 없음 |
 
-### Frontend
+PR #72는 조사 시 open/unmerged이며 SHA `70f35ac2142da954a07417a4355d2a2106880200`을 확인했다. 댓글 공감/선정의 실제 운영 공급도 이 Post 생산자 배포에 의존한다.
 
-- 요청: Gateway 인증을 사용해 credits/growth/history/badges를 연결하고 disabled/null 상태 표시.
-  본 작업에서는 UI 구현을 변경하지 않았다.
-- 응답: credits/growthScore/delta/id/badgeId는 string, level은 number|null,
-  rewardsEnabled boolean, levelFloor/nextLevelScore string|null, history는 items/nextCursor.
-  경로·예시는 REWARDS_CONTRACT 참고. 기존 프로필·온보딩·약관·탈퇴 API를 유지한다.
-- 이유: 0 잔액과 정책 미확정을 구분하고 JS number 변환으로 bigint 정밀도를 잃지 않아야 한다.
-- User 후속: 최종 화면 요구와 오류·페이지네이션 fixture 검증. API 자체는 구현 완료.
-- 완료: 기본 OFF 화면에서 가짜 level/예상 지급량 없음, 실제 token으로 본인만 조회,
-  cursor 추가 로딩·빈 이력·최고 level·획득/회수 칭호·400/401/404 상태 UI 검증.
+**최소 추가 연동은 PostRegionResolved 이벤트 한 종류**다. postId별 H 행정동 code/name/version과 postAuthorId를 기존 Post envelope로 발행하고, 신규/과거 글 backfill·정정·명시적 철회를 전달해야 한다. 선택적으로 PostVoteWon 최상위 postRegion을 추가해 지연을 줄일 수 있다. User 수신·검증·멱등 저장·역순 방어는 구현했지만 Post 생산자는 이번에 만들지 않았다. 상세 JSON 및 nullable 철회 의미는 정책 문서에 있다.
 
-## D. 정책 결정 요청
+선정 게시물 지역이 없거나 과거 선정 시각을 확인하지 못하면 임의 추정하지 않고 CONTRACT_UNAVAILABLE/INCOMPLETE_SOURCE_DATA를 노출한다. 해당 데이터가 어느 지역에 속할지 알 수 없으므로 불완전성은 보수적으로 지역 신규 선정을 억제한다. 기본 none은 유지하면서 세 칭호는 계속 동작한다.
 
-확정: 댓글 투표 승리자, 타인의 긍정적 게시글/댓글 공감을 받은 작성자가 대상이다.
-글/댓글 작성 자체, 단순 참여, 공감을 누른 행위에는 지급하지 않는다. 자기 공감에는 지급하지 않는다.
-아래는 선택지이며 어느 것도 운영 기본값으로 승인하지 않았다. 전체 보상은 기본 OFF다.
+## 5. DB·Seed·운영 재평가
 
-| 미확정 정책                          | 선택지와 장단점                                                                                                                |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| 투표 승리 지급량                     | 고정(간단·참여 규모 무시), 참여/투표 규모 비례(기여 반영·조작/상한 필요)                                                       |
-| 게시글 공감 대상·금액                | HELPFUL 등 일부만(의미 명확·적립 적음), 여러 긍정 종류별 차등(다양성·설명/악용 복잡)                                           |
-| 댓글 공감 대상·금액                  | HELPFUL만 또는 AGREE 포함; 유용성 중심 대 참여 확대의 절충. DIFFERENT 지급 여부 별도 결정                                      |
-| 일일 한도                            | 무제한(단순·악용 위험), 사용자별 일일 cap(통제·시간대/회수 규칙 필요), source별 cap 병행(공정·복잡)                            |
-| 반복 공감                            | actor-target lifetime 1회(왕복 방지·복구 의미 제한), 회수 후 복원(최종 상태 일치·quota 조정 필요), 쿨다운(탄력·기간 추적 필요) |
-| 취소/댓글·게시글 삭제 회수           | 항상 회수(최종 상태 명확·성취감 감소), 유지(단순 UX·삭제 악용), 위반 삭제만(균형·Moderation 근거 필요)                         |
-| 자연 만료                            | 보상 유지(정상 만료에 불이익 없음), 회수(현재 유효 활동만 반영·짧은 콘텐츠 서비스와 충돌 가능)                                 |
-| 성장 점수·레벨 임계값                | credits와 동일 net(정합 단순·강등), lifetime earned 별도(성장 안정·부정행위 회수 예외 필요); 선형/누진 임계값                  |
-| 칭호 이름·등급·회수                  | 누적 점수형(명확), 활동별 업적형(다양·별도 조건 모델 필요); 영구 보유 또는 조건 미달 회수                                      |
-| 계정 제재 시 보상                    | 신규 보류, 기간 내 몰수, 특정 활동만 무효화; 사용자 설명·이의 제기/해제 후 재판정 합의 필요                                    |
-| 부정행위                             | 규칙 기반 cap/중복 제한(예측 가능·우회), Moderation 판정 기반 취소(정확성·지연), 혼합(복잡)                                    |
-| 개인정보/보존                        | 감사 원장 보존+익명화 또는 기한 후 삭제; 법적 근거·기간·복구/멱등성 영향을 운영 담당과 확정                                    |
-| 로그아웃·제재의 Access JWT 즉시 폐기 | TTL까지 허용(현 구현·낮은 비용), 매 요청 session/status 확인(즉시성·Redis/서비스 의존)                                         |
+신규 `1793400000000-ActivateWgoTitles`를 추가했고 기존 migration은 삭제/수정하지 않았다.
 
-## E. 통합·배포 준비 상태
+- user_activities.source_time_verified: 과거 updated_at을 실제 선정 시각으로 오인하지 않는 확인 플래그.
+- reward_title_valid_activities: 삭제·취소 제외 및 자연 만료 유지의 공통 view.
+- user_title_progress: 현재 지표, 계정 상태, 최초 달성 시각 집합, 과거 최고 단계.
+- reward_post_regions/history: 게시물 귀속과 revision별 정정·철회 감사 기록.
+- regional_ranking_state/runs/entries/heads: 영속 checkpoint와 불변 순위·근거.
+- user_regional_badges: 기존 UserBadge의 지역별 상세 보유 상태. 전역 천리안은 활성 지역의 요약.
+- 기존 user_badge_history: nullable region_code/ranking_run_id/reason 추가.
 
-| 항목                  | 상태      | 증거 / 남은 조건                                                                                  |
-| --------------------- | --------- | ------------------------------------------------------------------------------------------------- |
-| Gateway 인증          | 미완료    | JWT 연기, 위조 헤더 제거/내부 노출 차단/E2E 필요                                                  |
-| Post 9종 수신         | 부분 완료 | 실제 Redis worker 통합 완료; 실제 Post 프로세스→User E2E와 구이벤트 replay 합의 필요              |
-| 댓글 공감·투표 이벤트 | 미완료    | 내부 fixture adapter만 있음, producer 없음                                                        |
-| Redis 운영            | 부분 완료 | timeout/reconnect/PEL/DLQ 구현; ACL/TLS/지속성/replication/trim/관측 필요. Cluster 미지원         |
-| PostgreSQL migration  | 부분 완료 | 격리 DB up/down 검증; 운영 backup·기존 데이터 upgrade rehearsal 필요                              |
-| Docker                | 부분 완료 | PostgreSQL 18/Redis 8 컨테이너 통합 검증; production app 배포/네트워크 E2E 별도                   |
-| 환경변수·Secret       | 부분 완료 | 예제만 변경, 사용자 .env 열람/변경 안 함; 실제 secret 주입·회전·Kakao URL 확인 필요               |
-| 서비스 간 E2E         | 미완료    | 실제 DB/Redis integration과 HTTP mock test는 있으나 전체 서비스/실 Kakao 조합 없음                |
-| Backfill              | 미완료    | group 0부터 잔존 Stream replay만 가능, trim 이전 자료 복원/정책 소급 job 없음                     |
-| 장애 복구             | 부분 완료 | receipt/rollback/ACK 실패/claim/reconnect/retry/DLQ 검증; 전체 장애·Redis 데이터 손실 drill 필요  |
-| 운영 모니터링         | 부분 완료 | 경고 로그·내부 reconcile 함수; 지표·dashboard·알림·관리 CLI 없음                                  |
-| 개인정보·보존         | 미완료    | 기존 최종 탈퇴가 프로필/OAuth/관계를 정리. term-consent·신규 활동/원장·정책 이력 보존은 승인 필요 |
+migration에서 기존 네 칭호를 insert-if-absent하므로 별도 seed 누락이 기본 ON 칭호를 막지 않는다. 기존 카탈로그 수동 변경·지급·원장·이력은 보존한다. 새 확정 조건에 맞지 않는 옛 임시 지급은 회수 상태로 전환하되 이력을 삭제하지 않는다.
 
-전체 판정: **User 내부 핵심 구현은 사용 가능한 상태지만, 전체 서비스의 운영 완성은 미완료다.**
-정책 OFF 및 Gateway 인증 미완료가 운영 지급·외부 공개의 선행 차단 조건이다. 근거 없는 완성도 %는 산정하지 않는다.
+과거 투표는 source_time_verified=false로 시작한다. 원본 closedAt/commentId를 확인하는 동일 결과의 **새 eventId replay**로 보충하고 지역 이벤트도 backfill해야 한다. 이미 성공한 같은 eventId를 반복해도 Inbox가 차단하므로 문맥 보충이 되지 않는다. 기존 보상 중복 지급 없이 보충하도록 했다.
 
-## F. 다음 개발 단계
+기존 maintenance는 활동/보유 이력이 있는 사용자만 20명씩 처리하며 첫 세 칭호를 점진 보정한다. 기존 CLI는 read-only 비교/진행 조회와 명시적 apply를 제공한다. 새 migration down은 새 projection/snapshot 메타데이터를 제거하지만 기존 사용자·원장·UserBadge는 보존한다. 운영 down은 원본 replay·backup·코드 rollback을 함께 계획해야 한다.
 
-1. **즉시 — User/운영:** 신규 migration staging rehearsal, metrics/readiness·DLQ 재처리 도구,
-   큰 Post 부하 측정. 완료 기준: 기존 데이터 보존 및 반복 가능한 장애 복구 증거.
-2. **정책 확정 — 제품+User:** 금액/종류·회수·일일/반복 제한·성장/칭호·보존 승인 →
-   quota 및 승인 seed → 정책 버전 전환/보류 활동 재평가 job. 완료 기준: 실제 승인 fixture 전체 통과,
-   dry-run과 지급 대상·금액 검토 후 enabled 전환.
-3. **외부 계약 — Post/Gateway/Moderation:** 댓글/투표 outbox·정정 계약, JWT 신뢰 경계,
-   제재 명령·보상 무효화 계약 → User adapters/인가/계정 전환 구현.
-   완료 기준: 타 서비스 mutation부터 User DB/원장까지 중복·역순·인증 E2E 통과.
-4. **후속 소비 — Notification/Frontend:** 성장 이벤트 멱등 알림·실제 API UI 연결.
-   완료 기준: 재전송 알림 1개, disabled/null/cursor/error 화면 및 탈퇴·복구 동작 확인.
-5. **최종 배포 — 전체/운영:** Secret/TLS/네트워크/Redis persistence·retention/backup 설정,
-   데이터 backfill과 정책 소급 범위 승인, canary 및 rollback·복원 drill.
-   완료 기준: 승인된 운영 정책과 개인정보 기준, E2E/부하/장애 지표 충족 후 운영 공개.
+## 6. API·Gateway·Swagger·Notification
 
-PR 생성과 Issue 종료는 사용자 승인 후 별도로 수행한다. 이번 로컬 커밋은 배포나 보상 정책 승인을 의미하지 않는다.
+새 공개 endpoint 없이 기존 `/me/growth`, `/me/credits` 응답에 titles를 추가했다. 기존 `/me/badges`와 `/me/badges/history`를 재사용했다.
+
+현재/최고 과거 단계, 단계별 조건/진행/잔여/최초 달성, 다음 칭호, 지역별 점수/순위/경쟁 인원/선정 인원/보유/자격/준비 상태/컷/추가 실적을 제공한다. 천리안은 절대 임계값이 아니므로 일반 remaining=null이며 지역별 snapshot 컷을 따로 제공한다. upToDate로 미반영 날짜/revision을 구분한다. 이력에는 지역·계산 run·사유를 추가했다.
+
+Gateway 최신 ES256 인증·신뢰된 신원 전달을 유지했다. 새 route가 없어 이번 정책 추가로 Gateway 허용 목록을 확대하지 않았다. User Swagger 중첩 schema와 실제 Gateway 병합·호출을 검증했다.
+
+기존 user:events envelope/version:1/Outbox와 네 타입은 유지했다. 공식 칭호에는 badgeCode/badgeName/stage, 지역 칭호에는 regionCode/regionName/rank/score/competitors/slots/rankingDate/windowStart/windowEnd/rankingRunId/reason을 추가했다. badgeId와 기존 필드를 제거하지 않았다. 현재 GetBadge gRPC는 존재하지 않으므로 없는 API를 가정하지 않고 출력 메타데이터로 Notification 표시를 지원한다.
+
+한 상태 전환당 한 Outbox row이며 반복 평가/같은 snapshot으로 중복 생성하지 않는다. 물리 전송은 기존 at-least-once이므로 Notification은 별도 group/Inbox로 eventId 중복 제거가 필요하다. Notification Consumer/FCM은 이번 범위 밖이며 수정하지 않았다.
+
+## 7. 실제 검증
+
+Node 24.13.0/pnpm 10.33.0, 새 격리 PostgreSQL18/Redis8(AOF always, noeviction)을 사용했다. 기존 DB/Redis/consumer group을 초기화하지 않았다. 테스트 소유 임시 DB·키만 정리했다.
+
+| 실행 | 결과 |
+| --- | --- |
+| User 전체 `RUN_REWARDS_GATEWAY_INTEGRATION=1 pnpm test` | **18 files, 388 passed / 2 skipped** |
+| 최종 보상 suite + 실제 Redis restart + 실제 HTTP Gateway | **69 passed / 0 skipped** (전체 User와 중복 포함) |
+| HTTP Gateway 전체 pnpm test | **66 passed / 2 skipped**, 4 files passed / 1 file skipped |
+| User / Gateway typecheck | 통과 |
+| User / Gateway production build | 통과 |
+| root npm run format | 완료, 무관한 파일 포맷 변경은 원래 바이트로 복원 |
+| 변경 TS/JSON Prettier check / git diff --check | 통과 |
+| 빌드된 전체 AppModule | 실제 PG/Redis/gRPC/HTTP 시작·종료, title ON/credit OFF, 소식통 자동 지급, 인증 growth·Swagger 통과 |
+| 빌드된 Seed 두 번 / read-only·apply CLI | 임시 DB에서 통과 |
+| 전체 migration up/down/up | 임시 DB에서 통과 |
+| 기존 사용자·원장·지급 포함 migration 회귀 | 원래 데이터 보존, 신규 projection down/up, Seed 재실행 통과 |
+
+새 title-policy 단위 테스트 12개와 확정 칭호/지역 PostgreSQL·Redis 통합 테스트 29개를 포함한다. 소식통 9/10 및 중계 중복·취소, 리포터 9/10 댓글·한 댓글100공감·종류/자기 공감·취소/재공감/삭제, 특파원4/5·중복 결과·역순·만료 유지, 지역 N 경계 7종·동률·30일 경계·재진입·다중 지역·중복 scheduler·장애 commit rollback·계정 상태3종·지역 정정/철회/역순·누락 준비 상태 등을 검증했다.
+
+기존 Post 이벤트 전체, 원장·한도·재지급·정책 버전·Outbox 네 타입·ACK/XAUTOCLAIM/DLQ, 사용자 인증/프로필/약관/차단/탈퇴/gRPC 회귀를 유지했다. 옛 임시 점수 기반 WGO 칭호 테스트는 generic fixture code로 보존하고 공식 WGO 조건은 새 테스트로 검증했다.
+
+첫 병렬 전체 실행에서는 **기존 탈퇴 scheduler↔Kakao 재가입 경합 테스트가 한 번 401/201 타이밍 차이로 실패**했다. 해당 소스·테스트·fixture는 이번 정책에서 변경하지 않았다. 독립 실행 25개와 최종 동일 기본 병렬 전체 실행은 통과했다. 이 간헐성은 숨기거나 검증을 완화하지 않았으며 기존 경합의 후속 안정화 항목이다.
+
+User skip은 기존 HTTP+WS 교차 인증 opt-in 1개와 Redis restart opt-in 1개이며 restart는 별도 실행했다. 새 실제 HTTP Gateway rewards 호출은 활성화했다. Gateway skip2는 기존 localhost:6381 location rate-limit opt-in이다. 실제 Kakao 제공자 HTTP는 fixture로 대체했으며 Post/Map/Notification 실제 프로세스 E2E나 운영 Aurora/HA 부하 검증을 완료했다고 주장하지 않는다. 별도 rewards suite 수는 전체 User와 중복이다.
+
+## 8. 운영에서 활성화 가능한 것과 남은 것
+
+**User 코드 준비 완료:** migration 적용 후 세 확정 칭호 자동 평가/지급/회수, 현재/과거 달성·진행 조회, Seed·인증·Swagger·Outbox. 신뢰할 원본 활동 이벤트가 공급되어야 실제 운영 실적이 쌓인다. 실제 배포는 이번에 하지 않았다.
+
+**개발·계약 fixture로 검증:** 천리안 지역별 30일 계산·snapshot·다중 지역 지급/회수, PostRegionResolved 및 선택적 postRegion 수신, 원본 시각/귀속 보충. User는 지역 추정·사용자 지역 설정을 하지 않는다.
+
+**외부 미완료:** Post PR #72 생산자 롤아웃·행정동 이벤트 생산/과거 글 backfill/정정·철회 계약, 실제 Post→User E2E, Notification 소비/FCM, 운영 Redis/Aurora 장애·부하 검증. 크레딧 수치 승인과 동률 초안의 팀 검토도 필요하다.
+
+배포 전 DB backup 및 migration 순서, 옛 credit JSON의 임시 칭호 규칙 제거와 버전 변경, source timestamp/region backfill·완전성 지표, 최종 동률 규칙, 프런트의 User 칭호 단일 기준, Gateway docs artifact 갱신, Notification eventId 중복 제거를 확인해야 한다. 기존 Post의 즉석 등급/지역 랭킹은 이 확정 정책과 다르며 후속 정리가 필요하다.
+
+## 9. 누적 로컬 변경 파일
+
+아래는 이전 로컬 작업을 포함한 현재 작업 트리 전체 목록이다. Gateway의 4개 보상 경로 허용과 관련 테스트는 이전 작업을 보존한 것이며 이번 정책은 신규 경로를 추가하지 않았다.
+
+- `gateways/http-gateway/src/user-auth.ts`
+- `gateways/http-gateway/test/openapi.test.ts`
+- `gateways/http-gateway/test/user-auth.test.ts`
+- `services/user-service/.env.example`
+- `services/user-service/README.md`
+- `services/user-service/REWARDS_CONTRACT.md`
+- `services/user-service/USER_SERVICE_COMPLETION_REPORT.md`
+- `services/user-service/WGO_TITLE_POLICY.md`
+- `services/user-service/package.json`
+- `services/user-service/src/config/configuration.ts`
+- `services/user-service/src/database/data-source.ts`
+- `services/user-service/src/database/entities/reward.entity.ts`
+- `services/user-service/src/database/migrations/1793360000000-CompleteActivityRewards.ts`
+- `services/user-service/src/database/migrations/1793400000000-ActivateWgoTitles.ts`
+- `services/user-service/src/database/seeds/seed-badges.ts`
+- `services/user-service/src/http-auth/gateway-auth.guard.ts`
+- `services/user-service/src/rewards/activity.service.ts`
+- `services/user-service/src/rewards/badge-catalog.ts`
+- `services/user-service/src/rewards/fixtures/development-policy.json`
+- `services/user-service/src/rewards/post-event.ts`
+- `services/user-service/src/rewards/post-rewards.consumer.ts`
+- `services/user-service/src/rewards/reconcile.ts`
+- `services/user-service/src/rewards/regional-ranking.worker.ts`
+- `services/user-service/src/rewards/reward-engine.ts`
+- `services/user-service/src/rewards/reward-events.ts`
+- `services/user-service/src/rewards/reward-maintenance.worker.ts`
+- `services/user-service/src/rewards/reward-policy.ts`
+- `services/user-service/src/rewards/reward-response.dto.ts`
+- `services/user-service/src/rewards/rewards.controller.ts`
+- `services/user-service/src/rewards/rewards.module.ts`
+- `services/user-service/src/rewards/rewards.openapi.ts`
+- `services/user-service/src/rewards/title-policy.ts`
+- `services/user-service/src/rewards/title.service.ts`
+- `services/user-service/test/gateway-auth.test.ts`
+- `services/user-service/test/openapi.test.ts`
+- `services/user-service/test/reward-policy.test.ts`
+- `services/user-service/test/rewards.integration.test.ts`
+- `services/user-service/test/title-policy.test.ts`
+- `services/user-service/test/wgo-titles.integration.test.ts`
+
+다른 서비스 비즈니스 로직 변경 없음. 사용자 설정 지역 추가 없음. 현재 브랜치에서 로컬 변경으로 유지한다.

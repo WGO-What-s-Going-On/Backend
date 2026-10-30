@@ -28,6 +28,10 @@ export const userOperations: Record<string, 'public' | 'user'> = {
   'GET /api/v1/users/{userId}/profile-image/url': 'user',
   'POST /api/v1/users/me/term-consents': 'user',
   'GET /api/v1/users/me/badges': 'user',
+  'GET /api/v1/users/me/credits': 'user',
+  'GET /api/v1/users/me/growth': 'user',
+  'GET /api/v1/users/me/credits/history': 'user',
+  'GET /api/v1/users/me/badges/history': 'user',
   'POST /api/v1/users/me/withdrawal': 'user',
 };
 

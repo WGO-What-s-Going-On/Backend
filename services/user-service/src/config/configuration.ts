@@ -1,4 +1,5 @@
 import { profileImageConfig } from '../users/profile-image/profile-image.config.js';
+import { loadTitleSettings } from '../rewards/title-policy.js';
 import { databaseTls } from '../database/tls.js';
 import { databasePassword } from '../database/auth.js';
 
@@ -56,6 +57,7 @@ export function configuration() {
     },
     rewards: {
       policy: process.env.USER_REWARD_POLICY_JSON,
+      regionContract: loadTitleSettings().regionContract,
       pollIntervalMs: positiveInteger(
         process.env.REWARDS_POLL_INTERVAL_MS,
         1000,
