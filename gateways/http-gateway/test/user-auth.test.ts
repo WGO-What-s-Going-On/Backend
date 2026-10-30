@@ -46,6 +46,8 @@ async function setup(configured = true, service: ServiceName = 'user') {
       lifetime: payload.exp! - payload.iat!,
       kid: protectedHeader.kid,
       path: request.url,
+      method: request.method,
+      body: request.body ?? null,
     };
   });
   const url = await upstream.listen({ host: '127.0.0.1', port: 0 });
@@ -82,6 +84,82 @@ function access(overrides: Record<string, unknown> = {}, key = secret) {
     .sign(key);
 }
 describe('User route authentication', () => {
+  it.each([
+    ['POST', '/api/v1/users/me/blocks', { blockedUserId: '123' }],
+    ['GET', '/api/v1/users/me/blocks?limit=10&cursor=opaque', undefined],
+    ['DELETE', '/api/v1/users/me/blocks/123', undefined],
+    ['DELETE', '/api/v1/users/me/blocks/9007199254740991', undefined],
+    ['PUT', '/api/v1/users/me/blocks', { userId: '123' }],
+    ['DELETE', '/api/v1/users/me/blocks', { userId: '123' }],
+  ] as const)(
+    'forwards authenticated block operation %s %s',
+    async (method, url, payload) => {
+      const app = await setup();
+      const response = await app.inject({
+        method,
+        url,
+        ...(payload ? { payload } : {}),
+        headers: {
+          authorization: `Bearer ${await access()}`,
+          'x-user-id': '999',
+          'x-session-id': 'forged',
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        method,
+        path: url,
+        body: payload ?? null,
+        userId: '42',
+        sessionId: sid,
+        signedUserId: null,
+      });
+      expect(
+        (await app.inject({ method, url, ...(payload ? { payload } : {}) }))
+          .statusCode,
+      ).toBe(401);
+    },
+  );
+  it.each([
+    [
+      'POST',
+      '/api/v1/moderation/reports',
+      {
+        targetType: 'COMMENT',
+        postId: 'post-1',
+        commentId: 'comment-1',
+        reason: 'SPAM',
+        description: 'Duplicate content',
+      },
+    ],
+    ['DELETE', '/api/v1/moderation/reports/report_123', undefined],
+  ] as const)(
+    'forwards authenticated report operation %s %s',
+    async (method, url, payload) => {
+      const app = await setup(true, 'moderation');
+      const response = await app.inject({
+        method,
+        url,
+        ...(payload ? { payload } : {}),
+        headers: {
+          authorization: `Bearer ${await access()}`,
+          'x-user-id': '999',
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        method,
+        path: url,
+        body: payload ?? null,
+        userId: '42',
+        signedUserId: '42',
+      });
+      expect(
+        (await app.inject({ method, url, ...(payload ? { payload } : {}) }))
+          .statusCode,
+      ).toBe(401);
+    },
+  );
   it.each([
     ['post', 'posts'],
     ['map', 'location'],
@@ -223,6 +301,13 @@ describe('User route authentication', () => {
     'DELETE /api/v1/users/me',
     'GET /api/v1/users/new',
     'GET /api/v1/users/me/',
+    'GET /api/v1/users/me/blocks/123',
+    'POST /api/v1/users/me/blocks/123',
+    'DELETE /api/v1/users/me/blocks/0',
+    'DELETE /api/v1/users/me/blocks/01',
+    'DELETE /api/v1/users/me/blocks/9007199254740992',
+    'DELETE /api/v1/users/me/blocks/123/extra',
+    'DELETE /api/v1/users/me/blocks/{blockedUserId}',
   ])('does not implicitly expose %s', async (operation) => {
     const app = await setup();
     const [method, url] = operation.split(' ');

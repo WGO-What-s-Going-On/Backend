@@ -1,6 +1,6 @@
 # WGO HTTP Gateway
 
-HTTP gateway built with Fastify and TypeScript, with authenticated User REST routing.
+HTTP gateway built with Fastify and TypeScript, with authenticated REST routing and integrated Swagger.
 
 ## Prerequisites
 
@@ -69,17 +69,17 @@ reached through `host.docker.internal`.
 - Upstream connection pooling, timeouts, and GET/HEAD retry
 - Gateway-owned error responses
 
-User REST routes verify HS256 user Access JWTs. Other service authentication migrations are separate.
+Protected REST routes verify HS256 user Access JWTs for User, Post, Map, Notification and Moderation.
 Configure `JWT_ACCESS_SECRET` (at least 32 bytes), `JWT_ACCESS_ISSUER`, and `JWT_ACCESS_AUDIENCE`
 to match User Service. Configure `HTTP_GATEWAY_SERVICE_PRIVATE_JWK` with a private P-256 JWK
 including `alg=ES256` and `kid`. User requires the matching public key in
 `USER_HTTP_GATEWAY_TRUSTED_JWKS`, with `iss=wgo-http-gateway`; never distribute the private `d` field.
-The Gateway signs 30-second service tokens targeting only `wgo-user-service`.
-All four Gateway settings absent means User operations return 503; partial/invalid settings fail startup.
+The Gateway signs 30-second service tokens targeting the matched `wgo-<service>-service` audience.
+All four Gateway settings absent means protected operations return 503; partial/invalid settings fail startup.
 There is no identity-header fallback in development or production.
 
 Public clients send `Authorization: Bearer <accessToken>` for profile, consents, badges,
-withdrawal and logout. Login, refresh, nickname availability and terms need no user token.
+withdrawal, logout, blocks, posts, location, notifications and reports. Login, refresh, nickname availability and terms need no user token.
 Every User operation still receives Gateway service authentication. External `X-User-Id` and
 `X-Session-Id` are discarded, including on public operations; protected operations receive only
 verified `sub` and `sid`. Unlisted User methods/paths return 404. Health and dev docs are separate.
@@ -92,7 +92,7 @@ The shared HS256 user secret is temporary compatibility with the existing issuer
 alignment remains WGO-ARCH-03. Logout revokes refresh sessions, not already issued Access JWTs.
 
 
-## 통합 공개 OpenAPI / Swagger (로컬·dev 전용)
+## 통합 공개 OpenAPI / Swagger (로컬·dev·staging)
 
 Gateway 디렉터리에서 실행한다. `NODE_ENV=development`와 `.env`의
 `DOCS_ENABLED=true`로 명시적으로 활성화한다. 기본값은 꺼짐이며
@@ -104,7 +104,7 @@ cd gateways/http-gateway
 cp .env.example .env
 pnpm install
 # .env에서 DOCS_ENABLED=true 설정
-# User, Post, Map, Notification을 각 서비스 README의 절차로 먼저 실행
+# User, Post, Map, Notification, Moderation을 각 서비스 README의 절차로 먼저 실행
 pnpm docs:generate
 pnpm dev
 ```
@@ -113,12 +113,12 @@ pnpm dev
 - 통합 JSON: `http://localhost:8080/docs/openapi.json`
 - 갱신: 계약 또는 Gateway 설정 변경 후 `pnpm docs:generate` 재실행. Gateway 재시작은 필요 없다.
 
-User·Post·Map·Notification이 각각 `/docs/openapi.json`을 제공해야 한다. 기본 포트는
-각각 3001·3002·3003·3004이며 기존 `USER_SERVICE_URL`, `POST_SERVICE_URL`,
-`MAP_SERVICE_URL`, `NOTIFICATION_SERVICE_URL`을 재사용한다. 필요한 MongoDB,
+User·Post·Map·Notification·Moderation이 각각 `/docs/openapi.json`을 제공해야 한다. 기본 포트는
+각각 3001·3002·3003·3004·3005이며 기존 `USER_SERVICE_URL`, `POST_SERVICE_URL`,
+`MAP_SERVICE_URL`, `NOTIFICATION_SERVICE_URL`, `MODERATION_SERVICE_URL`을 재사용한다. 필요한 PostgreSQL, MongoDB,
 Cassandra, Redis 등은 해당 서비스 README를 따른다. Gateway의 기본 rate limit은
 Redis도 필요하며, 로컬에서 비활성화하려면 기존 `RATE_LIMIT_ENABLED=false`를 사용한다.
-Moderation은 아직 OpenAPI 수집 미지원이다. Notification의 알림 조회·읽음 처리·푸시 구독
+Moderation의 신고 생성·취소와 Notification의 알림 조회·읽음 처리·푸시 구독
 operation은 포함하고 health는 제외한다. 구버전의 health 전용 문서도 수집할 수 있으며,
 공개 operation이 없을 때만 `x-services-without-public-operations`로 구분한다.
 Notification 수집 실패도 전체 갱신 실패이며 기존 파일을 보존한다.
@@ -147,12 +147,28 @@ security, link 참조도 갱신한다. 통합 문서는 `servers: [{url: '/'}]`�
 Swagger 자산은 `swagger-ui-dist` 로컬 의존성에서 제공한다. 문서 라우트만 로컬 HTTP용
 CSP를 적용하며, 스크립트·API 요청은 같은 origin으로 제한하고 기존 API 헤더는 유지한다.
 
-User API는 Authorize에 로그인 응답의 사용자 Access JWT를 입력한다. 내부 신원 헤더와
+보호된 API는 Authorize에 로그인 응답의 사용자 Access JWT를 입력한다. 내부 신원 헤더와
 서비스 JWT는 공개 Swagger 입력에서 제거된다. 로그인·Refresh·약관·닉네임 확인은
-사용자 Bearer가 필요 없다. Post·Map 등 다른 서비스의 인증 정책과 운영 차단은
-기존 동작을 따른다. Gateway 본문 제한, 상류 오류·타임아웃, 설정된 IP rate limit도
+사용자 Bearer가 필요 없다. 차단·신고에도 동일한 사용자 Access JWT를 사용한다.
+Gateway 본문 제한, 상류 오류·타임아웃, 설정된 IP rate limit도
 통합 문서에 반영한다. 이미 서비스가 사용하는 오류 상태 코드는 원본 응답을 유지하고
 설명 및 `x-gateway-response`로 추가 Gateway 오류 모양을 기록한다.
+
+통합 문서에 포함되는 차단·신고 API는 다음과 같다. 본문과 응답 스키마는 각 서비스 문서를
+그대로 사용하며, Gateway는 사용자 인증 후 요청을 전달한다.
+
+| 메서드 | 경로 | 요청 | 성공 응답 |
+| --- | --- | --- | --- |
+| POST | `/api/v1/users/me/blocks` | 본문 `{blockedUserId}` | 204 |
+| GET | `/api/v1/users/me/blocks` | query `cursor`, `limit` | 200, 차단 목록과 `nextCursor` |
+| DELETE | `/api/v1/users/me/blocks/{blockedUserId}` | 경로 ID | 204 |
+| POST | `/api/v1/moderation/reports` | 아래 신고 본문 | 201, 신고 정보 |
+| DELETE | `/api/v1/moderation/reports/{reportId}` | 경로 ID | 200, 취소된 신고 정보 |
+
+기존 PUT/DELETE `/api/v1/users/me/blocks`의 `{userId}` 본문도 계속 지원한다.
+신고 본문은 `{targetType, postId, commentId?, reason, description?}`이며 COMMENT는
+`commentId`가 필수다. 사유는 Swagger의 enum을 사용한다. 문서 표시와 별개로 신고 운영
+접수에는 Moderation DB와 Post 대상 검증 연동이 준비되어야 한다.
 
 `/docs`는 [기존 WebSocket 계약](../ws-gateway/README.md)의 저장소 링크만 제공한다.
 WebSocket 이벤트 병합은 범위에 포함하지 않는다. 컨테이너에서 문서를 사용하려면
@@ -168,7 +184,7 @@ OpenAPI를 수집·검증·병합하므로 컨테이너에 사전 생성 파일�
 성공 결과는 60초 동안 메모리에 보관하고 동시 갱신은 하나로 합친다.
 수집 실패는 문서 JSON만 503을 반환하며 일반 API 시작·요청에는 영향을 주지 않는다.
 production CD는 `DEPLOYMENT_ENV=production`, `DOCS_ENABLED=false`를 강제한다.
-내부/health 경로는 기존 병합 규칙으로 제외하며 Moderation은 아직 수집 미지원이다.
+내부/health 경로는 기존 병합 규칙으로 제외하며 Moderation 신고·취소도 수집한다.
 
 Frontend 저장소는 `vite` 기본 개발 서버를 사용하므로 `http://localhost:5173`을 사용한다.
 CD는 staging의 기존 CORS·WebSocket Origin 목록에 localhost:3000과 localhost:5173을

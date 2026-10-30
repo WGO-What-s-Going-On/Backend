@@ -2,18 +2,20 @@
 
 최신 dev 9176d57을 feat/user-blocks-moderation-reports에 통합한 상태를 기준으로 한다. Gateway/Post/Map/Notification의 변경은 dev에서 가져온 것이며 이 충돌 해결에서 해당 서비스를 별도 수정하지 않았다. 운영 배포·CloudFront 문서 갱신은 수행하지 않았다.
 
+이후 HTTP Gateway Swagger 추가 요청에 따라 아래 차단 경로 허용과 통합 문서 검증을 반영했다. Post/Map/Notification 코드는 추가 수정하지 않았다.
+
 ## 이미 dev에서 반영된 부분
 
 - HTTP Gateway는 Moderation에도 사용자 JWT 검증과 ES256 서비스 토큰을 적용한다. audience=wgo-moderation-service, userId claim과 내부 X-User-Id를 전달한다. 수신 guard도 두 사용자 ID의 일치를 검증한다. 개발 무인증 우회는 허용하지 않는다.
 - Moderation은 documentedServices에 포함되어 있고 모든 서비스의 내부 인증/헤더를 공개 사용자 bearer로 변환하는 로직이 있다. 해당 작업을 중복 요청하지 않는다.
 - User의 GET/PUT/DELETE /api/v1/users/me/blocks가 Gateway allowlist에 있다. PUT/DELETE의 `{userId}` 요청은 신규 POST/경로 DELETE와 동일한 PostgreSQL·Outbox 로직으로 처리한다. User 프로필 실명/브라우저 쿠키 변경도 보존했다.
 
-## Gateway 담당자에게 남은 요청
+## HTTP Gateway Swagger 후속 반영
 
-1. src/user-auth.ts의 userOperations/userAuthentication에 POST /api/v1/users/me/blocks와 DELETE /api/v1/users/me/blocks/{blockedUserId}를 사용자 필수로 추가한다. 동적 런타임 경로와 OpenAPI template를 모두 매칭해야 한다. 기존 PUT/DELETE 본문 경로는 유지한다.
-2. src/openapi.ts의 User 문서 필터에도 위 두 작업을 포함한다. 현재 allowlist에 없는 User 작업은 통합 문서에서 제거된다. Moderation 수집과 내부 헤더/service-jwt 제거는 이미 dev에 있으므로 새 request/response DTO·신고 DELETE fixture를 갱신한다.
-3. test/user-auth.test.ts, test/app.test.ts, test/openapi.test.ts에서 구·신 차단 경로, 동적 DELETE, 인증 누락/위조·중복 헤더, Moderation signed userId 불일치, 새 신고·취소의 body/status 및 공개 Swagger schema를 검증한다.
-4. 서비스별 문서/통합 문서를 검증하고 승인된 배포·CloudFront 문서 재생성을 수행한다. 로컬 병합 가능 여부는 운영 반영 완료와 다르다.
+1. POST /api/v1/users/me/blocks와 DELETE /api/v1/users/me/blocks/{blockedUserId}를 사용자 필수 allowlist에 추가했다. 런타임은 유효한 십진수 ID만 매칭하고 OpenAPI는 template를 유지한다. 기존 PUT/DELETE 본문 경로도 유지한다.
+2. 통합 Swagger에 신규 차단과 신고 생성·취소의 request/response schema를 포함한다. 내부 헤더/service-jwt 제거와 공개 사용자 bearer 변환은 기존 수집기를 사용한다.
+3. test/user-auth.test.ts와 test/openapi.test.ts에서 구·신 차단 경로, 동적 DELETE 경계, 인증 누락/위조 헤더, Moderation signed userId와 본문 전달, 통합 schema·성공 상태, 파일 생성 및 staging 실시간 수집을 검증한다. 수신 guard의 signed userId 불일치는 Moderation 서비스 테스트가 검증한다.
+4. 남은 작업은 승인된 배포와 문서 갱신이다. 로컬은 pnpm docs:generate, staging은 배포 후 /docs/openapi.json 요청 시 수집하며 성공 결과를 60초 캐시한다. 운영 배포·CloudFront 갱신은 이번 변경에 포함하지 않았다.
 
 ## 프론트엔드 계약 전환
 
