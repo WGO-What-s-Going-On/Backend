@@ -116,6 +116,36 @@ describe('User route authentication', () => {
       ).toBe(401);
     },
   );
+
+  it.each(['credits', 'growth', 'credits/history', 'badges/history'])(
+    'proxies rewards %s with verified identity',
+    async (path) => {
+      const app = await setup();
+      const url = `/api/v1/users/me/${path}`;
+      const response = await app.inject({
+        method: 'GET',
+        url,
+        headers: {
+          authorization: `Bearer ${await access()}`,
+          'x-user-id': '999',
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        userId: '42',
+        signedUserId: null,
+      });
+      expect(
+        (
+          await app.inject({
+            method: 'GET',
+            url,
+            headers: { 'x-user-id': '42' },
+          })
+        ).statusCode,
+      ).toBe(401);
+    },
+  );
   it('replaces forged identity with JWT claims and a separate Gateway credential', async () => {
     const app = await setup();
     const response = await app.inject({

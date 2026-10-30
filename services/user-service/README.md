@@ -371,20 +371,25 @@ Outbox 발행 경로에는 trim/보존 기간, Outbox 정리, retry 상한, DLQ�
 
 ## Activity rewards
 
-Post의 9종 이벤트를 `post-user-rewards` group으로 소비하여 활동 상태를 PostgreSQL에 기록한다.
-활동 기록과 보상 판정을 분리하며 `USER_REWARD_POLICY_JSON`이 비어 있으면 지급은 기본 비활성이다.
-글/댓글 작성·단순 참여·공감을 누르는 행위에는 지급하지 않는다. 자기 공감도 제외한다.
-운영 보상 수치·레벨·칭호 seed는 확정하지 않았다.
+기존 Post 9종과 PR #72의 댓글 공감 생성·취소/투표 승리를 `post-user-rewards` group으로 소비한다.
+PostUpdated는 검증 후 명시적으로 무시·ACK한다. 원장·점수·칭호·User Outbox는 같은 PostgreSQL 트랜잭션에 저장한다.
+`USER_REWARD_POLICY_JSON`이 없으면 크레딧 지급은 OFF다. 확정 칭호 자동 평가는 별도로 기본 ON이며 개발 점수 임계값을 공식 칭호에 사용하지 않는다.
 
-신규 조회 API는 `GET /api/v1/users/me/credits`, `/growth`, `/credits/history`이며 기존
-`/badges`를 재사용한다. 기존과 동일한 trusted Gateway 인증 경계가 필요하다.
-Migration `1792190000000-AddActivityRewards` 적용 후 앱을 시작한다. 기존 DB를 초기화하지 않는다.
+기존 보상 및 ActivateWgoTitles migration 적용 후 `pnpm seed:badges`로 소식통·리포터·특파원·천리안을 멱등 생성한다.
+기존 `/badges`, `/credits`, `/growth`, `/credits/history`를 유지하고 `/badges/history`를 추가했다.
+모두 `/api/v1/users/me` 하위이며 현재 Gateway ES256 인증 경계를 따른다.
 
-- [이벤트·정책·DB·REST·복구 계약](REWARDS_CONTRACT.md)
-- [서비스 전체 감사 및 최종 완성까지의 잔여 작업](USER_SERVICE_COMPLETION_REPORT.md)
+- [확정 4단계 칭호·행정동 랭킹과 외부 계약 준비 상태](WGO_TITLE_POLICY.md)
+- [정책·이벤트·DB·API·Notification 계약 및 재처리 절차](REWARDS_CONTRACT.md)
+- [이번 로컬 구현과 실제 검증 결과·외부 의존성](USER_SERVICE_COMPLETION_REPORT.md)
 
-댓글 공감·투표 결과는 내부 fixture 입력 인터페이스만 제공하며 아직 실제 이벤트로 소비하지 않는다.
-성장 이벤트 4종은 기존 Outbox에서 발행한다. Notification 자동 알림은 아직 연결되지 않았다.
+```sh
+pnpm migration:run
+pnpm seed:badges
+pnpm rewards:reconcile --user 123
+# 실제 재평가: 승인된 정책·대상 범위를 확인한 후 명시적으로 실행
+pnpm rewards:reconcile --user 123 --apply --operation-id approved-replay-001
+```
 
 ## Verification commands
 
@@ -403,25 +408,11 @@ docker build -t wgo-user-service .
 
 ## HTTP OpenAPI / Swagger
 
-서비스 실행 후 `http://localhost:3001/docs`에서 Swagger UI,
-`http://localhost:3001/docs/openapi.json`에서 OpenAPI 3.0 문서를 제공한다.
-Post와 같은 Nest Swagger 방식으로 첫 문서 요청 때 생성한다.
-실제 컨트롤러의 REST 10개와 health만 기록하며 내부 gRPC는 포함하지 않는다.
-문서 모델은 `src/http.openapi.ts`에 있으며 응답 인터페이스를 구현해 필드 누락을 검사한다.
-
-HTTP Gateway의 `pnpm docs:generate`가 `USER_SERVICE_URL`에서 이 문서를 수집한다.
-Gateway의 `/docs`에는 기존 auth/users prefix의 공개 operation 9개만 포함한다.
-`GET /api/v1/terms`는 현재 Gateway에 라우팅되어 있지 않아 서비스 문서에만 남는다.
-Gateway 문서를 갱신하려면 User·Post·Map·Notification 문서 endpoint를 모두 실행해야 한다.
-User 앱의 실제 실행에는 기존 PostgreSQL·Redis·Kakao·JWT 설정이 필요하다.
-`pnpm test test/openapi.test.ts`는 외부 저장소 없이 컨트롤러와 문서 계약을 검증한다.
-
-현재 Gateway와 User REST에는 사용자 Bearer JWT 검증이 연결되어 있지 않다.
-프로필·동의·배지·탈퇴는 `X-User-Id`를 직접 읽고, 로그아웃은 `X-Session-Id`도 읽는다.
-로컬 테스트에서는 양의 canonical 10진수 사용자 ID(최대 9007199254740991)를 전달한다.
-로그아웃 session ID는 발급된 refreshToken의 점 앞 UUID이며 해당 사용자 세션이어야 한다.
-이를 구현된 Bearer 인증이나 내부 서비스 JWT 입력으로 표시하지 않는다.
-로그인은 201, refresh는 200, 로그아웃은 본문 없는 204이며 기존 응답·오류 동작을 유지한다.
+User 실행 시 `/docs`, `/docs/openapi.json`에서 현재 REST 계약을 제공한다.
+내부 문서는 ES256 Gateway service JWT와 검증된 identity 문맥을 설명한다.
+공개 클라이언트는 Gateway에 Access JWT를 보내며 임의 x-user-id는 사용자 인증으로 인정되지 않는다.
+Gateway의 문서 수집·병합은 내부 헤더를 숨기고 사용자 Bearer 인증을 표시한다.
+보상 응답/이력 schema와 양쪽 인증 허용 목록은 계약 테스트로 검증한다.
 
 ### REST 인증 전환 운영 메모
 

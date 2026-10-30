@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DISABLED_POLICY,
   levelFor,
+  loadPolicy,
   validatePolicy,
 } from '../src/rewards/reward-policy.js';
 import {
@@ -11,6 +12,38 @@ import {
 import { randomUUID } from 'node:crypto';
 
 describe('Reward policy and input boundaries', () => {
+  it('rejects unapproved production activation and requires explicit controls', () => {
+    const proposed = {
+      ...DISABLED_POLICY,
+      enabled: true,
+      version: 'candidate',
+      dailyCreditLimit: 100,
+      maxGrantsPerActivity: 2,
+      dayTimeZone: 'UTC',
+      revokeOnSanction: true,
+      revokeOnCommentDeletion: true,
+    };
+    expect(() => loadPolicy(JSON.stringify(proposed), 'production')).toThrow(
+      'Production',
+    );
+    expect(
+      loadPolicy(
+        JSON.stringify({
+          ...proposed,
+          approved: true,
+          approvalReference: 'approved-policy-reference',
+        }),
+        'production',
+      ).enabled,
+    ).toBe(true);
+    expect(loadPolicy(undefined, 'production').enabled).toBe(false);
+    expect(() =>
+      validatePolicy({
+        ...proposed,
+        badges: [{ code: 'CLAIRVOYANT', minimumScore: 100, revokeBelow: true }],
+      }),
+    ).toThrow();
+  });
   it('defaults to disabled with no invented levels or amounts', () => {
     expect(validatePolicy(DISABLED_POLICY).enabled).toBe(false);
     expect(levelFor(0n, [])).toBeNull();
@@ -118,7 +151,7 @@ describe('Reward policy and input boundaries', () => {
     'PostParticipantJoined',
     'PostParticipantLeft',
   ])('parses producer envelope %s', (type) => {
-    expect(parsePostEvent(fields(type)).postId).toMatch(/^post_/);
+    expect(parsePostEvent(fields(type))!.postId).toMatch(/^post_/);
   });
   it.each([
     { schemaVersion: 2 },

@@ -1,0 +1,27 @@
+{
+  "version": "development-fixture-v2",
+  "approved": false,
+  "enabled": true,
+  "dailyCreditLimit": 100,
+  "maxGrantsPerActivity": 2,
+  "dayTimeZone": "UTC",
+  "postReactions": {
+    "HELPFUL": 10,
+    "CURIOUS": 0,
+    "STILL_HAPPENING": 0,
+    "ENDED": 0
+  },
+  "commentReactions": {
+    "HELPFUL": 5,
+    "AGREE": 5,
+    "DIFFERENT": 0
+  },
+  "voteWinner": 20,
+  "revokeOnRemoval": true,
+  "revokeOnPostDeletion": true,
+  "revokeOnCommentDeletion": true,
+  "revokeOnSanction": true,
+  "revokeOnExpiry": true,
+  "levels": [0, 10, 20, 50],
+  "badges": []
+}

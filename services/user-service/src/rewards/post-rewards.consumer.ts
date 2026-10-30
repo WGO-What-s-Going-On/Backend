@@ -8,7 +8,12 @@ import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
 import { randomUUID } from 'node:crypto';
 import { ActivityService } from './activity.service.js';
-import { InvalidRewardEvent, parsePostEvent } from './post-event.js';
+import {
+  InvalidRewardEvent,
+  ConflictingRewardEvent,
+  UnsupportedRewardEvent,
+  parsePostEvent,
+} from './post-event.js';
 
 export const POST_STREAM = 'post:events',
   REWARDS_GROUP = 'post-user-rewards',
@@ -28,6 +33,7 @@ export class PostRewardsConsumer
   private readonly idle: number;
   private readonly attempts: number;
   private readonly pollMs: number;
+  private readonly regionContract: 'none' | 'post-region-v1';
   constructor(
     config: ConfigService,
     private readonly activities: ActivityService,
@@ -35,6 +41,8 @@ export class PostRewardsConsumer
     this.idle = config.get<number>('rewards.pendingIdleMs') ?? 30000;
     this.attempts = config.get<number>('rewards.maxAttempts') ?? 5;
     this.pollMs = config.get<number>('rewards.pollIntervalMs') ?? 1000;
+    this.regionContract =
+      config.get<'none' | 'post-region-v1'>('rewards.regionContract') ?? 'none';
     this.redis = new Redis(config.getOrThrow<string>('redis.url'), {
       lazyConnect: true,
       enableOfflineQueue: false,
@@ -108,8 +116,8 @@ export class PostRewardsConsumer
     for (let i = 0; i < values.length; i += 2)
       fields[values[i]!] = values[i + 1]!;
     try {
-      const event = parsePostEvent(fields);
-      await this.activities.record(event);
+      const event = parsePostEvent(fields, this.regionContract);
+      if (event) await this.activities.record(event);
     } catch (error) {
       const pending = (await this.redis.xpending(
         POST_STREAM,
@@ -135,9 +143,13 @@ export class PostRewardsConsumer
         streamId,
         fields.eventId ?? '',
         fields.data ?? '',
-        error instanceof InvalidRewardEvent
-          ? 'INVALID_EVENT'
-          : 'RETRY_EXHAUSTED',
+        error instanceof UnsupportedRewardEvent
+          ? 'UNSUPPORTED_EVENT'
+          : error instanceof ConflictingRewardEvent
+            ? 'ACTIVITY_CONFLICT'
+            : error instanceof InvalidRewardEvent
+              ? 'INVALID_EVENT'
+              : 'RETRY_EXHAUSTED',
       );
       return;
     }

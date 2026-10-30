@@ -14,6 +14,8 @@ import {
   type ApiDocument,
 } from '../src/openapi.js';
 
+// Preserve the OS temp directory before fixture configuration replaces process.env.
+const temporaryRoot = tmpdir();
 const cleanup: Array<() => Promise<unknown>> = [];
 const originalEnv = { ...process.env };
 afterEach(async () => {
@@ -82,7 +84,7 @@ function fixture(path = '/api/v1/posts'): ApiDocument {
   };
 }
 async function directory() {
-  const dir = await mkdtemp(join(tmpdir(), 'wgo-docs-'));
+  const dir = await mkdtemp(join(temporaryRoot, 'wgo-docs-'));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }
@@ -118,6 +120,27 @@ describe('public OpenAPI merge', () => {
       },
     });
   });
+
+  it.each(['credits', 'growth', 'credits/history', 'badges/history'])(
+    'merges User rewards %s with public bearer security',
+    async (suffix) => {
+      const path = `/api/v1/users/me/${suffix}`,
+        user = fixture(path);
+      user.paths[path].get.parameters = [
+        { in: 'header', name: 'X-User-Id', schema: { type: 'string' } },
+      ];
+      const doc = await mergeDocuments(
+        [{ service: 'user', document: user }],
+        config(),
+      );
+      expect(doc.paths[path].get.security).toEqual([{ user__UserAccess: [] }]);
+      expect(doc.paths[path].get.parameters).toEqual([]);
+      expect(
+        doc.paths[path].get.responses['200'].content['application/json'].schema
+          .$ref,
+      ).toBe('#/components/schemas/user__Result');
+    },
+  );
   it('namespaces component, operationId, recursive ref and inherited security collisions without mutating input', async () => {
     const post = fixture(),
       map = fixture('/api/v1/location');

@@ -22,6 +22,10 @@ const operations: Record<string, 'public' | 'user'> = {
   'PATCH /api/v1/users/me': 'user',
   'POST /api/v1/users/me/term-consents': 'user',
   'GET /api/v1/users/me/badges': 'user',
+  'GET /api/v1/users/me/credits': 'user',
+  'GET /api/v1/users/me/growth': 'user',
+  'GET /api/v1/users/me/credits/history': 'user',
+  'GET /api/v1/users/me/badges/history': 'user',
   'POST /api/v1/users/me/withdrawal': 'user',
 };
 

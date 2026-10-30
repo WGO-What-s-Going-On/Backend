@@ -1,3 +1,5 @@
+import { RewardsController } from '../src/rewards/rewards.controller.js';
+import { ActivityService } from '../src/rewards/activity.service.js';
 import 'reflect-metadata';
 import { Test } from '@nestjs/testing';
 import { APP_GUARD } from '@nestjs/core';
@@ -66,9 +68,22 @@ describe('User REST Gateway trust boundary', () => {
       ],
     });
     const module = await Test.createTestingModule({
-      controllers: [UsersController, AuthController, HealthController],
+      controllers: [
+        UsersController,
+        AuthController,
+        HealthController,
+        RewardsController,
+      ],
       providers: [
         { provide: UsersService, useValue: users },
+        {
+          provide: ActivityService,
+          useValue: {
+            summary: async (id: string) => ({ userId: id }),
+            history: async () => ({ items: [], nextCursor: null }),
+            badgeHistory: async () => ({ items: [], nextCursor: null }),
+          },
+        },
         { provide: AuthService, useValue: auth },
         { provide: APP_GUARD, useClass: GatewayAuthGuard },
       ],
@@ -216,4 +231,31 @@ describe('User REST Gateway trust boundary', () => {
       process.env.USER_HTTP_GATEWAY_TRUSTED_JWKS = valid!;
     }
   });
+  it.each(['credits', 'growth', 'credits/history', 'badges/history'])(
+    'authenticates rewards %s with the current ES256 boundary',
+    async (path) => {
+      const url = `/api/v1/users/me/${path}`;
+      await request(app.getHttpServer())
+        .get(url)
+        .set('X-User-Id', '42')
+        .expect(401);
+      await request(app.getHttpServer())
+        .get(url)
+        .set('Authorization', `Bearer ${await bearer()}`)
+        .set('X-User-Id', '42')
+        .expect(200);
+      await request(app.getHttpServer())
+        .get(url)
+        .set('Authorization', `Bearer ${await bearer()}`)
+        .expect(401);
+      await request(app.getHttpServer())
+        .get(url)
+        .set(
+          'Authorization',
+          `Bearer ${await bearer({ aud: 'wgo-post-service' })}`,
+        )
+        .set('X-User-Id', '42')
+        .expect(401);
+    },
+  );
 });

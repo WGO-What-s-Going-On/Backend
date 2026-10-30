@@ -1,3 +1,5 @@
+import { ActivateWgoTitles1793400000000 } from './migrations/1793400000000-ActivateWgoTitles.js';
+import { CompleteActivityRewards1793360000000 } from './migrations/1793360000000-CompleteActivityRewards.js';
 import 'reflect-metadata';
 import { AddPrivateRealName1793200000000 } from './migrations/1793200000000-AddPrivateRealName.js';
 
@@ -32,6 +34,8 @@ export default new DataSource({
     InitialUserServiceSchema1789990707351,
     AddTermsCodeEffectiveAtIndex1789993249262,
     AddActivityRewards1792190000000,
+    CompleteActivityRewards1793360000000,
+    ActivateWgoTitles1793400000000,
   ],
   synchronize: false,
 });

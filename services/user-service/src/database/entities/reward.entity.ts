@@ -7,6 +7,15 @@ export class UserActivityEntity {
   @PrimaryColumn({ name: 'activity_key', type: 'text' }) activityKey!: string;
   @Column({ name: 'post_id', type: 'text' }) postId!: string;
   @Column({ type: 'text' }) kind!: string;
+  @Column({ name: 'comment_id', type: 'text', nullable: true }) commentId!:
+    | string
+    | null;
+  @Column({ name: 'result_id', type: 'text', nullable: true }) resultId!:
+    | string
+    | null;
+  @Column({ name: 'occurred_at', type: 'timestamptz' }) occurredAt!: Date;
+  @Column({ name: 'source_time_verified', type: 'boolean' })
+  sourceTimeVerified!: boolean;
   @Column({ name: 'actor_id', type: 'bigint' }) actorId!: string;
   @Column({ name: 'beneficiary_id', type: 'bigint', nullable: true })
   beneficiaryId!: string | null;

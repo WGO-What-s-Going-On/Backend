@@ -1,3 +1,5 @@
+import { RewardsController } from '../src/rewards/rewards.controller.js';
+import { ActivityService } from '../src/rewards/activity.service.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -35,12 +37,14 @@ describe('User OpenAPI contract', () => {
     const module = await Test.createTestingModule({
       controllers: [
         AuthController,
+        RewardsController,
         UsersController,
         TermsController,
         HealthController,
       ],
       providers: [
         { provide: AuthService, useValue: auth },
+        { provide: ActivityService, useValue: {} },
         { provide: UsersService, useValue: {} },
         { provide: TermsService, useValue: {} },
       ],
@@ -78,6 +82,10 @@ describe('User OpenAPI contract', () => {
         'PATCH /api/v1/users/me',
         'POST /api/v1/users/me/term-consents',
         'GET /api/v1/users/me/badges',
+        'GET /api/v1/users/me/credits',
+        'GET /api/v1/users/me/growth',
+        'GET /api/v1/users/me/credits/history',
+        'GET /api/v1/users/me/badges/history',
         'POST /api/v1/users/me/withdrawal',
         'GET /api/v1/terms',
         'GET /health/live',
@@ -158,5 +166,42 @@ describe('User OpenAPI contract', () => {
       .set('X-User-Id', '001')
       .expect(401);
     await request(app.getHttpServer()).post('/api/v1/auth/logout').expect(401);
+  });
+  it('documents reward balances and cursor histories with service authentication', async () => {
+    const { body: doc } = await request(app.getHttpServer())
+      .get('/docs/openapi.json')
+      .expect(200);
+    for (const path of [
+      'credits',
+      'growth',
+      'credits/history',
+      'badges/history',
+    ]) {
+      const op = doc.paths[`/api/v1/users/me/${path}`].get;
+      expect(
+        op.responses['200'].content['application/json'].schema.$ref,
+      ).toBeTruthy();
+      expect(op.security).toEqual([{ 'service-jwt': [] }]);
+    }
+  });
+  it('exposes confirmed title progress and regional readiness without a new public route', async () => {
+    const { body: doc } = await request(app.getHttpServer())
+      .get('/docs/openapi.json')
+      .expect(200);
+    expect(doc.components.schemas.GrowthResult.properties.titles.$ref).toBe(
+      '#/components/schemas/TitleProgressResult',
+    );
+    expect(
+      doc.components.schemas.TitleProgressResult.properties
+        .highestAchievedStage,
+    ).toBeDefined();
+    expect(
+      doc.components.schemas.RegionalTitleReadinessResult.properties.status
+        .enum,
+    ).toContain('CONTRACT_UNAVAILABLE');
+    expect(
+      doc.components.schemas.BadgeHistoryItemResult.properties.regionCode
+        .nullable,
+    ).toBe(true);
   });
 });

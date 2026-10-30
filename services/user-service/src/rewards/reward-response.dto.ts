@@ -1,4 +1,5 @@
 export interface GrowthResponse {
+  titles: import('./title.service.js').TitleProgress;
   credits: string;
   growthScore: string;
   level: number | null;
