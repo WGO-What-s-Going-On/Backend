@@ -28,7 +28,7 @@ export class UploadTarget {
     type: 'object',
     additionalProperties: { type: 'string' },
     description:
-      '반환한 헤더 그대로 전송. 브라우저는 Blob 길이로 Content-Length를 자동 설정.',
+      'Content-Type과 x-goog-if-generation-match: 0을 그대로 전송. 브라우저는 Blob 길이로 Content-Length를 자동 설정.',
   })
   headers!: Record<string, string>;
 }

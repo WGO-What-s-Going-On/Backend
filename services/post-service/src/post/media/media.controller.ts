@@ -47,7 +47,7 @@ import {
 @ApiBadRequestResponse({ description: '입력 또는 mediaId 형식 오류' })
 @ApiForbiddenResponse({ description: '로컬 사용자 헤더 누락/오류' })
 @ApiServiceUnavailableResponse({
-  description: '운영 인증 미연동, 미디어 비활성 또는 S3 장애',
+  description: '운영 인증 미연동, 미디어 비활성 또는 GCS 장애',
 })
 @UseFilters(PostErrorFilter)
 export class MediaController {
@@ -57,7 +57,7 @@ export class MediaController {
   @ApiOperation({
     summary: '이미지/동영상 업로드 URL 발급',
     description:
-      'S3 업로드 후 complete를 호출하고 게시물/댓글에 mediaId를 전달합니다. URL 및 헤더를 로그에 기록하지 마세요.',
+      'GCS 업로드 후 complete를 호출하고 게시물/댓글에 mediaId를 전달합니다. URL 및 헤더를 로그에 기록하지 마세요.',
   })
   @ApiBody({ type: MediaUploadBody })
   @ApiCreatedResponse({ type: MediaUploadResponse })
@@ -102,7 +102,8 @@ export class MediaController {
   @HttpCode(204)
   @ApiOperation({
     summary: '미첨부 업로드 취소',
-    description: '멱등 취소. S3 파일은 비동기로 정리하며 ATTACHED는 409입니다.',
+    description:
+      '멱등 취소. GCS 파일은 비동기로 정리하며 ATTACHED는 409입니다.',
   })
   @ApiNoContentResponse()
   cancel(

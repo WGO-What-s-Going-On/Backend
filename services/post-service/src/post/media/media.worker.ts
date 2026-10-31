@@ -97,7 +97,7 @@ export class MediaCleanupWorker {
     for (const row of due) {
       if (this.stopped) break;
       try {
-        // S3 삭제는 멱등하다. 실패 시 기록을 남겨 재시도하고 여러 worker도 같은 키만 지운다.
+        // GCS 삭제는 멱등하다. 실패 시 기록을 남겨 재시도하고 여러 worker도 같은 키만 지운다.
         await this.media.storage.remove(row);
         await records.deleteOne({ mediaId: row.mediaId, status: 'DELETING' });
       } catch {

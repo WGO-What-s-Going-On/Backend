@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  File,
+  type CopyOptions,
+  type DeleteFileOptions,
+} from '@google-cloud/storage';
+import { createHash, randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { mediaConfig } from '../src/post/media/media.config.js';
 import { mediaIds } from '../src/post/media/media.policy.js';
-import { S3MediaStorage } from '../src/post/media/s3-media.storage.js';
+import { GcsMediaStorage } from '../src/post/media/gcs-media.storage.js';
 import type { MediaRecord } from '../src/post/media/media.schema.js';
-import {
-  HeadObjectCommand,
-  GetObjectCommand,
-  CopyObjectCommand,
-} from '@aws-sdk/client-s3';
-import { randomUUID } from 'node:crypto';
 const id = () => `media_${randomUUID()}`;
+const png = Buffer.from(
+  '89504e470d0a1a0a0000000d494844520000000100000001',
+  'hex',
+);
 const record: MediaRecord = {
   mediaId: id(),
   ownerId: 123,
@@ -17,53 +22,72 @@ const record: MediaRecord = {
   uploadKey: 'post-media/pending/example',
   type: 'IMAGE',
   contentType: 'image/png',
-  sizeBytes: 24,
-  checksum: Buffer.alloc(32).toString('base64'),
+  sizeBytes: png.length,
+  checksum: createHash('sha256').update(png).digest('base64'),
   status: 'PENDING',
   createdAt: new Date(),
   expiresAt: new Date(Date.now() + 60000),
 };
 function storage() {
-  vi.stubEnv('S3_MEDIA_ENABLED', 'true');
-  vi.stubEnv('AWS_REGION', 'ap-northeast-2');
-  vi.stubEnv('S3_MEDIA_BUCKET', 'test-media-bucket');
-  vi.stubEnv('AWS_ACCESS_KEY_ID', 'test-access');
-  vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'test-secret');
-  return new S3MediaStorage();
+  vi.stubEnv('GCS_MEDIA_ENABLED', 'true');
+  vi.stubEnv('GCS_MEDIA_BUCKET', 'test-media-bucket');
+  return new GcsMediaStorage();
+}
+function object(bytes = png) {
+  vi.spyOn(File.prototype, 'getMetadata').mockImplementation(async () => [
+    {
+      size: String(record.sizeBytes),
+      contentType: record.contentType,
+      generation: '1720000000000001',
+    },
+  ]);
+  const reads: File[] = [];
+  const copies: { file: File; options: CopyOptions | undefined }[] = [];
+  const read = vi
+    .spyOn(File.prototype, 'createReadStream')
+    .mockImplementation(function (this: File) {
+      reads.push(this);
+      return Readable.from([bytes]);
+    });
+  const copy = vi
+    .spyOn(File.prototype, 'copy')
+    .mockImplementation(async function (this: File, _destination, options) {
+      copies.push({
+        file: this,
+        options: typeof options === 'object' ? options : undefined,
+      });
+      return [this, {}];
+    });
+  return { read, copy, reads, copies };
 }
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
 describe('media policy and configuration', () => {
-  it('keeps local media optional and requires explicit enabled configuration', () => {
+  it('requires explicit enabled configuration and bounds URLs', () => {
     expect(mediaConfig({}).enabled).toBe(false);
-    expect(() => mediaConfig({ S3_MEDIA_ENABLED: 'true' })).toThrow(
-      'AWS_REGION',
+    expect(() => mediaConfig({ GCS_MEDIA_ENABLED: 'true' })).toThrow(
+      'GCS_MEDIA_BUCKET',
     );
-    expect(() => mediaConfig({ S3_MEDIA_ENABLED: 'yes' })).toThrow();
-    expect(() => mediaConfig({ S3_MEDIA_READ_TTL_SECONDS: '901' })).toThrow();
-    expect(() => mediaConfig({ S3_MEDIA_UPLOAD_TTL_SECONDS: '4' })).toThrow();
+    expect(() => mediaConfig({ GCS_MEDIA_ENABLED: 'yes' })).toThrow();
+    expect(() => mediaConfig({ GCS_MEDIA_READ_TTL_SECONDS: '901' })).toThrow();
+    expect(() => mediaConfig({ GCS_MEDIA_UPLOAD_TTL_SECONDS: '4' })).toThrow();
   });
-  it.each([
-    'S3_MEDIA_ENDPOINT',
-    'AWS_ENDPOINT_URL',
-    'AWS_ENDPOINT_URL_S3',
-    'AWS_ACCESS_KEY_ID',
-    'AWS_SECRET_ACCESS_KEY',
-    'AWS_SESSION_TOKEN',
-    'AWS_PROFILE',
-  ])('rejects production override %s without exposing its value', (name) => {
-    expect(() =>
-      mediaConfig({
-        S3_MEDIA_ENABLED: 'true',
-        AWS_REGION: 'ap-northeast-2',
-        S3_MEDIA_BUCKET: 'test-bucket',
-        NODE_ENV: 'production',
-        [name]: 'secret-value',
-      }),
-    ).toThrow(`${name} must be unset`);
-  });
+  it.each(['GOOGLE_APPLICATION_CREDENTIALS', 'STORAGE_EMULATOR_HOST'])(
+    'rejects production override %s without exposing values',
+    (name) => {
+      expect(() =>
+        mediaConfig({
+          GCS_MEDIA_ENABLED: 'true',
+          GCS_MEDIA_BUCKET: 'test-bucket',
+          NODE_ENV: 'production',
+          [name]: 'secret-value',
+        }),
+      ).toThrow(`${name} must be unset`);
+    },
+  );
   it('allows five unique IDs and rejects six, duplicates and object keys', () => {
     expect(mediaIds(undefined)).toEqual([]);
     expect(mediaIds(Array.from({ length: 5 }, id))).toHaveLength(5);
@@ -77,102 +101,115 @@ describe('media policy and configuration', () => {
       expect(() => mediaIds(input)).toThrow();
   });
 });
-describe('S3 signing and verification', () => {
-  it('signs exact length, checksum, content type and conditional upload; reads the final key', async () => {
+
+describe('GCS signing and verification', () => {
+  it('signs exact length and create-only header, and reads only the final key', async () => {
     const s = storage();
+    vi.spyOn(s.client.authClient, 'getCredentials').mockImplementation(
+      async () => ({ client_email: 'post@test.iam.gserviceaccount.com' }),
+    );
+    vi.spyOn(s.client.authClient, 'sign').mockResolvedValue(
+      Buffer.from('test-signature').toString('base64'),
+    );
     const upload = await s.upload(record);
     const url = new URL(upload.url);
-    expect(url.pathname).toBe('/post-media/pending/example');
-    const signed = url.searchParams.get('X-Amz-SignedHeaders');
-    for (const name of [
+    expect(url.pathname).toBe('/test-media-bucket/post-media/pending/example');
+    expect(url.searchParams.get('X-Goog-SignedHeaders')).toContain(
       'content-length',
-      'content-type',
-      'if-none-match',
-      'x-amz-checksum-sha256',
-    ])
-      expect(signed).toContain(name);
-    expect(upload.headers['If-None-Match']).toBe('*');
+    );
+    expect(url.searchParams.get('X-Goog-SignedHeaders')).toContain(
+      'x-goog-if-generation-match',
+    );
+    expect(upload.headers['x-goog-if-generation-match']).toBe('0');
+    expect(url.searchParams.get('X-Goog-Expires')).toBe('300');
     expect(new URL((await s.read(record)).url).pathname).toBe(
-      '/post-media/objects/example',
+      '/test-media-bucket/post-media/objects/example',
     );
-    s.onModuleDestroy();
   });
-  it('caps URL expiry at temporary credential expiry', async () => {
-    const s = storage();
-    s.client.config.credentials = async () => ({
-      accessKeyId: 'test',
-      secretAccessKey: 'test',
-      sessionToken: 'test',
-      expiration: new Date(Date.now() + 45000),
+  it('verifies actual SHA256 bytes and pins the generation through copy', async () => {
+    const { reads, copies } = object();
+    await storage().verifyAndPromote(record);
+    expect(reads[0]?.generation).toBe(1720000000000001);
+    expect(copies[0]?.file.generation).toBe(1720000000000001);
+    expect(copies[0]?.options).toMatchObject({
+      preconditionOpts: { ifGenerationMatch: 0 },
     });
-    const upload = await s.upload(record);
-    expect(
-      Number(new URL(upload.url).searchParams.get('X-Amz-Expires')),
-    ).toBeLessThanOrEqual(40);
-    s.onModuleDestroy();
   });
-  it('checks S3 metadata and magic bytes before copying to the final key', async () => {
-    const s = storage();
-    const send = vi
-      .spyOn(s.client, 'send')
-      .mockImplementation(async (command: any) => {
-        if (command instanceof HeadObjectCommand)
-          return {
-            ContentLength: 24,
-            ContentType: 'image/png',
-            ChecksumSHA256: record.checksum,
-            ETag: 'etag',
-          };
-        if (command instanceof GetObjectCommand)
-          return {
-            Body: {
-              transformToByteArray: async () =>
-                Buffer.from(
-                  '89504e470d0a1a0a0000000d494844520000000100000001',
-                  'hex',
-                ),
-            },
-          };
-        return {};
-      });
-    await s.verifyAndPromote(record);
-    expect(send.mock.calls.at(-1)?.[0]).toBeInstanceOf(CopyObjectCommand);
-    expect(
-      (send.mock.calls.at(-1)?.[0] as CopyObjectCommand).input
-        .CopySourceIfMatch,
-    ).toBe('etag');
-    send.mockImplementation(async () => ({ ContentLength: 999 }));
-    await expect(s.verifyAndPromote(record)).rejects.toThrow('does not match');
-    expect(send.mock.calls.at(-1)?.[0]).toBeInstanceOf(HeadObjectCommand);
-    s.onModuleDestroy();
-  });
-  it('rejects spoofed MIME and sanitizes dependency errors', async () => {
-    const s = storage();
-    const send = vi
-      .spyOn(s.client, 'send')
-      .mockImplementation(async (command: any) =>
-        command instanceof HeadObjectCommand
-          ? {
-              ContentLength: 24,
-              ContentType: 'image/png',
-              ChecksumSHA256: record.checksum,
-              ETag: 'etag',
-            }
-          : {
-              Body: {
-                transformToByteArray: async () =>
-                  Buffer.from('<html>not an image</html>'),
-              },
-            },
-      );
-    await expect(s.verifyAndPromote(record)).rejects.toThrow('signature');
-    expect(send.mock.calls.some(([c]) => c instanceof CopyObjectCommand)).toBe(
-      false,
+  it('rejects content with correct metadata but wrong SHA256', async () => {
+    const { copy } = object(Buffer.alloc(png.length));
+    await expect(storage().verifyAndPromote(record)).rejects.toThrow(
+      'does not match',
     );
-    send.mockRejectedValue(new Error('secret-value'));
-    await expect(s.verifyAndPromote(record)).rejects.toThrow(
+    expect(copy).not.toHaveBeenCalled();
+  });
+  it('rejects excess bytes and destroys the stream', async () => {
+    const stream = Readable.from([png, Buffer.from('extra')]);
+    const { read, copy } = object();
+    read.mockReturnValue(stream);
+    await expect(storage().verifyAndPromote(record)).rejects.toThrow(
+      'does not match',
+    );
+    expect(stream.destroyed).toBe(true);
+    expect(copy).not.toHaveBeenCalled();
+  });
+  it('rejects MIME spoofing even when SHA256 is correct', async () => {
+    const bytes = Buffer.alloc(png.length, 'a');
+    const { copy } = object(bytes);
+    await expect(
+      storage().verifyAndPromote({
+        ...record,
+        checksum: createHash('sha256').update(bytes).digest('base64'),
+      }),
+    ).rejects.toThrow('signature');
+    expect(copy).not.toHaveBeenCalled();
+  });
+  it('revalidates the final object after a competing or retried copy', async () => {
+    const { read, copy, reads } = object();
+    copy.mockRejectedValue({ code: 412 });
+    await storage().verifyAndPromote(record);
+    expect(reads.map((file) => file.name)).toEqual([
+      record.uploadKey,
+      record.objectKey,
+    ]);
+    read
+      .mockImplementationOnce(() => Readable.from([png]))
+      .mockImplementationOnce(() => Readable.from([Buffer.alloc(png.length)]));
+    await expect(storage().verifyAndPromote(record)).rejects.toThrow(
+      'does not match',
+    );
+  });
+  it('sanitizes errors and classifies missing uploads', async () => {
+    const metadata = vi
+      .spyOn(File.prototype, 'getMetadata')
+      .mockRejectedValue({ code: 404 });
+    await expect(storage().verifyAndPromote(record)).rejects.toThrow(
+      'Upload has not completed',
+    );
+    metadata.mockRejectedValue(new Error('secret-value'));
+    await expect(storage().verifyAndPromote(record)).rejects.toThrow(
       'Media verification unavailable',
     );
-    s.onModuleDestroy();
+  });
+  it('deletes both keys idempotently and preserves failure for worker retry', async () => {
+    const calls: { file: File; options: DeleteFileOptions | undefined }[] = [];
+    const remove = vi
+      .spyOn(File.prototype, 'delete')
+      .mockImplementation(async function (this: File, options) {
+        calls.push({
+          file: this,
+          options: typeof options === 'object' ? options : undefined,
+        });
+        return [{}];
+      });
+    await storage().remove(record);
+    expect(calls.map(({ file }) => file.name)).toEqual([
+      record.uploadKey,
+      record.objectKey,
+    ]);
+    expect(calls.every(({ options }) => options?.ignoreNotFound)).toBe(true);
+    remove.mockRejectedValue(new Error('secret-value'));
+    await expect(storage().remove(record)).rejects.toThrow(
+      'Media deletion unavailable',
+    );
   });
 });
