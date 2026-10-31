@@ -375,7 +375,14 @@ export class CreateCommentReaction {
           userId,
           type,
         );
-        if (existing) await tx.commands.reactivateCommentReaction(reaction);
+        const activityVersion = existing
+          ? (existing.activityVersion ?? 1) + 1
+          : 1;
+        if (existing)
+          await tx.commands.reactivateCommentReaction(
+            reaction,
+            activityVersion,
+          );
         else await tx.commands.insertCommentReaction(reaction);
         // 댓글 문서 쓰기는 댓글 삭제와 충돌하고, bucket 쓰기는 게시물 종료와 충돌한다.
         if (
@@ -391,6 +398,18 @@ export class CreateCommentReaction {
           postId,
           comment.bucketId ?? 0,
           'commentReactionCount',
+        );
+        await tx.commands.appendEvent(
+          event(
+            postId,
+            'PostCommentReactionCreated',
+            {
+              commentReaction: reaction,
+              commentAuthorId: comment.authorId,
+              activityVersion,
+            },
+            reaction.createdAt,
+          ),
         );
         return reaction;
       });

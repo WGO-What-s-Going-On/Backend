@@ -293,7 +293,7 @@ suite('post activity event contracts', () => {
     ).toBe(0);
   });
 
-  it('keeps comment reactions independent across users and never emits a comment reaction event', async () => {
+  it('keeps comment reactions independent and emits only actual transitions', async () => {
     const id = await create();
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${id}/participants`)
@@ -338,7 +338,9 @@ suite('post activity event contracts', () => {
       AGREE: 1,
       DIFFERENT: 1,
     });
-    expect(await outbox.countDocuments({ aggregateId: id })).toBe(beforeEvents);
+    expect(await outbox.countDocuments({ aggregateId: id })).toBe(
+      beforeEvents + 3,
+    );
 
     await request(app.getHttpServer())
       .delete(`${path}/AGREE`)
@@ -369,7 +371,9 @@ suite('post activity event contracts', () => {
       .delete(`${path}/LIKE`)
       .set(other)
       .expect(400);
-    expect(await outbox.countDocuments({ aggregateId: id })).toBe(beforeEvents);
+    expect(await outbox.countDocuments({ aggregateId: id })).toBe(
+      beforeEvents + 5,
+    );
 
     await lifecycle.deleteComment(id, commentId, 123);
     await request(app.getHttpServer())
@@ -387,7 +391,7 @@ suite('post activity event contracts', () => {
       .lean();
     expect(savedComment.reactionCounts.HELPFUL).toBe(0);
     expect(await outbox.countDocuments({ aggregateId: id })).toBe(
-      beforeEvents + 1,
+      beforeEvents + 7,
     );
   });
 
@@ -450,7 +454,9 @@ suite('post activity event contracts', () => {
       AGREE: 1,
       DIFFERENT: 0,
     });
-    expect(await outbox.countDocuments({ aggregateId: id })).toBe(beforeEvents);
+    expect(await outbox.countDocuments({ aggregateId: id })).toBe(
+      beforeEvents + 3,
+    );
   });
 
   it('accepts only one of two concurrent reaction types for each target', async () => {
@@ -508,7 +514,9 @@ suite('post activity event contracts', () => {
       page.body.comments[0].reactionCounts.HELPFUL +
         page.body.comments[0].reactionCounts.AGREE,
     ).toBe(1);
-    expect(await outbox.countDocuments({ aggregateId: id })).toBe(beforeEvents);
+    expect(await outbox.countDocuments({ aggregateId: id })).toBe(
+      beforeEvents + 1,
+    );
   });
 
   it('counts concurrent duplicate comment reactions once', async () => {
@@ -548,7 +556,7 @@ suite('post activity event contracts', () => {
         .model('CommentReaction')
         .countDocuments({ commentId, type: 'HELPFUL' }),
     ).toBe(1);
-    expect(await outbox.countDocuments({ aggregateId: id })).toBe(3);
+    expect(await outbox.countDocuments({ aggregateId: id })).toBe(4);
   });
 
   it('authorizes comment deletion and emits no second event on retry', async () => {
@@ -875,7 +883,7 @@ suite('post activity event contracts', () => {
     expect(await events(future, 'PostExpired')).toHaveLength(0);
   });
 
-  it('publishes all nine contracts and safely replays quarantined events with the same ID', async () => {
+  it('publishes activity contracts and safely replays quarantined events with the same ID', async () => {
     const worker = new OutboxWorker(outbox);
     try {
       await worker.publishPending();
@@ -883,6 +891,8 @@ suite('post activity event contracts', () => {
       expect(new Set(entries.map((entry) => entry.message.eventType))).toEqual(
         new Set([
           'PostCreated',
+          'PostCommentReactionCreated',
+          'PostCommentReactionRemoved',
           'PostCommentCreated',
           'PostReactionCreated',
           'PostParticipantJoined',

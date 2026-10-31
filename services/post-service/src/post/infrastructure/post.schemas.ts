@@ -126,6 +126,7 @@ export const CommentReactionSchema = new Schema(
     },
     createdAt: { type: Date, required: true },
     removedAt: { type: Date, default: null },
+    activityVersion: { type: Number, default: 1 },
   },
   options,
 );

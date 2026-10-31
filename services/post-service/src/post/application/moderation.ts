@@ -1,3 +1,4 @@
+import { closeVote } from './vote.js';
 import { PostNotFoundError } from '../domain/post.js';
 import { event } from './event.js';
 import type { PostUnitOfWork } from './ports.js';
@@ -25,7 +26,7 @@ export class ApplyModerationLifecycle {
       const now = new Date();
       const postVersion = post.postVersion + 1;
       await tx.commands.fenceActivities(post.postId, post.bucketCount);
-      await tx.commands.closeVote(post.postId, now);
+      await closeVote(tx, post.postId, now);
       // CLOSED가 발생한 시각을 종료 효력 시각으로 보존하고 실제 적용 시각과 구분한다.
       await tx.commands.scheduleExpiration(post.postId, input.occurredAt, now);
       await tx.commands.changePostStatus(

@@ -7,6 +7,7 @@ import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import type { ClientSession, Connection, Model } from 'mongoose';
 import type {
+  VoteWin,
   PostCommands,
   PostStateQueries,
   PostUnitOfWork,
@@ -294,6 +295,7 @@ class MongoCommands implements PostCommands {
 
   async reactivateCommentReaction(
     reaction: CommentReactionRecord,
+    activityVersion: number,
   ): Promise<void> {
     await this.commentReactions.updateOne(
       {
@@ -301,7 +303,13 @@ class MongoCommands implements PostCommands {
         userId: reaction.userId,
         type: reaction.type,
       },
-      { $set: { createdAt: reaction.createdAt, removedAt: null } },
+      {
+        $set: {
+          createdAt: reaction.createdAt,
+          removedAt: null,
+          activityVersion,
+        },
+      },
       { session: this.session },
     );
   }
@@ -311,10 +319,11 @@ class MongoCommands implements PostCommands {
     userId: number,
     type: CommentReactionType,
     now: Date,
+    activityVersion: number,
   ): Promise<void> {
     await this.commentReactions.updateOne(
       { commentId, userId, type },
-      { $set: { removedAt: now } },
+      { $set: { removedAt: now, activityVersion } },
       { session: this.session },
     );
   }
@@ -489,7 +498,7 @@ class MongoCommands implements PostCommands {
     );
   }
 
-  async closeVote(postId: string, now: Date): Promise<void> {
+  async closeVote(postId: string, now: Date): Promise<VoteWin | null> {
     const post = await this.posts
       .findOne({ postId })
       .session(this.session)
@@ -501,7 +510,7 @@ class MongoCommands implements PostCommands {
       vote.status === 'CANCELLED' ||
       vote.status === 'NONE'
     )
-      return;
+      return null;
     if (vote.status === 'PENDING') {
       await this.posts.updateOne(
         { postId },
@@ -512,7 +521,7 @@ class MongoCommands implements PostCommands {
         },
         { session: this.session },
       );
-      return;
+      return null;
     }
     const [first, second] = vote.candidates ?? [];
     const winner =
@@ -523,6 +532,14 @@ class MongoCommands implements PostCommands {
             : second
           : null
         : null;
+    // 승리한 댓글 작성자를 결과 확정과 같은 스냅샷에서 확인한다.
+    const comment = winner
+      ? await this.comments
+          .findOne({ postId, commentId: winner.commentId })
+          .session(this.session)
+          .lean()
+      : null;
+    if (winner && !comment) throw new Error('Winning comment is missing');
     await this.posts.updateOne(
       { postId },
       {
@@ -537,6 +554,16 @@ class MongoCommands implements PostCommands {
       },
       { session: this.session },
     );
+    return winner
+      ? {
+          postId,
+          resultId: postId,
+          commentId: winner.commentId,
+          winnerAuthorId: comment!.authorId,
+          votes: winner.votes,
+          closedAt: now,
+        }
+      : null;
   }
 
   async leaveParticipant(

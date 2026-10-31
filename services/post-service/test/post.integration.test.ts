@@ -1,3 +1,4 @@
+import { serializePostEvent } from '../src/post/infrastructure/post-event-envelope.js';
 import { UserProfiles } from '../src/post/infrastructure/user-profiles.js';
 import { SemanticWorker } from '../src/post/semantic/worker.js';
 import type { INestApplication } from '@nestjs/common';
@@ -911,6 +912,147 @@ suite('post creation integration', () => {
     }
   });
 
+  it('publishes comment reaction transitions once and rolls back when outbox storage fails', async () => {
+    const made = await request(app.getHttpServer())
+      .post('/api/v1/posts')
+      .set(header)
+      .send({
+        title: 'Rewards',
+        content: 'Details',
+        category: 'INCIDENT',
+        latitude: 37.5,
+        longitude: 127,
+        radiusM: 250,
+      })
+      .expect(201);
+    const postId = made.body.postId;
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${postId}/participants`)
+      .set(header)
+      .send({})
+      .expect(201);
+    const comment = await request(app.getHttpServer())
+      .post(`/api/v1/posts/${postId}/comments`)
+      .set(header)
+      .send({ content: 'Reward me' })
+      .expect(201);
+    const commentId = comment.body.commentId;
+    const path = `/api/v1/posts/${postId}/comments/${commentId}/reactions`;
+    const create = () =>
+      request(app.getHttpServer())
+        .post(path)
+        .set('X-User-Id', '789')
+        .send({ type: 'AGREE' });
+    const remove = () =>
+      request(app.getHttpServer())
+        .delete(`${path}/AGREE`)
+        .set('X-User-Id', '789');
+    vi.spyOn(outbox, 'create').mockRejectedValueOnce(
+      new Error('outbox unavailable'),
+    );
+    await create().expect(500);
+    expect(
+      (await comments.findOne({ commentId }).lean()).reactionCounts.AGREE,
+    ).toBe(0);
+    await create().expect(201);
+    await create().expect(201);
+    await remove().expect(204);
+    await remove().expect(204);
+    await create().expect(201);
+    const events = await outbox
+      .find({ aggregateId: postId, eventType: /^PostCommentReaction/ })
+      .sort({ 'payload.activityVersion': 1 })
+      .lean();
+    expect(events.map((e) => [e.eventType, e.payload.activityVersion])).toEqual(
+      [
+        ['PostCommentReactionCreated', 1],
+        ['PostCommentReactionRemoved', 2],
+        ['PostCommentReactionCreated', 3],
+      ],
+    );
+    for (const row of events) {
+      expect(JSON.parse(serializePostEvent(row))).toMatchObject({
+        commentAuthorId: 123,
+        commentReaction: { postId, commentId, userId: 789, type: 'AGREE' },
+      });
+    }
+    await worker.publishPending();
+    const published = await redis.xRange('post:events', '-', '+');
+    for (const row of events)
+      expect(published.some((e) => e.message.eventId === row.eventId)).toBe(
+        true,
+      );
+  });
+
+  it('commits a single winner with author closure, rolls back failed outbox writes and never awards again after reopening', async () => {
+    const made = await request(app.getHttpServer())
+      .post('/api/v1/posts')
+      .set(header)
+      .send({
+        title: 'Winner',
+        content: 'Details',
+        category: 'INCIDENT',
+        latitude: 37.5,
+        longitude: 127,
+        radiusM: 250,
+      })
+      .expect(201);
+    const postId = made.body.postId;
+    await request(app.getHttpServer())
+      .post(`/api/v1/posts/${postId}/participants`)
+      .set(header)
+      .send({})
+      .expect(201);
+    const candidates = [];
+    for (const content of ['A', 'B'])
+      candidates.push(
+        (
+          await request(app.getHttpServer())
+            .post(`/api/v1/posts/${postId}/comments`)
+            .set(header)
+            .send({ content })
+            .expect(201)
+        ).body.commentId,
+      );
+    await comments.updateOne(
+      { commentId: candidates[0] },
+      { $set: { authorId: 789 } },
+    );
+    await posts.updateOne({ postId }, { $set: { voteAt: new Date(0) } });
+    await app.get(VoteWorker).runOnce();
+    await request(app.getHttpServer())
+      .put(`/api/v1/posts/${postId}/vote`)
+      .set(header)
+      .send({ commentId: candidates[0] })
+      .expect(200);
+    const lifecycle = app.get(PostLifecycle);
+    vi.spyOn(outbox, 'create').mockRejectedValueOnce(
+      new Error('winner outbox unavailable'),
+    );
+    await expect(lifecycle.setClosed(postId, 123, true)).rejects.toThrow(
+      'winner outbox unavailable',
+    );
+    expect((await posts.findOne({ postId }).lean()).vote.status).toBe('OPEN');
+    expect(
+      await outbox.countDocuments({
+        aggregateId: postId,
+        eventType: 'PostVoteWon',
+      }),
+    ).toBe(0);
+    await Promise.all([
+      lifecycle.setClosed(postId, 123, true),
+      lifecycle.setClosed(postId, 123, true),
+    ]);
+    await lifecycle.setClosed(postId, 123, false);
+    await lifecycle.setClosed(postId, 123, true);
+    await lifecycle.deletePost(postId, 123);
+    const wins = await outbox
+      .find({ aggregateId: postId, eventType: 'PostVoteWon' })
+      .lean();
+    expect(wins).toHaveLength(1);
+    expect(wins[0].payload.vote.winnerAuthorId).toBe(789);
+  });
+
   it('freezes candidates, moves and cancels a vote, and keeps the winner after expiry', async () => {
     const created = await request(app.getHttpServer())
       .post('/api/v1/posts')
@@ -1013,6 +1155,21 @@ suite('post creation integration', () => {
       .expect(200);
     expect(closed.body.status).toBe('CLOSED');
     expect(closed.body.winner.commentId).toBe(first.body.commentId);
+    await app.get(PostLifecycle).expire(postId);
+    const wins = await outbox
+      .find({ aggregateId: postId, eventType: 'PostVoteWon' })
+      .lean();
+    expect(wins).toHaveLength(1);
+    expect(JSON.parse(serializePostEvent(wins[0]))).toMatchObject({
+      vote: {
+        postId,
+        resultId: postId,
+        commentId: first.body.commentId,
+        winnerAuthorId: 123,
+        votes: 1,
+      },
+    });
+
     await request(app.getHttpServer())
       .put(`/api/v1/posts/${postId}/vote`)
       .set(header)
@@ -1143,6 +1300,12 @@ suite('post creation integration', () => {
           .expect(200)
       ).body.winner,
     ).toBeNull();
+    expect(
+      await outbox.countDocuments({
+        aggregateId: { $in: [sparse, early, cancelled, empty] },
+        eventType: 'PostVoteWon',
+      }),
+    ).toBe(0);
   });
 
   it('returns no winner for a tie and keeps results after post deletion', async () => {
