@@ -412,7 +412,7 @@ curl -X POST http://localhost:3002/api/v1/posts/similar \
 
 ### 10.1 프로세스 수명주기와 cold start
 
-운영 Post는 ECS Service의 상시 실행 task로 배포한다. 최소 실행 수를 0보다 크게 유지하고, 가용성과 트래픽 목표에 따라 여러 task를 둔다. 모델 파일은 버전·checksum을 고정하여 이미지 또는 배포 준비 단계에서 제공한다. 사용자 요청 중 모델을 다운로드하지 않는다. ECS Service는 지정된 task 수를 유지하며, scale-to-zero는 별도 설정이다. [AWS ECS Service](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_CreateService.html), [오토스케일링](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-auto-scaling.html)
+운영 Post는 GKE Autopilot의 독립 Deployment로 배포한다. 개발·데모는 단일 replica를 허용한다. 모델 파일은 고정 revision과 checksum으로 이미지에 포함하며 사용자 요청 중 다운로드하지 않는다. Pod 자원과 startup probe는 목표 node 아키텍처에서 실제 모델 warmup으로 검증한다.
 
 ```text
 Post task 시작 → 모델 로딩 → 짧은/긴 샘플 워밍업 → readiness 통과
@@ -448,7 +448,7 @@ ONNX Runtime은 CPU 스레드 조정을 지원하며 과도한 thread pool 경�
 
 ### 10.3 성능 실험과 채택 기준
 
-운영과 같은 CPU 아키텍처·vCPU·메모리 제한에서 측정한다. Mac 실험 결과를 ECS 처리량으로 그대로 환산하지 않는다. 다음 조합을 단계적으로 시험하여 병목 구간을 확인한다.
+운영과 같은 CPU 아키텍처·vCPU·메모리 제한에서 측정한다. Mac 실험 결과를 GKE 처리량으로 그대로 환산하지 않는다. 다음 조합을 단계적으로 시험하여 병목 구간을 확인한다.
 
 - 후보 수: 0/20/100/200개. 입력 길이: 짧은 현장 제보/일반 글/본문 5,000자.
 - 요청 부하: 동시 요청 1/5/10/20에서 시작하고 예상 운영 RPS까지 일정 도착률로 증가시킨다. 포화 뒤에도 대기열이 무한 증가하지 않는지 확인한다.
@@ -557,6 +557,6 @@ MultipleNegativesRankingLoss처럼 배치 안의 다른 문장을 오답으로 �
 3. 초기 모델 후보인 다국어 E5의 ONNX 호환성·한국어 품질·장문 성능·운영 메모리와 양자화 효과가 충분한지. 기준 미달이면 동일 Post 어댑터 경계에서 모델을 재선정한다.
 4. 검색 장애 또는 부분 결과에서도 사용자에게 상태를 알리고 작성을 계속 허용할지.
 5. 9절 품질·지연 목표를 1차 실험 기준으로 삼을지. 미달 시 모델·후보 정책 중 어느 쪽을 수정할지는 분리 측정 결과로 결정한다.
-6. 예상 피크 RPS와 허용되는 기존 Post API 지연 증가량을 얼마로 둘지. 실제 부하 측정으로 추론 동시성·큐 상한·ECS 최소 용량을 확정한다.
+6. 예상 피크 RPS와 허용되는 기존 Post API 지연 증가량을 얼마로 둘지. 실제 부하 측정으로 추론 동시성·큐 상한·GKE 최소 용량을 확정한다.
 
-2026-10-06 추가 구현: 실제 E5-small CPU FP32 모델을 Post의 공통 EmbeddingProvider에 연결했다. 고정 revision·checksum 검증, 오프라인 로딩·워밍업, 전체 토큰 창 분할, 제한된 공통 큐, Worker 준비 대기, CLI 초기화·해제를 구현했다. 실제 모델 버전은 `e5-small-761b726-fp32-w480-o64-v1`이며 기존 fixture v1과 인덱스·그룹을 분리한다. 모델 준비 명령은 `pnpm semantic:model:prepare`, 실제 추론 검증은 `pnpm semantic:model:test`다. 이후 한국어 의미 품질·ECS 실행 비용·운영 임계값을 평가하고 필요하면 오프라인 학습을 수행한다. 임계값 기본값은 추가하지 않는다.
+2026-10-06 추가 구현: 실제 E5-small CPU FP32 모델을 Post의 공통 EmbeddingProvider에 연결했다. 고정 revision·checksum 검증, 오프라인 로딩·워밍업, 전체 토큰 창 분할, 제한된 공통 큐, Worker 준비 대기, CLI 초기화·해제를 구현했다. 실제 모델 버전은 `e5-small-761b726-fp32-w480-o64-v1`이며 기존 fixture v1과 인덱스·그룹을 분리한다. 모델 준비 명령은 `pnpm semantic:model:prepare`, 실제 추론 검증은 `pnpm semantic:model:test`다. 이후 한국어 의미 품질·GKE 실행 비용·운영 임계값을 평가하고 필요하면 오프라인 학습을 수행한다. 임계값 기본값은 추가하지 않는다.

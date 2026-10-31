@@ -23,7 +23,9 @@
     "semantic:rebuild": "pnpm build && pnpm semantic:command rebuild",
     "semantic:fixture": "RUN_SEMANTIC_INTEGRATION=1 vitest run test/semantic.integration.test.ts",
     "region:backfill": "node dist/post/infrastructure/region-backfill.cli.js",
-    "media:gcs:smoke": "pnpm build && node dist/post/media/gcs-smoke.js"
+    "media:gcs:smoke": "pnpm build && node dist/post/media/gcs-smoke.js",
+    "storage:smoke": "pnpm build && node dist/storage-smoke.js",
+    "semantic:model:smoke": "pnpm build && node dist/post/semantic/model-smoke.js"
   },
   "dependencies": {
     "@google-cloud/storage": "8.4.0",

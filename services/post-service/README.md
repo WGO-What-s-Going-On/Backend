@@ -253,7 +253,7 @@ pnpm semantic:fixture
 RUN_INTEGRATION=1 RUN_SEMANTIC_INTEGRATION=1 RUN_EMBEDDING_MODEL=1 pnpm test
 ```
 
-`semantic:fixture`는 테스트 전용 MongoDB와 Redis DB 14에 201개 생성 이벤트를 적재하여 실제 후보/검색/회수/재구축을 검증한다. ES 테스트 인덱스와 MongoDB는 종료 시 정리한다. 고정 벡터는 연동과 정렬을 검증한다. 실제 모델 테스트도 기준 추론 일치·장문 끝부분 반영·연동을 검증하며 한국어 중복 판별 품질을 보증하지 않는다. 운영 임계값 평가·추가 학습·양자화·ECS 부하 튜닝·운영 인증 개방은 후속 범위다.
+`semantic:fixture`는 테스트 전용 MongoDB와 Redis DB 14에 201개 생성 이벤트를 적재하여 실제 후보/검색/회수/재구축을 검증한다. ES 테스트 인덱스와 MongoDB는 종료 시 정리한다. 고정 벡터는 연동과 정렬을 검증한다. 실제 모델 테스트도 기준 추론 일치·장문 끝부분 반영·연동을 검증하며 한국어 중복 판별 품질을 보증하지 않는다. 운영 임계값 평가·추가 학습·양자화·GKE 부하 튜닝·운영 인증 개방은 후속 범위다.
 
 
 Map `SearchNearbyPosts` gRPC는 기존 공간 조회의 커서를 전달한다. `GrpcNearbyPosts.page({latitude, longitude, radiusM, limit, cursor?})`로 페이지당 최대 200개를 조회하고 반환된 `nextCursor`로 이어서 조회할 수 있다. 마지막 페이지는 `nextCursor: null`이다. 유사도 검색용 `search()`는 150m 첫 페이지 200개까지만 비교하며 추가 페이지를 자동 조회하지 않는다. 일반 페이지 조회를 사용하려면 nextCursor를 지원하는 Map을 먼저 배포한다.
@@ -271,3 +271,14 @@ MongoDB localhost:27017 replica set `rs0`와 Redis localhost:6380을 준비한 �
 ## Cloud Storage 이미지·동영상 첨부
 
 게시물·댓글 각각 이미지/동영상 합계 최대 5개를 지원한다. 업로드 예약 → GCS PUT → 완료 검증 → `mediaIds`로 작성 → 조회 시 GET URL 발급 흐름이다. URL은 저장하지 않는다. 기본 비활성이고 운영 공개 쓰기는 기존 인증 정책대로 503이다. API·프론트 예시·환경변수·IAM/CORS/Lifecycle·DB 인덱스·배포 검증은 [미디어 계약](contracts/media.md)을 따른다.
+
+
+## GKE 운영 연결과 모델 확인
+
+GKE의 MongoDB는 인증과 TLS를 켠 단일 노드 replica set으로 실행한다. Post의 `MONGODB_URI`에는 `tls=true`, `replicaSet=rs0`, `tlsCAFile`을 지정한다. 다른 서비스 DB를 조회하지 않는다. ECK Elasticsearch의 HTTPS Service와 전용 API key를 설정하고 CA Secret을 `NODE_EXTRA_CA_CERTS` 경로에 마운트한다.
+
+`MONGODB_TLS_CA_SOURCE`와 `ELASTICSEARCH_TLS_CA_SOURCE`는 production에서 기본 `file`이다. 공개 CA를 사용하는 경우에만 `system`을 명시하고 해당 CA 파일 경로를 생략한다. 잘못된 CA, TLS 검증 우회, Mongo replica set 누락은 시작 전에 실패한다.
+
+모델은 기존 glibc 기반 이미지에 고정 revision과 checksum으로 포함한다. GKE node와 같은 아키텍처로 이미지를 빌드한 뒤 `node dist/post/semantic/model-smoke.js`를 실행한다. 이 검증은 실제 로컬 ONNX 모델을 warmup하고 384차원 정규화 벡터와 반복 추론 일치를 확인한다. 외부 모델 다운로드는 실행하지 않는다. `pnpm semantic:model:test`는 장문과 기준 pipeline 일치까지 검증한다.
+
+`pnpm storage:smoke`는 설정된 MongoDB에서 transaction commit·rollback을 확인하고 ES의 임시 인덱스에서 384차원 벡터 쓰기·검색을 확인한다. 전용 staging 계정으로 실행한다. 임시 collection과 index를 만들고 삭제하며 운영 데이터를 사용하지 않는다. 실제 GKE 인증서·권한·DNS와 Pod 교체 검증은 이 명령과 별도로 실행한다.
