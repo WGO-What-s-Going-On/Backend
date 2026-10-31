@@ -361,6 +361,13 @@ Realtime Consumer Group이 받은 이벤트를 Redis Pub/Sub으로 각 Gateway i
 Image는 불변으로 관리하고 설정과 Secret은 Runtime에 주입한다. Health Check를
 통해 비정상 Task 교체와 배포 Rollout을 제어한다.
 
+CD는 서비스별 마지막 성공 SHA를 기준으로 변경된 런타임만 선택한다. 선택된 이미지 빌드를
+병렬 실행하고 모두 성공한 뒤 서비스 의존 순서에 따라 제한된 동시성으로 배포한다.
+Post는 선택된 User·Map 이후, WS Gateway는 선택된 Post·User 이후, HTTP Gateway는 나머지
+선택된 서비스 이후에 배포한다. 서비스별 상태·Secret·배포 대상은 분리하고 전체 릴리스 실행은
+직렬화한다. 부분 실패 시 성공한 서비스는 유지하며 실패한 단계 이후 배포를 중단한다.
+상세 설정과 복구 절차는 [서비스별 배포](docs/deployment/cd.md)를 따른다.
+
 - HTTP Gateway는 요청량, 지연 시간, CPU와 Memory를 기준으로 확장한다.
 - Realtime Gateway는 활성 연결 수, 이벤트 처리량, CPU와 Memory를 기준으로
   확장한다.

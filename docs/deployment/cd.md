@@ -23,6 +23,10 @@
 - Secret/task definition만 바꿀 때는 선택적으로 `CD_FORCE_SERVICES` Secret에 서비스 이름 목록 또는
   `all`을 설정하고 main으로 변경 안내 PR을 병합한다. staging/production에 같은 값을 적용하고
   배포 성공 후 비운다. 실패한 기존 실행은 GitHub에서 재실행할 수 있다.
+- GitHub Actions Variables의 `CD_BUILD_CONCURRENCY`는 이미지 빌드 동시 실행 수이며 기본값은 2다.
+  `CD_DEPLOY_CONCURRENCY`는 서비스 배포 동시 실행 수이며 기본값은 4다. 두 값 모두 1~7의 정수다.
+  Repository 또는 Environment Variables로 설정한다. 1로 설정하면 해당 작업을 순차 실행한다.
+  빌드는 같은 runner의 CPU·메모리·Docker를 공유하므로 runner 용량에 맞춰 조정한다.
 
 ### staging 최초 배포
 
@@ -52,8 +56,17 @@ Actions → CD → Run workflow에서 **main** 브랜치를 선택하고 `initia
    테스트·문서만 변경되면 이미지를 다시 만들지 않는다. 누락된 state는 최초 배포로 간주한다.
    권한/네트워크 오류를 state 없음으로 처리하지 않는다. 삭제되거나 유효하지 않은 과거 Git SHA는
    배포를 중단하므로 히스토리 rewrite를 피하고 state 복구를 검토한다.
-3. 모든 변경 이미지를 ECR에 push하고 digest를 고정한 뒤 서비스 배포를 시작한다. 서비스 순서는 User→Map→Post→Notification→
-   Moderation→HTTP Gateway→WS Gateway다. 호환되지 않는 계약은 별도 단계적 릴리스가 필요하다.
+   CI의 계약 검증 대상이 늘어나도 변경되지 않은 소비자 서비스를 재배포하지 않는다.
+   예를 들어 Post 소스만 바뀌면 Post만 배포한다. 공통 `shared/`, `packages/` 변경은 전체 서비스에 적용한다.
+   CD 스크립트의 Gateway 런타임 설정 변경 감지와 명시적인 강제 배포는 예외다.
+   변경 없는 서비스는 ECS 조회·빌드·Secret 갱신·배포를 건너뛰고 기존 digest를 release에 유지한다.
+3. 선택된 이미지를 제한된 동시성으로 빌드하고 ECR에 push한다. 모든 digest가 준비된 뒤 배포를 시작한다.
+   하나라도 빌드에 실패하면 진행 중인 빌드가 끝날 때까지 기다리고 서비스 배포는 시작하지 않는다.
+   배포는 선택된 서비스 사이의 의존 순서에 따라 병렬 실행한다.
+   User·Map·Notification·Moderation은 병렬 배포할 수 있다. Post는 선택된 User·Map 이후,
+   WS Gateway는 선택된 Post·User 이후, HTTP Gateway는 나머지 선택된 서비스 이후에 배포한다.
+   변경되지 않은 선행 서비스는 배포 대상으로 추가하지 않는다.
+   각 배포 단계가 성공해야 다음 단계를 시작한다. 호환되지 않는 계약은 별도 단계적 릴리스가 필요하다.
 4. 서비스의 런타임 값은 GitHub Secret JSON에서 Secrets Manager의 기존 서비스 전용 Secret에 저장한다.
    Task definition은 JSON key와 **VersionId를 고정한 참조**만 가진다. plaintext 런타임 값은
    task definition·Docker layer·artifact에 넣지 않는다. 구 버전 Secret을 삭제하면 rollback이 불가능하다.
@@ -86,6 +99,8 @@ Actions → CD → Run workflow에서 **main** 브랜치를 선택하고 `initia
   OIDC trust의 `aud=sts.amazonaws.com` 및 `sub=repo:ORG/REPO:environment:staging|production`을 제한한다.
 - Application task role은 배포 역할과 분리한다. 애플리케이션이 직접 필요한 AWS 권한만 부여한다.
 - Secrets Manager secret은 서비스·환경별로 별도 생성한다. 실행 역할이 참조된 모든 VersionId를 읽을 수 있어야 한다.
+- 같은 환경의 서비스끼리 ECS service, ECR repository, task definition family, runtime Secret ARN을 공유하지 않는다.
+  병렬 작업의 이미지·revision·Secret 덮어쓰기를 막기 위해 중복 설정은 배포 전에 거부한다.
 - NAT/VPC endpoints 또는 적절한 네트워크 경로로 ECR·Secrets Manager·CloudWatch 및 외부 OAuth에 접근한다.
 - DB/Redis는 배포 파이프라인이 생성·삭제하지 않는다. MongoDB transaction 및 Cassandra 기능은 현재
   드라이버/구현과 실제 선택한 AWS 저장소의 호환성을 먼저 검증한다.
@@ -103,6 +118,9 @@ Actions → CD → Run workflow에서 **main** 브랜치를 선택하고 `initia
 Production 실패 후 `Re-run failed jobs`는 기존 staging release artifact를 다시 사용한다.
 `Re-run all jobs`는 같은 SHA 이름의 artifact를 명시적으로 교체해 upload-artifact v4 충돌을 피한다.
 실패 이전에 성공한 서비스는 유지되므로 여러 서비스가 함께 실패하면 전체 원자적 rollback이라고 가정하지 않는다.
+병렬 배포 중 하나가 실패하면 같은 단계에서 시작한 다른 작업의 검증·복구까지 기다린다.
+실패한 단계 뒤의 서비스는 배포하지 않으며 불완전한 release artifact를 발행하지 않는다.
+성공한 서비스의 SSM state는 유지하므로 다음 실행은 서비스별로 남은 변경을 다시 판단한다.
 
 WS 롤링 배포 중 기존 소켓은 새 task로 이전되지 않는다. 클라이언트 재연결·재인가·재참여가 필요하다.
 WS 사용자 토큰 알고리즘 불일치 등 남은 운영 공개 차단 이슈를 배포 성공만으로 해제하지 않는다.
@@ -113,6 +131,9 @@ WS 사용자 토큰 알고리즘 불일치 등 남은 운영 공개 차단 이�
 필수 healthCheck, 아키텍처 및 release 유효성을 검증한다. Fake AWS/docker CLI를 사용하는
 별도 프로세스 테스트는 smoke 이전 state 갱신 방지, 자동 rollback 판별, smoke 실패 복구,
 SSM 권한 오류, production 미반영 배포 따라잡기와 강제 Secret 회전을 검증한다. CI도 `scripts/*.test.mjs`를 실행한다.
+병렬 실행 검증은 서비스별로 분리된 fake state와 동기화 지점을 사용한다. 빌드·배포의 실제 중첩,
+동시 실행 제한, 전체 빌드 성공 전 배포 금지, 실패한 서비스의 복구와 성공한 서비스의 state 유지,
+변경 없는 서비스 생략 및 HTTP Gateway의 선행 배포 완료 조건을 검증한다.
 `actionlint .github/workflows/cd.yml`로 workflow 문법을 검증한다. 실제 배포 검증은 Secrets와 사전 인프라
 설정 후 staging에서 진행해야 한다.
 

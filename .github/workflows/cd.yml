@@ -55,6 +55,8 @@ jobs:
     env:
       CD_INITIAL_DEPLOYMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.initial_deployment && 'true' || 'false' }}
       CD_SHA: ${{ github.sha }}
+      CD_BUILD_CONCURRENCY: ${{ vars.CD_BUILD_CONCURRENCY || '2' }}
+      CD_DEPLOY_CONCURRENCY: ${{ vars.CD_DEPLOY_CONCURRENCY || '4' }}
       CD_FORCE_SERVICES: ${{ secrets.CD_FORCE_SERVICES }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -85,7 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-      - name: Push changed images then deploy staging
+      - name: Build changed images and deploy staging in parallel
         run: node scripts/cd.mjs staging
       - name: Save tested immutable release (no task definitions or secret values)
         uses: actions/upload-artifact@v4
@@ -110,6 +112,8 @@ jobs:
       id-token: write
     env:
       CD_SHA: ${{ github.sha }}
+      CD_BUILD_CONCURRENCY: ${{ vars.CD_BUILD_CONCURRENCY || '2' }}
+      CD_DEPLOY_CONCURRENCY: ${{ vars.CD_DEPLOY_CONCURRENCY || '4' }}
       CD_FORCE_SERVICES: ${{ secrets.CD_FORCE_SERVICES }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -136,5 +140,5 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
           mask-aws-account-id: true
-      - name: Promote exact staging digests and verify production
+      - name: Promote changed staging digests in parallel and verify production
         run: node scripts/cd.mjs production

@@ -9,6 +9,10 @@ import {
   selectReleaseServices,
   validateRelease,
   waitForDeployment,
+  concurrencyLimit,
+  mapConcurrent,
+  deploymentWaves,
+  validateDeploymentTargets,
 } from './cd-lib.mjs';
 
 test('stable task count can precede rollout completion without triggering rollback', async () => {
@@ -363,4 +367,128 @@ test('CD runtime setting changes redeploy both gateways, not unrelated services'
     deploymentRuntimeChanged('user-service', ['scripts/cd-lib.mjs']),
     false,
   );
+});
+
+test('parallel worker limit bounds active work and preserves input order', async () => {
+  const gates = Array.from({ length: 4 }, () => Promise.withResolvers());
+  const started = Array.from({ length: 4 }, () => Promise.withResolvers());
+  const active = new Set();
+  let peak = 0;
+  const result = mapConcurrent([0, 1, 2, 3], 2, async (index) => {
+    active.add(index);
+    peak = Math.max(peak, active.size);
+    started[index].resolve();
+    await gates[index].promise;
+    active.delete(index);
+    return index * 10;
+  });
+  await Promise.all([started[0].promise, started[1].promise]);
+  assert.deepEqual([...active], [0, 1]);
+  gates[1].resolve();
+  await started[2].promise;
+  assert.deepEqual([...active], [0, 2]);
+  gates[2].resolve();
+  await started[3].promise;
+  gates[3].resolve();
+  gates[0].resolve();
+  assert.deepEqual(await result, [0, 10, 20, 30]);
+  assert.equal(peak, 2);
+});
+
+test('failed parallel work stops the queue and drains started peers before rejecting', async () => {
+  const failure = Promise.withResolvers();
+  const peer = Promise.withResolvers();
+  const started = [];
+  let peerFinished = false;
+  let settled = false;
+  const operation = mapConcurrent(
+    ['failed', 'peer', 'queued'],
+    2,
+    async (name) => {
+      started.push(name);
+      if (name === 'failed') {
+        await failure.promise;
+        throw new Error('expected failure');
+      }
+      await peer.promise;
+      peerFinished = true;
+    },
+  );
+  const checked = assert.rejects(operation, /expected failure/).then(() => {
+    settled = true;
+  });
+  failure.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  assert.deepEqual(started, ['failed', 'peer']);
+  peer.resolve();
+  await checked;
+  assert.equal(peerFinished, true);
+});
+
+test('deployment concurrency accepts only bounded positive integers', () => {
+  assert.equal(concurrencyLimit(undefined, 2, 'limit'), 2);
+  assert.equal(concurrencyLimit('7', 2, 'limit'), 7);
+  for (const value of ['', '0', '8', '-1', '1.5', 'Infinity', '2x'])
+    assert.throws(() => concurrencyLimit(value, 2, 'limit'), /1 to 7/);
+});
+
+test('deployment waves preserve changed dependencies without adding unchanged services', () => {
+  const services = [
+    'http-gateway',
+    'ws-gateway',
+    'post-service',
+    'user-service',
+    'map-service',
+    'notification-service',
+    'moderation-service',
+  ].map((name) => ({ name }));
+  assert.deepEqual(
+    deploymentWaves(services).map((wave) => wave.map(({ name }) => name)),
+    [
+      [
+        'user-service',
+        'map-service',
+        'notification-service',
+        'moderation-service',
+      ],
+      ['post-service'],
+      ['ws-gateway'],
+      ['http-gateway'],
+    ],
+  );
+  assert.deepEqual(deploymentWaves([{ name: 'post-service' }]), [
+    [{ name: 'post-service' }],
+  ]);
+  assert.deepEqual(deploymentWaves([]), []);
+});
+
+test('parallel deployment rejects shared AWS write targets', () => {
+  const first = {
+    ecsService: 'first',
+    ecrRepository: 'first',
+    runtimeSecretArn: 'first',
+    taskDefinition: { family: 'first' },
+  };
+  const second = {
+    ecsService: 'second',
+    ecrRepository: 'second',
+    runtimeSecretArn: 'second',
+    taskDefinition: { family: 'second' },
+  };
+  const services = [{ name: 'user-service' }, { name: 'map-service' }];
+  const configured = { 'user-service': first, 'map-service': second };
+  assert.doesNotThrow(() => validateDeploymentTargets(services, configured));
+  for (const key of [
+    'ecsService',
+    'ecrRepository',
+    'runtimeSecretArn',
+    'family',
+  ]) {
+    const copy = structuredClone(configured);
+    if (key === 'family')
+      copy['map-service'].taskDefinition.family = first.taskDefinition.family;
+    else copy['map-service'][key] = first[key];
+    assert.throws(() => validateDeploymentTargets(services, copy), /shared/);
+  }
 });

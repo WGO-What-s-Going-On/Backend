@@ -6,7 +6,7 @@ export async function waitForDeployment(
   attempts = 60,
 ) {
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const service = readService();
+    const service = await readService();
     const target = service?.deployments?.find(
       (d) => d.taskDefinition === revision,
     );
@@ -143,26 +143,109 @@ export function renderTask(config, image, runtime, versionId) {
   return task;
 }
 
-export function selectReleaseServices(manifest, configured) {
-  const known = new Map(
-    manifest.services.map((service) => [service.name, service]),
-  );
-  for (const name of Object.keys(configured))
-    if (!known.has(name))
-      throw new Error(`Unknown deployment service: ${name}`);
-  // Receiver-first order for contracts; only configured services participate in the rollout.
-  const order = [
+const deploymentDependencies = {
+  'user-service': [],
+  'map-service': [],
+  'notification-service': [],
+  'moderation-service': [],
+  'post-service': ['user-service', 'map-service'],
+  'ws-gateway': ['user-service', 'post-service'],
+  'http-gateway': [
     'user-service',
     'map-service',
     'post-service',
     'notification-service',
     'moderation-service',
-    'http-gateway',
     'ws-gateway',
-  ];
-  return order
+  ],
+};
+
+export function selectReleaseServices(manifest, configured) {
+  const known = new Map(
+    manifest.services.map((service) => [service.name, service]),
+  );
+  for (const name of Object.keys(configured))
+    if (!known.has(name) || !Object.hasOwn(deploymentDependencies, name))
+      throw new Error(`Unknown deployment service: ${name}`);
+  return Object.keys(deploymentDependencies)
     .filter((name) => configured[name])
     .map((name) => known.get(name));
+}
+
+export function deploymentWaves(services) {
+  const remaining = new Map(services.map((service) => [service.name, service]));
+  const waves = [];
+  while (remaining.size) {
+    const wave = [...remaining.values()].filter(({ name }) => {
+      const dependencies = deploymentDependencies[name];
+      if (!dependencies) throw new Error(`Unknown deployment service: ${name}`);
+      return dependencies.every((dependency) => !remaining.has(dependency));
+    });
+    if (!wave.length) throw new Error('Cyclic deployment dependencies');
+    waves.push(wave);
+    for (const service of wave) remaining.delete(service.name);
+  }
+  return waves;
+}
+
+export function validateDeploymentTargets(services, configured) {
+  for (const key of [
+    'ecsService',
+    'ecrRepository',
+    'runtimeSecretArn',
+    'family',
+  ]) {
+    const owners = new Map();
+    for (const { name } of services) {
+      const config = configured[name];
+      const value =
+        key === 'family' ? config.taskDefinition.family : config[key];
+      if (owners.has(value))
+        throw new Error(`${name}: ${key} is shared with ${owners.get(value)}`);
+      owners.set(value, name);
+    }
+  }
+}
+
+export function concurrencyLimit(value, fallback, name) {
+  const input = value ?? String(fallback);
+  if (!/^[1-7]$/.test(input))
+    throw new Error(`${name} must be an integer from 1 to 7`);
+  return Number(input);
+}
+
+export async function mapConcurrent(items, limit, worker) {
+  if (!Number.isInteger(limit) || limit < 1)
+    throw new Error('Concurrency must be a positive integer');
+  const results = new Array(items.length);
+  const errors = [];
+  let next = 0;
+  async function consume() {
+    while (!errors.length && next < items.length) {
+      const index = next++;
+      try {
+        results[index] = await worker(items[index], index);
+      } catch (error) {
+        errors.push(
+          new Error(
+            items[index]?.name
+              ? `${items[index].name}: ${error.message}`
+              : error.message,
+          ),
+        );
+      }
+    }
+  }
+  // Drain started operations, including rollbacks, before the caller cleans up their input files.
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, consume),
+  );
+  if (errors.length)
+    throw new AggregateError(
+      errors,
+      errors.map((error) => error.message).join('; '),
+    );
+  return results;
 }
 
 export function validateRelease(release, sha) {
