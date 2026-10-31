@@ -35,6 +35,12 @@ export function postgresConfig(
       'Direct production PostgreSQL requires DB_TLS_MODE=verify-full',
     );
   }
+  if (
+    env.NODE_ENV === 'production' &&
+    mode === 'direct' &&
+    !env.DB_PASSWORD?.trim()
+  )
+    throw new Error('DB_PASSWORD is required for direct production PostgreSQL');
   if (tls === 'disable' && env.DB_TLS_CA_PATH)
     throw new Error('DB_TLS_CA_PATH requires DB_TLS_MODE=verify-full');
   return {

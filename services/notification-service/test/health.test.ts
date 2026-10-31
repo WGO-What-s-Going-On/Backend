@@ -21,7 +21,7 @@ describe('health endpoint', () => {
     await app.close();
   });
 
-  it('reports liveness without Redis or DynamoDB', async () => {
+  it('reports liveness without Redis or PostgreSQL', async () => {
     await request(app.getHttpServer())
       .get('/health/live')
       .expect(200)

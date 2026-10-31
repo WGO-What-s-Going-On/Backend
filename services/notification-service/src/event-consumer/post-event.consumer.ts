@@ -12,7 +12,7 @@ import { createClient } from 'redis';
 
 import { parsePostEvent } from './post-event.js';
 import { PostEventHandler } from './post-event.handler.js';
-import { BusyDeliveryError } from '../persistence/dynamodb-event.store.js';
+import { BusyDeliveryError } from '../persistence/postgres-event.store.js';
 
 const STREAM = 'post:events';
 const GROUP = 'post-notification';
@@ -44,6 +44,10 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
     this.pendingIdleMs = config.get<number>('redis.pendingIdleMs') ?? 30_000;
     this.blockMs = config.get<number>('redis.blockMs') ?? 1000;
     if (!url && !redis) this.stopped = true;
+  }
+
+  isReady(): boolean {
+    return !this.stopped && this.redis.isReady && this.running !== undefined;
   }
 
   async onModuleInit(): Promise<void> {

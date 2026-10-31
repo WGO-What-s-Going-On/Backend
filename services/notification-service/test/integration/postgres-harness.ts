@@ -30,7 +30,7 @@ export async function postgresHarness() {
     }),
   );
   async function cleanup() {
-    await database.onModuleDestroy();
+    await database.onApplicationShutdown();
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
     await admin.end();
   }

@@ -33,7 +33,11 @@ describe('PostgreSQL connection boundary', () => {
   it('requires server certificate validation for direct production connections', () => {
     expect(() => postgresConfig(production)).toThrow('verify-full');
     expect(
-      postgresConfig({ ...production, DB_TLS_MODE: 'verify-full' }),
+      postgresConfig({
+        ...production,
+        DB_TLS_MODE: 'verify-full',
+        DB_PASSWORD: 'test',
+      }),
     ).toMatchObject({ ssl: { rejectUnauthorized: true } });
     expect(() => postgresConfig({ ...production, DB_USER: '' })).toThrow(
       'DB_USER',

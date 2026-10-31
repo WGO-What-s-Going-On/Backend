@@ -31,8 +31,10 @@ it('initializes idempotently and atomically preserves inbox ownership, paginatio
   await migrate(h.database.pool);
   const repo = new PostgresNotificationRepository(h.database);
   expect(
-    await Promise.all([repo.create(row('a')), repo.create(row('a'))]),
-  ).toEqual([true, false]);
+    (await Promise.all([repo.create(row('a')), repo.create(row('a'))])).filter(
+      Boolean,
+    ),
+  ).toHaveLength(1);
   await repo.create(row('b'));
   await repo.create({ ...row('c'), expiresAt: 0 });
   const first = await repo.list('owner', 1);

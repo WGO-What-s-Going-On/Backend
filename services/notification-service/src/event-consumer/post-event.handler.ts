@@ -10,8 +10,8 @@ import { ConfigService } from '@nestjs/config';
 import { PUSH_SENDER, type PushSender } from '../firebase/push.js';
 import {
   BusyDeliveryError,
-  DynamoDbEventStore,
-} from '../persistence/dynamodb-event.store.js';
+  PostgresEventStore,
+} from '../persistence/postgres-event.store.js';
 import { NotificationState } from '../redis/notification-state.js';
 import type { PostEvent } from './post-event.js';
 
@@ -23,7 +23,7 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
   private stopped = false;
   private draining: Promise<void> = Promise.resolve();
   constructor(
-    private readonly store: DynamoDbEventStore,
+    private readonly store: PostgresEventStore,
     private readonly state: NotificationState,
     @Inject(PUSH_SENDER) private readonly push: PushSender,
     @Optional() private readonly config?: ConfigService,
@@ -47,7 +47,7 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
     await this.draining;
   }
   async handle(event: PostEvent): Promise<void> {
-    // Redis lock/window는 정확성의 근거가 아니다. 영속 commit의 CAS가 처리권을 결정한다.
+    // Redis lock/window는 정확성의 근거가 아니다. PostgreSQL transaction의 post 행 잠금이 처리권을 결정한다.
     const recipient = await this.store.apply(event);
     if (recipient) await this.state.invalidateUnread(recipient);
     await this.dispatch(event.aggregateId);

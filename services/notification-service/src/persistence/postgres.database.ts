@@ -1,10 +1,10 @@
-import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
 import { postgresConfig } from './postgres.config.js';
 
 @Injectable()
-export class PostgresDatabase implements OnModuleDestroy {
+export class PostgresDatabase implements OnApplicationShutdown {
   readonly pool: Pool;
   private readonly logger = new Logger(PostgresDatabase.name);
 
@@ -19,20 +19,24 @@ export class PostgresDatabase implements OnModuleDestroy {
 
   async transaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
+    let discard = false;
     try {
       await client.query('BEGIN');
       const result = await work(client);
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK').catch(() => undefined);
+      await client.query('ROLLBACK').catch(() => {
+        discard = true;
+      });
       throw error;
     } finally {
-      client.release();
+      client.release(discard);
     }
   }
 
-  async onModuleDestroy(): Promise<void> {
+  // Consumer와 delivery worker의 onModuleDestroy가 끝난 뒤 pool을 닫는다.
+  async onApplicationShutdown(): Promise<void> {
     await this.pool.end();
   }
 }

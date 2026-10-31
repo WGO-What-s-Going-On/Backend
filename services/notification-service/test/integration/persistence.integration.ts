@@ -1,8 +1,7 @@
-import { DynamoDbEventStore } from '../../src/persistence/dynamodb-event.store.js';
+import { PostgresEventStore } from '../../src/persistence/postgres-event.store.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { harness } from './harness.js';
-import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
-describe('real DynamoDB Local persistence', () => {
+describe('real PostgreSQL persistence', () => {
   let h: Awaited<ReturnType<typeof harness>>;
   beforeEach(async () => {
     h = await harness();
@@ -32,7 +31,7 @@ describe('real DynamoDB Local persistence', () => {
     await h.notifications.remove('1', first!.notificationId);
     expect((await h.notifications.list('1')).items).toHaveLength(1);
     expect(await h.repository.increment('1', first!.notificationId)).toBeNull();
-    const settings = new DynamoDbEventStore(h.client, h.config);
+    const settings = new PostgresEventStore(h.database);
     await Promise.all([
       settings.savePreferences('1', { replies: false }),
       settings.savePreferences('1', { reactions: false }),
@@ -153,38 +152,21 @@ describe('real DynamoDB Local persistence', () => {
     expect(await h.notifications.unread('1')).toBe(2);
     expect(
       (
-        await h.client.send(
-          new GetCommand({
-            TableName: h.tables.notificationsTable,
-            Key: { userId: '1', notificationId: expired!.notificationId },
-            ConsistentRead: true,
-          }),
+        await h.database.pool.query(
+          'SELECT notification_id FROM notifications WHERE user_id=$1 AND notification_id=$2',
+          ['1', expired!.notificationId],
         )
-      ).Item,
-    ).toBeDefined();
+      ).rowCount,
+    ).toBe(1);
     await expect(h.notifications.list('1', 1, '!!!')).rejects.toThrow(
       'invalid cursor',
     );
   });
-  it('protects token ownership for rows created before the ownership record existed', async () => {
-    await h.client.send(
-      new PutCommand({
-        TableName: h.tables.pushSubscriptionsTable,
-        Item: {
-          userId: '1',
-          token: 'legacy-token',
-          platform: 'web',
-          createdAt: '2026-01-01',
-          updatedAt: '2026-01-01',
-          lastSeenAt: '2026-01-01',
-        },
-      }),
-    );
+  it('protects token ownership after repository restart', async () => {
+    await h.subscriptions.upsert('1', 'existing-token', 'web');
     await expect(
-      h.subscriptions.upsert('2', 'legacy-token', 'web'),
+      h.subscriptions.upsert('2', 'existing-token', 'web'),
     ).rejects.toThrow('Token already belongs');
-    expect(await h.subscriptions.list('1')).toHaveLength(1);
-    await h.subscriptions.upsert('1', 'legacy-token', 'web');
     expect(await h.subscriptions.list('1')).toHaveLength(1);
   });
 });
