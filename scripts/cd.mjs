@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,10 @@ import {
   selectReleaseServices,
   validateRelease,
   waitForDeployment,
+  concurrencyLimit,
+  mapConcurrent,
+  deploymentWaves,
+  validateDeploymentTargets,
 } from './cd-lib.mjs';
 
 const mode = process.argv[2];
@@ -28,38 +32,79 @@ const file = (name, value) => {
   return path;
 };
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-    ...options,
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      ...options,
+    });
+    const chunks = [];
+    let bytes = 0;
+    let failed = false;
+    child.stdout?.on('data', (chunk) => {
+      bytes += chunk.length;
+      if (bytes > 16 * 1024 * 1024) {
+        failed = true;
+        child.kill();
+      } else {
+        chunks.push(chunk);
+      }
+    });
+    child.on('error', () => {
+      failed = true;
+    });
+    child.on('close', (code) => {
+      // CLI errors can echo task definitions or secret JSON: never print raw stdout/stderr on failure.
+      if (failed || code !== 0)
+        reject(
+          new Error(
+            `${command} ${args[0] ?? ''} failed (details withheld to protect configuration)`,
+          ),
+        );
+      else resolve(Buffer.concat(chunks).toString('utf8').trim());
+    });
   });
-  // CLI errors can echo task definitions or secret JSON: never print raw stdout/stderr on failure.
-  if (result.error || result.status !== 0)
+}
+async function aws(...args) {
+  const output = await run('aws', [
+    ...args,
+    '--output',
+    'json',
+    '--no-cli-pager',
+  ]);
+  try {
+    return JSON.parse(output || '{}');
+  } catch {
     throw new Error(
-      `${command} ${args[0] ?? ''} failed (details withheld to protect configuration)`,
+      'AWS returned invalid JSON (details withheld to protect configuration)',
     );
-  return result.stdout?.trim() ?? '';
+  }
 }
-function aws(...args) {
-  return JSON.parse(
-    run('aws', [...args, '--output', 'json', '--no-cli-pager']) || '{}',
-  );
-}
-function sameOrNewer(previous) {
+async function sameOrNewer(previous) {
   if (!previous) return;
   if (!/^[a-f0-9]{40}$/.test(previous.sha))
     throw new Error('Invalid deployment state SHA');
-  if (
-    spawnSync('git', ['merge-base', '--is-ancestor', previous.sha, sha])
-      .status !== 0
-  )
+  try {
+    await run('git', ['merge-base', '--is-ancestor', previous.sha, sha]);
+  } catch {
     throw new Error(
       'Refusing an older/divergent release; use an explicit recovery procedure',
     );
+  }
 }
 async function deploy() {
   if (!['staging', 'production'].includes(mode))
     throw new Error('Usage: node scripts/cd.mjs staging|production');
+  if (mode === 'staging') rmSync('release.json', { force: true });
+  const buildConcurrency = concurrencyLimit(
+    env.CD_BUILD_CONCURRENCY,
+    2,
+    'CD_BUILD_CONCURRENCY',
+  );
+  const deployConcurrency = concurrencyLimit(
+    env.CD_DEPLOY_CONCURRENCY,
+    4,
+    'CD_DEPLOY_CONCURRENCY',
+  );
   const initialDeployment = env.CD_INITIAL_DEPLOYMENT === 'true';
   if (!['true', 'false'].includes(env.CD_INITIAL_DEPLOYMENT ?? 'false'))
     throw new Error('CD_INITIAL_DEPLOYMENT must be true or false');
@@ -68,7 +113,7 @@ async function deploy() {
   const account = required(env, 'AWS_ACCOUNT_ID');
   if (
     !/^\d{12}$/.test(account) ||
-    aws('sts', 'get-caller-identity').Account !== account
+    (await aws('sts', 'get-caller-identity')).Account !== account
   )
     throw new Error('AWS role resolved to an unexpected account');
   const cluster = required(env, 'ECS_CLUSTER');
@@ -106,10 +151,16 @@ async function deploy() {
     throw new Error('Unknown force service');
   for (const service of services)
     validateService(service.name, configured[service.name], platform);
+  validateDeploymentTargets(services, configured);
   const statePath = (name) => `${prefix.replace(/\/$/, '')}/${mode}/${name}`;
-  function state(name) {
+  async function state(name) {
     // GetParameters reports missing names separately; IAM/network errors never become first deployments.
-    const result = aws('ssm', 'get-parameters', '--names', statePath(name));
+    const result = await aws(
+      'ssm',
+      'get-parameters',
+      '--names',
+      statePath(name),
+    );
     const record = result.Parameters?.[0];
     return record ? parseSecretJson(record.Value, 'deployment state') : null;
   }
@@ -128,19 +179,59 @@ async function deploy() {
       ))
   )
     throw new Error('Staging/production configured service sets must match');
-  const prepared = [];
+  const changesBySha = new Map();
+  const planned = [];
   for (const service of services) {
     const name = service.name;
     const config = configured[name];
-    const previous = state(name);
-    sameOrNewer(previous);
-    const existing = aws(
-      'ecs',
-      'describe-services',
-      '--cluster',
-      cluster,
-      '--services',
-      config.ecsService,
+    const previous = await state(name);
+    await sameOrNewer(previous);
+    const force = forced.includes('all') || forced.includes(name);
+    let image;
+    let sourceSha = sha;
+    if (mode === 'staging') {
+      if (previous && !changesBySha.has(previous.sha))
+        changesBySha.set(previous.sha, changedFiles(previous.sha, sha));
+      const files = previous ? changesBySha.get(previous.sha) : [];
+      const changed =
+        !previous ||
+        deploymentRuntimeChanged(name, files) ||
+        selectChanges(files).deploy_matrix.include.some(
+          (entry) => entry.name === name,
+        );
+      if (!changed && !force) {
+        release.services.push({
+          name,
+          image: previous.image,
+          sourceSha: previous.sha,
+        });
+        console.log(
+          `${name}: no runtime change since last successful staging deployment`,
+        );
+        continue;
+      }
+    } else {
+      const entry = release.services.find((entry) => entry.name === name);
+      image = entry.image;
+      sourceSha = entry.sourceSha;
+      if (!image.startsWith(`${registry}/${config.ecrRepository}@sha256:`))
+        throw new Error(
+          `${name}: release image does not match configured repository`,
+        );
+      if (previous?.image === image && !force) {
+        console.log(`${name}: production already uses the staged image`);
+        continue;
+      }
+    }
+    const existing = (
+      await aws(
+        'ecs',
+        'describe-services',
+        '--cluster',
+        cluster,
+        '--services',
+        config.ecsService,
+      )
     ).services?.[0];
     const bootstrap =
       initialDeployment && !previous && existing?.desiredCount === 0;
@@ -160,30 +251,36 @@ async function deploy() {
       )
     )
       throw new Error(`${name}: another deployment is still in progress`);
-    const force = forced.includes('all') || forced.includes(name);
-    let image;
-    let sourceSha = sha;
-    if (mode === 'staging') {
-      const changed =
-        !previous ||
-        deploymentRuntimeChanged(name, changedFiles(previous.sha, sha)) ||
-        selectChanges(
-          changedFiles(previous.sha, sha),
-        ).deploy_matrix.include.some((entry) => entry.name === name);
-      if (!changed && !force) {
-        release.services.push({
-          name,
-          image: previous.image,
-          sourceSha: previous.sha,
-        });
-        console.log(
-          `${name}: no runtime change since last successful staging deployment`,
-        );
-        continue;
-      }
+    const secretValues = deploymentRuntime(name, mode, runtime[name]);
+    renderTask(
+      config,
+      image ?? `${registry}/${config.ecrRepository}@sha256:${'0'.repeat(64)}`,
+      secretValues,
+      randomUUID(),
+    );
+    planned.push({
+      ...service,
+      config,
+      existing,
+      bootstrap,
+      image,
+      sourceSha,
+      secretValues,
+    });
+  }
+  console.log(
+    `${mode}: selected ${planned.map(({ name }) => name).join(', ') || 'no services'}`,
+  );
+  const prepared = await mapConcurrent(
+    planned,
+    buildConcurrency,
+    async (entry) => {
+      if (mode === 'production') return entry;
+      const { name, config, path } = entry;
       const tag = `${sha}-${required(env, 'GITHUB_RUN_ID')}-${required(env, 'GITHUB_RUN_ATTEMPT')}`;
       const tagImage = `${registry}/${config.ecrRepository}:${tag}`;
-      run(
+      console.log(`${name}: building image`);
+      await run(
         'docker',
         [
           'buildx',
@@ -196,11 +293,11 @@ async function deploy() {
           '--tag',
           tagImage,
           '--push',
-          service.path,
+          path,
         ],
         { stdio: 'inherit' },
       );
-      const result = aws(
+      const result = await aws(
         'ecr',
         'describe-images',
         '--repository-name',
@@ -211,35 +308,23 @@ async function deploy() {
       const digest = result.imageDetails?.[0]?.imageDigest;
       if (!/^sha256:[a-f0-9]{64}$/.test(digest ?? ''))
         throw new Error(`${name}: no immutable image digest`);
-      image = `${registry}/${config.ecrRepository}@${digest}`;
-    } else {
-      const entry = release.services.find((entry) => entry.name === name);
-      image = entry.image;
-      sourceSha = entry.sourceSha;
-      if (!image.startsWith(`${registry}/${config.ecrRepository}@sha256:`))
-        throw new Error(
-          `${name}: release image does not match configured repository`,
-        );
-      if (previous?.image === image && !force) {
-        console.log(`${name}: production already uses the staged image`);
-        continue;
-      }
-    }
-    prepared.push({ name, config, existing, bootstrap, image, sourceSha });
-  }
-  // Complete every image push before starting migrations or updating a running service.
-  for (const {
+      return {
+        ...entry,
+        image: `${registry}/${config.ecrRepository}@${digest}`,
+      };
+    },
+  );
+  async function deployService({
     name,
     config,
     existing,
     bootstrap,
     image,
     sourceSha,
-  } of prepared) {
-    const secretValues = deploymentRuntime(name, mode, runtime[name]);
-    // Validate before changing AWS secret versions. Task rendering is repeated with the real version below.
-    renderTask(config, image, secretValues, randomUUID());
-    const secret = aws(
+    secretValues,
+  }) {
+    console.log(`${name}: starting ${mode} deployment`);
+    const secret = await aws(
       'secretsmanager',
       'put-secret-value',
       '--secret-id',
@@ -250,11 +335,13 @@ async function deploy() {
       randomUUID(),
     );
     const task = renderTask(config, image, secretValues, secret.VersionId);
-    const revision = aws(
-      'ecs',
-      'register-task-definition',
-      '--cli-input-json',
-      `file://${file(`${name}-task.json`, task)}`,
+    const revision = (
+      await aws(
+        'ecs',
+        'register-task-definition',
+        '--cli-input-json',
+        `file://${file(`${name}-task.json`, task)}`,
+      )
     ).taskDefinition?.taskDefinitionArn;
     if (!revision)
       throw new Error(`${name}: task definition registration failed`);
@@ -271,7 +358,7 @@ async function deploy() {
         },
         startedBy: `wgo-${purpose}`,
       };
-      const result = aws(
+      const result = await aws(
         'ecs',
         'run-task',
         '--cli-input-json',
@@ -281,7 +368,7 @@ async function deploy() {
       if (!arn || result.failures?.length)
         throw new Error(`${name}: ${purpose} task failed to start`);
       try {
-        run('aws', [
+        await run('aws', [
           'ecs',
           'wait',
           'tasks-stopped',
@@ -291,7 +378,7 @@ async function deploy() {
           arn,
         ]);
       } catch (error) {
-        aws(
+        await aws(
           'ecs',
           'stop-task',
           '--cluster',
@@ -303,13 +390,8 @@ async function deploy() {
         );
         throw error;
       }
-      const finished = aws(
-        'ecs',
-        'describe-tasks',
-        '--cluster',
-        cluster,
-        '--tasks',
-        arn,
+      const finished = (
+        await aws('ecs', 'describe-tasks', '--cluster', cluster, '--tasks', arn)
       ).tasks?.[0];
       if (
         finished?.containers?.find(
@@ -323,7 +405,7 @@ async function deploy() {
     if (config.migrationCommand)
       await oneOff(config.migrationCommand, 'migration');
     try {
-      aws(
+      await aws(
         'ecs',
         'update-service',
         '--cluster',
@@ -338,7 +420,7 @@ async function deploy() {
           deploymentCircuitBreaker: { enable: true, rollback: true },
         }),
       );
-      run('aws', [
+      await run('aws', [
         'ecs',
         'wait',
         'services-stable',
@@ -350,14 +432,16 @@ async function deploy() {
       // The CLI stable waiter can finish while ECS still reports IN_PROGRESS.
       // Wait for the target revision's completion instead of rolling back healthy tasks.
       const completed = await waitForDeployment(
-        () =>
-          aws(
-            'ecs',
-            'describe-services',
-            '--cluster',
-            cluster,
-            '--services',
-            config.ecsService,
+        async () =>
+          (
+            await aws(
+              'ecs',
+              'describe-services',
+              '--cluster',
+              cluster,
+              '--services',
+              config.ecsService,
+            )
           ).services?.[0],
         revision,
         () => new Promise((resolve) => setTimeout(resolve, 10000)),
@@ -375,7 +459,7 @@ async function deploy() {
       }
       if (config.smokeCommand) await oneOff(config.smokeCommand, 'smoke');
       const record = { sha: sourceSha, image, taskDefinition: revision };
-      aws(
+      await aws(
         'ssm',
         'put-parameter',
         '--name',
@@ -387,10 +471,10 @@ async function deploy() {
         JSON.stringify(record),
       );
       console.log(`${name}: ${mode} deployment verified`);
-      if (mode === 'staging') release.services.push({ name, image, sourceSha });
+      return { name, image, sourceSha };
     } catch (error) {
       // Keep last-success state unchanged. Secret references in the previous revision remain pinned.
-      aws(
+      await aws(
         'ecs',
         'update-service',
         '--cluster',
@@ -402,7 +486,7 @@ async function deploy() {
         // A failed first release has no healthy predecessor: return it to stopped.
         ...(bootstrap ? ['--desired-count', '0'] : []),
       );
-      run('aws', [
+      await run('aws', [
         'ecs',
         'wait',
         'services-stable',
@@ -414,8 +498,23 @@ async function deploy() {
       throw error;
     }
   }
-  if (mode === 'staging')
+  // Complete every image push before starting migrations or updating a running service.
+  for (const wave of deploymentWaves(prepared)) {
+    const completed = await mapConcurrent(
+      wave,
+      deployConcurrency,
+      deployService,
+    );
+    if (mode === 'staging') release.services.push(...completed);
+  }
+  if (mode === 'staging') {
+    const entries = new Map(
+      release.services.map((entry) => [entry.name, entry]),
+    );
+    release.services = services.map(({ name }) => entries.get(name));
+    validateRelease(release, sha);
     writeFileSync('release.json', JSON.stringify(release), { mode: 0o600 });
+  }
 }
 try {
   await deploy();
