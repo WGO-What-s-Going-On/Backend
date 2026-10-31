@@ -43,6 +43,9 @@ export function serializePostEvent(row: Record<string, any>): string {
     )
       throw new Error('Invalid envelope');
     const types: Record<string, string> = {
+      PostCommentReactionCreated: 'commentReaction',
+      PostCommentReactionRemoved: 'commentReaction',
+      PostVoteWon: 'vote',
       PostUpdated: 'post',
       PostCreated: 'post',
       PostDeleted: 'post',
@@ -58,7 +61,7 @@ export function serializePostEvent(row: Record<string, any>): string {
     const target = key ? value[key] : undefined;
     if (!object(target) || target.postId !== value.aggregateId)
       throw new Error('Invalid event type or target');
-    if (!user(target.authorId ?? target.userId))
+    if (!user(target.authorId ?? target.userId ?? target.winnerAuthorId))
       throw new Error('Invalid actor ID');
     if (value.postAuthorId !== undefined && !user(value.postAuthorId))
       throw new Error('Invalid post author');
@@ -78,7 +81,29 @@ export function serializePostEvent(row: Record<string, any>): string {
       !Object.values(PostReactionType).includes(target.type)
     )
       throw new Error('Invalid reaction type');
+    if (key === 'commentReaction') {
+      if (
+        !id(target.commentId, 'comment') ||
+        !user(target.userId) ||
+        !user(value.commentAuthorId) ||
+        !user(value.activityVersion) ||
+        !['HELPFUL', 'AGREE', 'DIFFERENT'].includes(target.type)
+      )
+        throw new Error('Invalid comment reaction');
+    }
+    if (
+      key === 'vote' &&
+      (!id(target.commentId, 'comment') ||
+        target.resultId !== target.postId ||
+        !user(target.winnerAuthorId) ||
+        !user(target.votes) ||
+        value.activityVersion !== 1)
+    )
+      throw new Error('Invalid vote result');
     const requiredDates: Record<string, string[]> = {
+      PostCommentReactionCreated: ['createdAt'],
+      PostCommentReactionRemoved: ['createdAt', 'removedAt'],
+      PostVoteWon: ['closedAt'],
       PostUpdated: [],
       PostCreated: [],
       PostDeleted: ['deletedAt'],
