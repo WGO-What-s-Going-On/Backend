@@ -30,7 +30,7 @@ Swagger documents HTTP only. `/docs` is served directly by Map Service and is no
 
 Map reads candidates from Redis GEO and confirms location, ACTIVE status and expiry in Cassandra. GEO is trusted only after a completed rebuild certifies its active key and member count, no index writes remain unfinished, and no rebuild is in progress. Unknown or degraded GEO falls back to Cassandra even when some GEO candidates remain, merging both candidate sets. A trusted empty GEO result does not scan Cassandra. Polar coordinates continue to use Cassandra because Redis GEO does not cover them. This is consistency with Map's local projection, not a guarantee that every Post event has already arrived.
 
-Cassandra fallback consumes every page of each Cell/Shard before applying the existing distance order and API cursor/limit. In-flight reads for the same Cell/Shard are shared within one PostIndex instance, including their subsequent pages and failures. The sharing map holds at most 1,024 entries; requests beyond that use independent reads. Completed results are removed rather than cached. Each request independently validates candidates, distance, radius, expiry, sorting and cursor. Different ECS tasks do not share in-flight promises. Creation/status writes clear local sharing references before and after application to avoid retaining pre-write work for later requests.
+Cassandra fallback consumes every page of each Cell/Shard before applying the existing distance order and API cursor/limit. In-flight reads for the same Cell/Shard are shared within one PostIndex instance, including their subsequent pages and failures. The sharing map holds at most 1,024 entries; requests beyond that use independent reads. Completed results are removed rather than cached. Each request independently validates candidates, distance, radius, expiry, sorting and cursor. Different Pods do not share in-flight promises. Creation/status writes clear local sharing references before and after application to avoid retaining pre-write work for later requests.
 
 Candidate validation and Cell/Shard exploration use at most eight workers per request. Pages within a partition remain sequential. A read failure stops assignment of new work, waits for in-flight work and fails the request rather than returning incomplete results. Nearby searches enforce request-wide time/query/candidate budgets and propagate cancellation. Process-wide/cluster-wide DB concurrency limits remain follow-up work.
 
@@ -113,3 +113,25 @@ Redis waits use the remaining deadline and AbortSignal. Cassandra calls use read
 Budget errors log map_nearby_budget_exceeded with code, logicalQueries, candidates and elapsedMs, without coordinates, tokens or content. gRPC and HTTP 503/504 error contracts are documented in contracts/map-authorization.md and map-http.openapi.json. Completed results are never silently truncated because a budget ran out.
 
 [Measurement and validation](../../docs/performance/map-budget-2026-10-25/README.md).
+
+## GKE Cassandra 연결
+
+GKE 개발·데모 환경은 별도 Cassandra StatefulSet과 PVC를 사용한다. `CASSANDRA_MODE=direct`를
+설정하고 `CASSANDRA_CONTACT_POINTS`, `CASSANDRA_DATACENTER`, `CASSANDRA_KEYSPACE`,
+`CASSANDRA_USERNAME`, `CASSANDRA_PASSWORD`, `CASSANDRA_TLS_MODE=verify-full`,
+`CASSANDRA_CA_PATH`를 주입한다. 비밀번호는 Secret Manager에서 제공한다.
+
+드라이버가 peer 주소를 IP로 바꾸므로 `CASSANDRA_TLS_SERVER_NAME`은 모든 peer 인증서의
+공통 Service DNS SAN으로 설정한다. 생략하면 첫 contact point를 사용한다.
+CA 검증과 hostname 검증을 모두 유지한다. contact points는 쉼표로 구분하고 port는
+`CASSANDRA_PORT`에 별도로 지정한다. 기본 consistency는 `localQuorum`이고 LWT는
+`localSerial`을 사용한다. `localOne`은 명시적으로 선택할 수 있다.
+
+`schema.cql`은 `datacenter1`의 단일 노드 개발·데모 schema다. replication factor 1은
+노드 장애 중 가용성을 보장하지 않는다. StatefulSet을 교체하기 전에 백업과 복원을 검증한다.
+다중 노드로 확장할 때에는 replication 설정과 repair 절차를 별도 검토한다.
+운영에서는 DDL 계정과 Map 앱 계정을 분리하고 앱에 `wgo_map` 조회·변경 권한만 부여한다.
+
+로컬 무인증 Cassandra는 `CASSANDRA_MODE=local`을 사용한다. production에서 local 모드는
+거부되며 local 모드에 자격증명이나 TLS 설정을 섞어도 시작을 거부한다.
+실제 TLS 연결, 잘못된 암호 거부, 인증서 이름 불일치, 재연결은 GKE 저장소 검증에 포함한다.
