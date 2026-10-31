@@ -644,7 +644,8 @@ Post 조회가 원본 공개 상태를 다시 검증한다. WS는 postVersion으
 - 투표는 게시물당 하나이고 `resultId = postId`로 불변이다. 최초 단독 최다 득표 확정에만
   PostVoteWon을 저장한다. votes는 양의 정수, winnerAuthorId는 승리 댓글 작성자다.
   동률·0표·NONE·CANCELLED에는 승리 이벤트가 없고 재종료·재시도에도 추가 생성하지 않는다.
-- 작성자 종료·만료·삭제는 모두 같은 확정 경로를 사용한다. 삭제와 승리 이벤트의 소비 순서는
+- 작성자 종료·만료·삭제 및 Moderation `BOARD_CLOSED`는 모두 같은 승리 확정·Outbox 저장 함수를 사용한다.
+  Moderation 처리 receipt, 승리·만료 이벤트와 종료 상태도 같은 트랜잭션으로 커밋한다. 삭제와 승리 이벤트의 소비 순서는
   보장하지 않는다. User 후속 구현은 PostDeleted/PostCommentDeleted 상태를 보존해 지연 이벤트에도
   동일한 회수 정책을 적용해야 한다. 만료 시 회수 여부는 User 정책이며 Post가 임의로 정하지 않는다.
 - User 후속 구현은 eventId 중복과 활동 버전을 함께 검사해야 한다. 단일 승리 보상 키는

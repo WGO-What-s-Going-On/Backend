@@ -1,3 +1,4 @@
+import { closeVote } from './vote.js';
 import {
   InvalidPostError,
   PostNotFoundError,
@@ -16,15 +17,6 @@ async function existingPost(transaction: PostTransaction, postId: string) {
   const post = await transaction.queries.findPost(postId);
   if (!post) throw new PostNotFoundError('Post not found');
   return post;
-}
-
-// 종료 경로와 관계없이 승자 확정과 이벤트를 함께 커밋한다.
-async function closeVote(tx: PostTransaction, postId: string, now: Date) {
-  const vote = await tx.commands.closeVote(postId, now);
-  if (vote)
-    await tx.commands.appendEvent(
-      event(postId, 'PostVoteWon', { vote, activityVersion: 1 }, now),
-    );
 }
 
 type Deletion =

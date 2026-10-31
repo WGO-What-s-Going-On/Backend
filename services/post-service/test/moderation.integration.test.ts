@@ -84,6 +84,41 @@ suite('Moderation v1 -> Post transaction -> Outbox', () => {
         .expect(201)
     ).body.postId as string;
 
+  const openWinningVote = async (postId: string) => {
+    const commentId = `comment_${randomUUID()}`;
+    await db.model('Comment').create({
+      postId,
+      commentId,
+      authorId: 456,
+      content: 'Winner',
+      status: 'ACTIVE',
+      createdAt: new Date(),
+    });
+    await posts.updateOne(
+      { postId },
+      {
+        $set: {
+          vote: {
+            status: 'OPEN',
+            selectedAt: new Date(),
+            closedAt: null,
+            winner: null,
+            candidates: [
+              { commentId, content: 'Winner', scoreAtSelection: 0, votes: 2 },
+              {
+                commentId: `comment_${randomUUID()}`,
+                content: 'Other',
+                scoreAtSelection: 0,
+                votes: 1,
+              },
+            ],
+          },
+        },
+      },
+    );
+    return commentId;
+  };
+
   beforeAll(async () => {
     vi.stubEnv('NODE_ENV', 'test');
     vi.stubEnv(
@@ -148,9 +183,9 @@ suite('Moderation v1 -> Post transaction -> Outbox', () => {
       }),
     ).toBe(0);
   });
-  it('commits closure, vote closure, receipt and one correlated PostExpired despite concurrent duplicates', async () => {
+  it('commits the winning vote, receipt and expiration once despite concurrent duplicates', async () => {
     const postId = await create();
-    await posts.updateOne({ postId }, { $set: { 'vote.status': 'OPEN' } });
+    const commentId = await openWinningVote(postId);
     const wire = fields(postId);
     const input = parseModerationEvent(wire)!;
     await Promise.all([apply.execute(input), apply.execute(input)]);
@@ -167,6 +202,22 @@ suite('Moderation v1 -> Post transaction -> Outbox', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].correlationId).toBe(input.correlationId);
     expect(rows[0].payload.sourceEventId).toBe(input.eventId);
+    const wins = await outbox.find({
+      aggregateId: postId,
+      eventType: 'PostVoteWon',
+    });
+    expect(wins).toHaveLength(1);
+    expect(wins[0].payload).toMatchObject({
+      activityVersion: 1,
+      vote: {
+        postId,
+        resultId: postId,
+        commentId,
+        winnerAuthorId: 456,
+        votes: 2,
+      },
+    });
+
     await redis.xAdd(MODERATION_STREAM, '*', wire);
     await consumer.tick();
     expect(
@@ -176,6 +227,12 @@ suite('Moderation v1 -> Post transaction -> Outbox', () => {
       await outbox.countDocuments({
         aggregateId: postId,
         eventType: 'PostExpired',
+      }),
+    ).toBe(1);
+    expect(
+      await outbox.countDocuments({
+        aggregateId: postId,
+        eventType: 'PostVoteWon',
       }),
     ).toBe(1);
   });
@@ -197,34 +254,66 @@ suite('Moderation v1 -> Post transaction -> Outbox', () => {
       ).toBe(0);
     },
   );
-  it('rolls back receipt and state when outbox insertion fails, then retries successfully', async () => {
-    const postId = await create();
-    const input = parseModerationEvent(fields(postId))!;
-    const store = app.get(MongoosePostStore);
-    const failing = new ApplyModerationLifecycle({
-      execute: (work) =>
-        store.execute((tx) =>
-          work({
-            ...tx,
-            commands: new Proxy(tx.commands, {
-              get(target, prop) {
-                if (prop === 'appendEvent')
-                  return async () => {
-                    throw new Error('outbox unavailable');
-                  };
-                const value = Reflect.get(target, prop);
-                return typeof value === 'function' ? value.bind(target) : value;
-              },
+  it.each(['PostVoteWon', 'PostExpired'])(
+    'rolls back the winner, receipt and state when %s insertion fails',
+    async (failedType) => {
+      const postId = await create();
+      await openWinningVote(postId);
+      const input = parseModerationEvent(fields(postId))!;
+      const store = app.get(MongoosePostStore);
+      const failing = new ApplyModerationLifecycle({
+        execute: (work) =>
+          store.execute((tx) =>
+            work({
+              ...tx,
+              commands: new Proxy(tx.commands, {
+                get(target, prop) {
+                  if (prop === 'appendEvent')
+                    return async (
+                      row: Parameters<typeof target.appendEvent>[0],
+                    ) => {
+                      if (row.eventType === failedType)
+                        throw new Error('outbox unavailable');
+                      await target.appendEvent(row);
+                    };
+                  const value = Reflect.get(target, prop);
+                  return typeof value === 'function'
+                    ? value.bind(target)
+                    : value;
+                },
+              }),
             }),
-          }),
-        ),
-    });
-    await expect(failing.execute(input)).rejects.toThrow('outbox unavailable');
-    expect((await posts.findOne({ postId })).status).toBe('ACTIVE');
-    expect(await receipts.countDocuments({ eventId: input.eventId })).toBe(0);
-    await apply.execute(input);
-    expect((await posts.findOne({ postId })).status).toBe('EXPIRED');
-  });
+          ),
+      });
+      await expect(failing.execute(input)).rejects.toThrow(
+        'outbox unavailable',
+      );
+      expect((await posts.findOne({ postId })).status).toBe('ACTIVE');
+      expect(await receipts.countDocuments({ eventId: input.eventId })).toBe(0);
+      expect((await posts.findOne({ postId })).vote.status).toBe('OPEN');
+      expect(
+        await outbox.countDocuments({
+          aggregateId: postId,
+          eventType: { $in: ['PostVoteWon', 'PostExpired'] },
+        }),
+      ).toBe(0);
+
+      await apply.execute(input);
+      expect((await posts.findOne({ postId })).status).toBe('EXPIRED');
+      expect(
+        await outbox.countDocuments({
+          aggregateId: postId,
+          eventType: 'PostVoteWon',
+        }),
+      ).toBe(1);
+      expect(
+        await outbox.countDocuments({
+          aggregateId: postId,
+          eventType: 'PostExpired',
+        }),
+      ).toBe(1);
+    },
+  );
   it('reclaims a committed delivery left unacknowledged by a crashed consumer', async () => {
     const postId = await create();
     const wire = fields(postId);
