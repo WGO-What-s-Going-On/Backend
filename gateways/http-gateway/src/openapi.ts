@@ -172,7 +172,7 @@ export async function mergeDocuments(
       title: 'WGO Public HTTP API',
       version: '1.0.0',
       description:
-        'Public Gateway API. Some services may have no public operations; see x-services-without-public-operations. User routes authenticate user Access JWTs; their internal identity headers are not public inputs. Other services retain their documented authentication policies. Internal service tokens are not public credentials. Gateway errors include code, message, requestId and timestamp; upstream responses pass through unchanged. Existing status codes may have an x-gateway-response describing the additional Gateway error shape.',
+        'Public Gateway API. Some services may have no public operations; see x-services-without-public-operations. Protected routes authenticate user Access JWTs, including blocks and report creation/withdrawal. Internal identity headers and service tokens are not public inputs. Gateway errors include code, message, requestId and timestamp; upstream responses pass through unchanged. Existing status codes may have an x-gateway-response describing the additional Gateway error shape.',
     },
     servers: [{ url: '/' }],
     paths: {},
@@ -194,7 +194,7 @@ export async function mergeDocuments(
       );
     }
     const document = structuredClone(source.document);
-    // Translate the internal User service contract to the client-facing Gateway contract.
+    // Translate internal service credentials to the client-facing user Access JWT.
     {
       document.components ??= {};
       document.components.securitySchemes ??= {};

@@ -428,3 +428,7 @@ User 작업을 사용자 Bearer 인증으로 변환하고 내부 헤더 입력�
 추가 테스트는 실제 Gateway 빌드와 User Controller·Guard·비즈니스 서비스·PostgreSQL·Redis를
 연결해 로그인→프로필 조회/수정→Refresh 회전→로그아웃과 위조 헤더 차단을 검증한다.
 외부 Kakao 응답만 대체한다. 단독 User 테스트 실행에서는 이 교차 서비스 테스트만 생략된다.
+
+## 사용자 차단
+
+차단 생성·목록·해제와 기존 Outbox를 통한 Redis 이벤트를 지원한다. [HTTP·저장·이벤트 계약](contracts/user-blocks.md)을 따른다. Gateway 신규 operation allowlist와 동적 DELETE는 담당자 후속 작업이며 운영 반영은 별도다.

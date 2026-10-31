@@ -86,7 +86,10 @@ describe('Users API integration', () => {
     }).compile();
 
     app = module.createNestApplication();
-    await app.init();
+    // Supertest auto-closes servers it starts for an individual request. Keep
+    // this shared server alive until afterAll so concurrent requests cannot race
+    // that automatic close on Node 24.
+    await app.listen(0, '127.0.0.1');
   }, 30_000);
 
   afterAll(async () => {
@@ -830,6 +833,223 @@ describe('Users API integration', () => {
         })),
       );
     }
+  });
+
+  describe('user blocks', () => {
+    function block(owner: string, target: string) {
+      return request(app.getHttpServer())
+        .post('/api/v1/users/me/blocks')
+        .set('x-user-id', owner)
+        .send({ blockedUserId: target });
+    }
+    function unblock(owner: string, target: string) {
+      return request(app.getHttpServer())
+        .delete(`/api/v1/users/me/blocks/${target}`)
+        .set('x-user-id', owner);
+    }
+    it('shares outbox idempotency across old and new block methods and continues numeric cursors', async () => {
+      const owner = await insertUser('owner');
+      const targets: string[] = [];
+      for (const name of ['one', 'two', 'three'])
+        targets.push(await insertUser(name));
+      for (const userId of targets)
+        await request(app.getHttpServer())
+          .put('/api/v1/users/me/blocks')
+          .set('x-user-id', owner)
+          .send({ userId })
+          .expect(204);
+      await block(owner, targets[0]!).expect(204);
+      expect(await outbox()).toHaveLength(3);
+      const page = await request(app.getHttpServer())
+        .get('/api/v1/users/me/blocks')
+        .set('x-user-id', owner)
+        .query({ cursor: targets[0], limit: 1 })
+        .expect(200);
+      expect(page.body.items[0]).toMatchObject({
+        userId: targets[1],
+        createdAt: page.body.items[0].blockedAt,
+      });
+      const next = await request(app.getHttpServer())
+        .get('/api/v1/users/me/blocks')
+        .set('x-user-id', owner)
+        .query({ cursor: page.body.nextCursor, limit: 1 })
+        .expect(200);
+      expect(
+        next.body.items.map((item: { userId: string }) => item.userId),
+      ).toEqual([targets[2]]);
+      await request(app.getHttpServer())
+        .delete('/api/v1/users/me/blocks')
+        .set('x-user-id', owner)
+        .send({ userId: targets[0] })
+        .expect(204);
+      await unblock(owner, targets[0]!).expect(204);
+      expect(
+        (await outbox()).filter(
+          (event) => event.eventType === 'USER_BLOCK_REMOVED',
+        ),
+      ).toHaveLength(1);
+    });
+
+    it('serializes concurrent retries and records only real transitions in the same outbox', async () => {
+      const owner = await insertUser('Owner');
+      const target = await insertUser('Target');
+      await Promise.all(
+        Array.from({ length: 8 }, () => block(owner, target).expect(204)),
+      );
+      expect(await outbox()).toHaveLength(1);
+      const created = (await outbox())[0]!;
+      expect(created.payload).toMatchObject({
+        eventId: created.eventId,
+        type: 'USER_BLOCK_CREATED',
+        version: 1,
+        producer: 'user-service',
+        payload: { blockerUserId: owner, blockedUserId: target },
+      });
+      await Promise.all(
+        Array.from({ length: 8 }, () => unblock(owner, target).expect(204)),
+      );
+      expect((await outbox()).map((event) => event.eventType).sort()).toEqual([
+        'USER_BLOCK_CREATED',
+        'USER_BLOCK_REMOVED',
+      ]);
+      expect(
+        (
+          await request(app.getHttpServer())
+            .get('/api/v1/users/me/blocks')
+            .set('x-user-id', owner)
+        ).body,
+      ).toEqual({ items: [], nextCursor: null });
+    });
+    it('preserves relationship/outbox consistency under mixed concurrent commands', async () => {
+      expect(app.getHttpServer().listening).toBe(true);
+      const owner = await insertUser('Owner');
+      const target = await insertUser('Target');
+      await Promise.all(
+        Array.from({ length: 12 }, (_, index) =>
+          index % 2
+            ? block(owner, target).expect(204)
+            : unblock(owner, target).expect(204),
+        ),
+      );
+      const events = await outbox();
+      const balance = events.reduce(
+        (sum, event) =>
+          sum + (event.eventType === 'USER_BLOCK_CREATED' ? 1 : -1),
+        0,
+      );
+      const rows = await testDataSource.query('SELECT * FROM user_blocks');
+      expect(balance).toBe(rows.length);
+      expect(new Set(events.map((event) => event.eventId)).size).toBe(
+        events.length,
+      );
+    });
+    it('rolls the relationship back when the outbox insert fails', async () => {
+      const owner = await insertUser('Owner');
+      const target = await insertUser('Target');
+      await testDataSource.query(
+        `CREATE FUNCTION reject_block_event() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'injected'; END; $$ LANGUAGE plpgsql`,
+      );
+      await testDataSource.query(
+        'CREATE TRIGGER reject_block_event BEFORE INSERT ON outbox_events FOR EACH ROW EXECUTE FUNCTION reject_block_event()',
+      );
+      try {
+        await block(owner, target).expect(500);
+        expect(await testDataSource.query('SELECT * FROM user_blocks')).toEqual(
+          [],
+        );
+        expect(await outbox()).toEqual([]);
+      } finally {
+        await testDataSource.query(
+          'DROP TRIGGER reject_block_event ON outbox_events',
+        );
+        await testDataSource.query('DROP FUNCTION reject_block_event()');
+      }
+    });
+    it('rejects self/missing/departed targets, nonactive requester and invalid input', async () => {
+      const owner = await insertUser('Owner');
+      const target = await insertUser('Target');
+      await block(owner, owner).expect(400);
+      await block(owner, '9999').expect(404);
+      for (const status of [
+        UserStatus.WITHDRAWAL_PENDING,
+        UserStatus.WITHDRAWN,
+      ]) {
+        await usersRepository.update(target, { status });
+        await block(owner, target).expect(404);
+      }
+      await usersRepository.update(target, { status: UserStatus.SUSPENDED });
+      await block(owner, target).expect(204);
+      await usersRepository.update(owner, { status: UserStatus.SUSPENDED });
+      await unblock(owner, target).expect(403);
+      await request(app.getHttpServer())
+        .post('/api/v1/users/me/blocks')
+        .send({ blockedUserId: target })
+        .expect(401);
+      for (const value of [123, '01', '9007199254740992', '-1', 'abc'])
+        await block(owner, value as string).expect(400);
+      await request(app.getHttpServer())
+        .post('/api/v1/users/me/blocks')
+        .set('x-user-id', owner)
+        .send({ blockedUserId: target, blockerUserId: target })
+        .expect(400);
+    });
+    it('scopes keyset pagination and deletion to the authenticated owner', async () => {
+      const owner = await insertUser('Owner');
+      const other = await insertUser('Other');
+      const targets: string[] = [];
+      for (const nickname of ['A', 'B', 'C'])
+        targets.push(await insertUser(nickname));
+      for (const target of targets) await block(owner, target).expect(204);
+      const first = await request(app.getHttpServer())
+        .get('/api/v1/users/me/blocks?limit=2')
+        .set('x-user-id', owner)
+        .expect(200);
+      expect(first.body.items).toHaveLength(2);
+      expect(first.body.items[0]).toMatchObject({
+        userId: targets[2],
+        profileImageKey: null,
+        blockedAt: expect.any(String),
+      });
+      const next = await request(app.getHttpServer())
+        .get('/api/v1/users/me/blocks')
+        .query({ limit: 2, cursor: first.body.nextCursor })
+        .set('x-user-id', owner)
+        .expect(200);
+      expect(
+        next.body.items.map((item: { userId: string }) => item.userId),
+      ).toEqual([targets[0]]);
+      expect(next.body.nextCursor).toBeNull();
+      await request(app.getHttpServer())
+        .get('/api/v1/users/me/blocks')
+        .query({ cursor: first.body.nextCursor })
+        .set('x-user-id', other)
+        .expect(400);
+      await unblock(other, targets[0]!).expect(204);
+      expect(
+        (
+          await request(app.getHttpServer())
+            .get('/api/v1/users/me/blocks')
+            .set('x-user-id', other)
+        ).body.items,
+      ).toEqual([]);
+      expect(
+        (
+          await request(app.getHttpServer())
+            .get('/api/v1/users/me/blocks')
+            .set('x-user-id', owner)
+        ).body.items,
+      ).toHaveLength(3);
+      for (const limit of ['0', '101', '-1', '1.5', 'abc'])
+        await request(app.getHttpServer())
+          .get('/api/v1/users/me/blocks')
+          .query({ limit })
+          .set('x-user-id', owner)
+          .expect(400);
+      await usersRepository.update(targets[0]!, {
+        status: UserStatus.WITHDRAWN,
+      });
+      await unblock(owner, targets[0]!).expect(204);
+    });
   });
 
   function outbox(): Promise<OutboxEventEntity[]> {

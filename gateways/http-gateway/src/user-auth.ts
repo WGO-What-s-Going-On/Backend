@@ -16,6 +16,8 @@ export const userOperations: Record<string, 'public' | 'user'> = {
   'GET /api/v1/users/nickname/availability': 'public',
   'GET /api/v1/terms': 'public',
   'GET /api/v1/users/me/blocks': 'user',
+  'POST /api/v1/users/me/blocks': 'user',
+  'DELETE /api/v1/users/me/blocks/{blockedUserId}': 'user',
   'PUT /api/v1/users/me/blocks': 'user',
   'DELETE /api/v1/users/me/blocks': 'user',
   'GET /api/v1/users/me': 'user',
@@ -24,6 +26,21 @@ export const userOperations: Record<string, 'public' | 'user'> = {
   'GET /api/v1/users/me/badges': 'user',
   'POST /api/v1/users/me/withdrawal': 'user',
 };
+
+function userOperation(method: string, path: string) {
+  // OpenAPI templates are documentation keys; only concrete IDs can reach User.
+  if (path.includes('{') || path.includes('}')) return undefined;
+  const blockedId = /^\/api\/v1\/users\/me\/blocks\/([1-9][0-9]{0,15})$/.exec(
+    path,
+  )?.[1];
+  if (
+    method === 'DELETE' &&
+    blockedId &&
+    BigInt(blockedId) <= 9007199254740991n
+  )
+    return userOperations['DELETE /api/v1/users/me/blocks/{blockedUserId}'];
+  return userOperations[`${method} ${path}`];
+}
 
 export async function userAuthentication(
   config: UserAuthConfig | null,
@@ -66,7 +83,7 @@ export async function userAuthentication(
       });
     const policy =
       service === 'user'
-        ? userOperations[`${request.method} ${request.url.split('?')[0]}`]
+        ? userOperation(request.method, request.url.split('?')[0]!)
         : 'user';
     if (!policy)
       return fail(

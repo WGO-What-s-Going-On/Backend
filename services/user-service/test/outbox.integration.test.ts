@@ -99,6 +99,8 @@ describe('User Outbox PostgreSQL / Redis integration', () => {
   }, 30_000);
 
   it.each([
+    'USER_BLOCK_CREATED',
+    'USER_BLOCK_REMOVED',
     'USER_CREATED',
     'USER_PROFILE_UPDATED',
     'USER_WITHDRAWAL_STARTED',

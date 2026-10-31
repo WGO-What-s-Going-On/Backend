@@ -13,7 +13,7 @@ const dependencies = {
   post: ['mongo', 'redis6380', 'cassandra', 'elasticsearch'],
   map: ['cassandra', 'redis6381'],
   notification: ['redis6382', 'dynamodb'],
-  moderation: ['redis6383'],
+  moderation: ['postgres', 'redis6383'],
 }[service.dependencies];
 const project = `wgo-ci-${process.env.GITHUB_RUN_ID ?? 'local'}-${process.env.GITHUB_RUN_ATTEMPT ?? '1'}-${name}`;
 const compose = ['compose', '-f', 'scripts/ci-compose.yaml', '-p', project];

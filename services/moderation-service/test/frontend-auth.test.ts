@@ -1,8 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { gatewayIdentity } from '../src/gateway-auth.js';
+import { GatewayAuthGuard } from '../src/reports/gateway-auth.guard.js';
 afterEach(() => vi.unstubAllEnvs());
-it('accepts gateway identity only for its audience and signed user', () => {
+it('keeps Gateway signed-user, issuer, audience and expiry checks after report consolidation', async () => {
   const { privateKey, publicKey } = generateKeyPairSync('ec', {
     namedCurve: 'prime256v1',
   });
@@ -37,12 +37,26 @@ it('accepts gateway identity only for its audience and signed user', () => {
     ).toString('base64url');
     return `Bearer ${h}.${p}.${sign('sha256', Buffer.from(`${h}.${p}`), { key: privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url')}`;
   };
-  expect(gatewayIdentity(token(), '12')).toBe(true);
-  expect(gatewayIdentity(token(), '13')).toBe(false);
-  expect(gatewayIdentity(token({ aud: 'wgo-other-service' }), '12')).toBe(
-    false,
-  );
-  expect(gatewayIdentity(token({ exp: 0 }), '12')).toBe(false);
-  expect(gatewayIdentity(token({ iss: 'wgo-ws-gateway' }), '12')).toBe(false);
-  expect(gatewayIdentity(undefined, '12')).toBe(false);
+  const guard = new GatewayAuthGuard();
+  const check = (authorization: string | undefined, userId: string) =>
+    guard.canActivate({
+      switchToHttp: () => ({
+        getRequest: () => ({
+          headers: { authorization, 'x-user-id': userId },
+          rawHeaders: ['Authorization', authorization, 'X-User-Id', userId],
+        }),
+      }),
+    } as never);
+  await expect(check(token(), '12')).resolves.toBe(true);
+  for (const [authorization, userId] of [
+    [token(), '13'],
+    [token({ aud: 'wgo-other-service' }), '12'],
+    [token({ exp: 0 }), '12'],
+    [token({ iss: 'wgo-ws-gateway' }), '12'],
+    [undefined, '12'],
+  ] as const) {
+    await expect(check(authorization, userId)).rejects.toMatchObject({
+      status: 401,
+    });
+  }
 });

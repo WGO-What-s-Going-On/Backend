@@ -16,6 +16,7 @@ import {
 
 const cleanup: Array<() => Promise<unknown>> = [];
 const originalEnv = { ...process.env };
+const tempRoot = tmpdir();
 afterEach(async () => {
   process.env = { ...originalEnv };
   await Promise.all(cleanup.splice(0).map((close) => close()));
@@ -82,12 +83,190 @@ function fixture(path = '/api/v1/posts'): ApiDocument {
   };
 }
 async function directory() {
-  const dir = await mkdtemp(join(tmpdir(), 'wgo-docs-'));
+  const dir = await mkdtemp(join(tempRoot, 'wgo-docs-'));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }
 
+// Keep the service-owned body/response schemas while replacing only internal auth.
+function blocksAndReports(service: 'user' | 'moderation'): ApiDocument {
+  const doc = fixture('/api/v1/users/me');
+  const schema = (name: string) => ({ $ref: `#/components/schemas/${name}` });
+  const json = (name: string) => ({
+    'application/json': { schema: schema(name) },
+  });
+  const internalHeaders = ['X-User-Id', 'X-Session-Id', 'Authorization'].map(
+    (name) => ({
+      in: 'header',
+      name,
+      schema: { type: 'string' },
+    }),
+  );
+  const operation = (status: string, request?: string, response?: string) => ({
+    parameters: internalHeaders,
+    ...(request
+      ? { requestBody: { required: true, content: json(request) } }
+      : {}),
+    responses: {
+      [status]: {
+        description: 'Success',
+        ...(response ? { content: json(response) } : {}),
+      },
+    },
+  });
+  const pathParameter = (name: string) => ({
+    in: 'path',
+    name,
+    required: true,
+    schema: { type: 'string' },
+  });
+  if (service === 'user') {
+    Object.assign(doc.components.schemas, {
+      CreateBlock: {
+        type: 'object',
+        required: ['blockedUserId'],
+        properties: { blockedUserId: { type: 'string' } },
+      },
+      LegacyBlock: {
+        type: 'object',
+        required: ['userId'],
+        properties: { userId: { type: 'string' } },
+      },
+      BlockPage: {
+        type: 'object',
+        properties: {
+          items: { type: 'array', items: schema('Block') },
+          nextCursor: { type: 'string', nullable: true },
+        },
+      },
+      Block: {
+        type: 'object',
+        properties: {
+          userId: { type: 'string' },
+          nickname: { type: 'string' },
+          profileImageKey: { type: 'string', nullable: true },
+          blockedAt: { type: 'string', format: 'date-time' },
+          createdAt: { type: 'string', format: 'date-time', deprecated: true },
+        },
+      },
+    });
+    doc.paths['/api/v1/users/me/blocks'] = {
+      post: operation('204', 'CreateBlock'),
+      get: operation('200', undefined, 'BlockPage'),
+      put: operation('204', 'LegacyBlock'),
+      delete: operation('204', 'LegacyBlock'),
+    };
+    doc.paths['/api/v1/users/me/blocks/{blockedUserId}'] = {
+      parameters: [pathParameter('blockedUserId'), ...internalHeaders],
+      delete: operation('204'),
+    };
+  } else {
+    doc.paths = {
+      '/api/v1/moderation/reports': {
+        post: operation('201', 'CreateReport', 'Report'),
+      },
+      '/api/v1/moderation/reports/{reportId}': {
+        parameters: [pathParameter('reportId'), ...internalHeaders],
+        delete: operation('200', undefined, 'Report'),
+      },
+    };
+    Object.assign(doc.components.schemas, {
+      CreateReport: {
+        type: 'object',
+        required: ['targetType', 'postId', 'reason'],
+        properties: {
+          targetType: { type: 'string', enum: ['POST', 'COMMENT'] },
+          postId: { type: 'string' },
+          commentId: { type: 'string' },
+          reason: {
+            type: 'string',
+            enum: [
+              'SPAM',
+              'HARASSMENT',
+              'INAPPROPRIATE_CONTENT',
+              'FALSE_INFORMATION',
+              'OTHER',
+            ],
+          },
+          description: { type: 'string', maxLength: 2000 },
+        },
+      },
+      Report: {
+        type: 'object',
+        properties: {
+          reportId: { type: 'string' },
+          status: {
+            type: 'string',
+            enum: ['PENDING', 'WITHDRAWN', 'REVIEWED'],
+          },
+          createdAt: { type: 'string', format: 'date-time' },
+          withdrawnAt: { type: 'string', format: 'date-time', nullable: true },
+        },
+      },
+    });
+  }
+  return doc;
+}
+
+function expectBlocksAndReports(doc: ApiDocument) {
+  for (const [path, methods, service] of [
+    ['/api/v1/users/me/blocks', ['get', 'post', 'put', 'delete'], 'user'],
+    ['/api/v1/users/me/blocks/{blockedUserId}', ['delete'], 'user'],
+    ['/api/v1/moderation/reports', ['post'], 'moderation'],
+    ['/api/v1/moderation/reports/{reportId}', ['delete'], 'moderation'],
+  ] as const) {
+    const item = doc.paths[path];
+    expect(item).toBeDefined();
+    for (const method of methods) {
+      expect(item[method]).toBeDefined();
+      expect(item[method].security).toEqual([
+        { [`${service}__UserAccess`]: [] },
+      ]);
+      expect(item[method].parameters).toEqual([]);
+      expect(item[method].responses['401']).toBeDefined();
+    }
+    expect(
+      item.parameters?.filter((p: { in: string }) => p.in === 'header') ?? [],
+    ).toEqual([]);
+  }
+  expect(
+    doc.paths['/api/v1/users/me/blocks'].post.responses['204'],
+  ).toBeDefined();
+  expect(
+    doc.paths['/api/v1/moderation/reports'].post.responses['201'],
+  ).toBeDefined();
+  expect(
+    doc.paths['/api/v1/moderation/reports/{reportId}'].delete.responses['200'],
+  ).toBeDefined();
+  expect(
+    doc.paths['/api/v1/users/me/blocks'].post.requestBody.content[
+      'application/json'
+    ].schema.$ref,
+  ).toBe('#/components/schemas/user__CreateBlock');
+  expect(
+    doc.components.schemas.moderation__CreateReport.properties.reason.enum,
+  ).toContain('FALSE_INFORMATION');
+  expect(
+    doc.components.schemas.moderation__Report.properties.status.enum,
+  ).toEqual(['PENDING', 'WITHDRAWN', 'REVIEWED']);
+}
+
 describe('public OpenAPI merge', () => {
+  it('includes canonical and compatible blocks plus report creation/withdrawal with public auth', async () => {
+    const doc = await mergeDocuments(
+      [
+        { service: 'user', document: blocksAndReports('user') },
+        { service: 'moderation', document: blocksAndReports('moderation') },
+      ],
+      config(),
+    );
+    expectBlocksAndReports(doc);
+    await validateDocument(doc);
+    expect(Object.keys(doc.components.securitySchemes)).toEqual([
+      'user__UserAccess',
+      'moderation__UserAccess',
+    ]);
+  });
   it('replaces internal User credentials with public bearer authentication', async () => {
     const user = fixture('/api/v1/users/me');
     user.components.securitySchemes['service-jwt'] = {
@@ -338,7 +517,11 @@ describe('collection and docs routes', () => {
     for (const service of documentedServices) {
       upstream.get(`/${service}/docs/openapi.json`, async (_request, reply) => {
         calls++;
-        return fail ? reply.code(503).send() : fixture(paths[service]);
+        return fail
+          ? reply.code(503).send()
+          : service === 'user' || service === 'moderation'
+            ? blocksAndReports(service)
+            : fixture(paths[service]);
       });
     }
     const base = await upstream.listen({ host: '127.0.0.1', port: 0 });
@@ -366,6 +549,7 @@ describe('collection and docs routes', () => {
       expect(response.statusCode).toBe(200);
       expect(response.json().servers).toEqual([{ url: '/' }]);
       expect(response.json().paths['/internal/test']).toBeUndefined();
+      expectBlocksAndReports(response.json());
       for (const path of Object.values(paths))
         expect(response.json().paths[path]).toBeDefined();
     }
@@ -379,7 +563,7 @@ describe('collection and docs routes', () => {
     let bad = false,
       invalid = false;
     upstream.get('/moderation/docs/openapi.json', async () =>
-      fixture('/api/v1/moderation/reports'),
+      blocksAndReports('moderation'),
     );
     upstream.get('/post/docs/openapi.json', async () =>
       invalid ? { openapi: '2.0' } : fixture(),
@@ -388,7 +572,7 @@ describe('collection and docs routes', () => {
       bad ? reply.code(503).send() : fixture('/api/v1/location'),
     );
     upstream.get('/user/docs/openapi.json', async () =>
-      fixture('/api/v1/users/me'),
+      blocksAndReports('user'),
     );
     upstream.get('/notification/docs/openapi.json', async () => ({
       openapi: '3.0.3',
@@ -408,6 +592,7 @@ describe('collection and docs routes', () => {
     cfg.services.moderation = `${base}/moderation`;
     const generated = await generateDocs(cfg);
     expect(generated.paths['/api/v1/users/me'].get).toBeDefined();
+    expectBlocksAndReports(generated);
     expect(generated['x-services-without-public-operations']).toEqual([
       'notification',
     ]);

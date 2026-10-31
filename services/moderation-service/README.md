@@ -140,3 +140,11 @@ pnpm test:openai-smoke
 사용하며, REDIS_URL을 명시하고 원래 ID를 유지합니다. 자동 제재·Push는 수행하지 않습니다.
 
 통합 로컬 실행에서는 Post 발행자와 Moderation/Notification 소비자가 같은 Redis endpoint/DB를 사용해야 합니다. 이번 로컬 .env는 localhost:6383으로 맞췄습니다. 서비스별 compose의 서로 다른 기본 포트는 자동으로 이벤트를 복제하지 않습니다. 실제 OpenAI smoke는 제공된 로컬 키로 통과했으며, 키가 없으면 외부 호출 전에 미설정 오류를 반환합니다.
+
+## 사용자 신고 API
+
+게시글·댓글 신고/본인 취소, PostgreSQL 원본·Transactional Outbox 및 moderation:report-events를 구현했다. 기존 Lifecycle/AI 저장소는 유지한다. /docs, /docs/openapi.json에서 서비스 계약을 확인할 수 있다.
+
+전용 DB·마이그레이션·JWKS·Gateway 인증/문서 연동은 운영 선행 조건이다. [신고 계약](contracts/reports.md), [Gateway·팀 후속 요청](contracts/gateway-handoff.md)을 따른다. 운영 반영 완료를 뜻하지 않는다.
+
+로컬 신규 DB는 Compose reports-db profile(5434)로 준비한 뒤 MODERATION_REPORTS_DATABASE_URL을 주입하고 pnpm reports:migrate를 실행한다. pnpm test는 단위/HTTP/OpenAPI, pnpm test:integration은 기존 Redis 및 신고 PostgreSQL/Redis 장애 테스트다. 신고 통합 테스트는 MODERATION_TEST_DATABASE_URL(기본 로컬5432 postgres 관리 연결)로 임시 DB를 생성·삭제하며 원격 endpoint는 거부한다. Compose 5434 사용 시 해당 포트를 테스트 URL에 지정한다.
