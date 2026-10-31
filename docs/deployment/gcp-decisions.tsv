@@ -1,0 +1,2 @@
+ts	phase	decision	why	evidence	result
+2026-11-01T00:00:00+09:00	frame	12 commits in one PR; fresh GCP Seoul Autopilot	User selected infrastructure and no data migration	docs/deployment/gcp.md	implementation started
