@@ -1,13 +1,15 @@
-import { Delete, Put } from '@nestjs/common';
 import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   HttpCode,
   Patch,
+  Param,
   Post,
+  Put,
   Query,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -15,11 +17,14 @@ import {
 import {
   ApiBody,
   ApiOperation,
+  ApiParam,
   ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import {
+  BlockPage,
+  CreateBlockRequest,
   NicknameAvailabilityResult,
   UserProfileResult,
   TermConsentsResult,
@@ -44,61 +49,169 @@ import {
 import type { UserBadgesResponse } from './dto/user-badges-response.dto.js';
 import type { WithdrawalResponse } from './dto/withdrawal-response.dto.js';
 import { parseUserId } from '../user-id.js';
+import { blockedUserId, parseBlockBody } from './dto/user-block.dto.js';
 
 @ApiTags('Users')
 @Controller('api/v1/users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
-  @userIdentityHeader()
-  @Get('me/blocks')
+  @Post('me/blocks')
+  @HttpCode(204)
   @ApiOperation({
-    summary: 'List blocked users',
-    description: 'Up to 100 records. Pass nextCursor as cursor.',
+    summary: 'Block a user',
+    description:
+      'Idempotent. Active requester required. ACTIVE and SUSPENDED targets allowed; withdrawn or withdrawal-pending targets return 404.',
   })
-  blocks(
-    @Headers('x-user-id') user: unknown,
-    @Query('cursor') cursor?: unknown,
-  ) {
-    return this.usersService.listBlocks(
-      requireUserId(user),
-      cursor === undefined ? undefined : requireUserId(cursor),
+  @userIdentityHeader()
+  @ApiBody({ type: CreateBlockRequest })
+  @ApiResponse({
+    status: 204,
+    description: 'Blocked, or already blocked. No body.',
+  })
+  @userErrorResponses(
+    [400, 'Invalid target, unknown fields or self block.'],
+    [401, 'Invalid Gateway credentials.'],
+    [403, 'Requester is not active.'],
+    [404, 'User or target not found.'],
+  )
+  createBlock(
+    @Headers('x-user-id') userId: unknown,
+    @Body() body: unknown,
+  ): Promise<void> {
+    return this.usersService.changeBlock(
+      requireUserId(userId),
+      parseBlockBody(body),
+      true,
     );
   }
+
+  @Get('me/blocks')
+  @ApiOperation({
+    summary: 'List own blocks',
+    description:
+      'Ordered by target user ID descending. Existing blocks remain visible after target account withdrawal; profile anonymization follows User lifecycle.',
+  })
   @userIdentityHeader()
+  @ApiQuery({ name: 'cursor', required: false, type: String })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    schema: { type: 'integer', minimum: 1, maximum: 100, default: 30 },
+  })
+  @ApiResponse({ status: 200, type: BlockPage })
+  @userErrorResponses(
+    [400, 'Invalid pagination.'],
+    [401, 'Invalid Gateway credentials.'],
+    [404, 'User not found.'],
+  )
+  listBlocks(
+    @Headers('x-user-id') userId: unknown,
+    @Query('cursor') cursor: unknown,
+    @Query('limit') limit: unknown,
+  ): Promise<BlockPage> {
+    return this.usersService.listBlocks(requireUserId(userId), cursor, limit);
+  }
+
+  @Delete('me/blocks/:blockedUserId')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: 'Unblock a user',
+    description:
+      'Idempotent, including absent/departed target. Active requester required. Emits an event only when a block existed.',
+  })
+  @userIdentityHeader()
+  @ApiParam({ name: 'blockedUserId', type: String })
+  @ApiResponse({
+    status: 204,
+    description: 'Unblocked, or already absent. No body.',
+  })
+  @userErrorResponses(
+    [400, 'Invalid target or self target.'],
+    [401, 'Invalid Gateway credentials.'],
+    [403, 'Requester is not active.'],
+    [404, 'Requester not found.'],
+  )
+  removeBlock(
+    @Headers('x-user-id') userId: unknown,
+    @Param('blockedUserId') targetId: unknown,
+  ): Promise<void> {
+    return this.usersService.changeBlock(
+      requireUserId(userId),
+      blockedUserId(targetId),
+      false,
+    );
+  }
+
   @Put('me/blocks')
   @HttpCode(204)
-  @ApiOperation({ summary: 'Block a user' })
+  @ApiOperation({
+    summary: 'Block a user (compatible PUT)',
+    description:
+      'Same transactional and idempotent behavior as POST. Kept for existing Gateway clients.',
+  })
+  @userIdentityHeader()
   @ApiBody({
     schema: {
       type: 'object',
       required: ['userId'],
       additionalProperties: false,
-      properties: { userId: { type: 'string' } },
+      properties: { userId: { type: 'string', pattern: '^[1-9][0-9]{0,15}$' } },
     },
   })
-  block(@Headers('x-user-id') user: unknown, @Body() body: unknown) {
-    return this.usersService.block(
-      requireUserId(user),
+  @ApiResponse({
+    status: 204,
+    description: 'Blocked, or already blocked. No body.',
+  })
+  @userErrorResponses(
+    [400, 'Invalid target or self block.'],
+    [401, 'Invalid Gateway credentials.'],
+    [403, 'Requester is not active.'],
+    [404, 'User or target not found.'],
+  )
+  block(
+    @Headers('x-user-id') userId: unknown,
+    @Body() body: unknown,
+  ): Promise<void> {
+    return this.usersService.changeBlock(
+      requireUserId(userId),
       blockTarget(body),
       true,
     );
   }
-  @userIdentityHeader()
+
   @Delete('me/blocks')
   @HttpCode(204)
-  @ApiOperation({ summary: 'Unblock a user' })
+  @ApiOperation({
+    summary: 'Unblock a user (compatible DELETE)',
+    description:
+      'Same transactional and idempotent behavior as DELETE with a path ID. Kept for existing Gateway clients.',
+  })
+  @userIdentityHeader()
   @ApiBody({
     schema: {
       type: 'object',
       required: ['userId'],
       additionalProperties: false,
-      properties: { userId: { type: 'string' } },
+      properties: { userId: { type: 'string', pattern: '^[1-9][0-9]{0,15}$' } },
     },
   })
-  unblock(@Headers('x-user-id') user: unknown, @Body() body: unknown) {
-    return this.usersService.block(
-      requireUserId(user),
+  @ApiResponse({
+    status: 204,
+    description: 'Unblocked, or already absent. No body.',
+  })
+  @userErrorResponses(
+    [400, 'Invalid target or self target.'],
+    [401, 'Invalid Gateway credentials.'],
+    [403, 'Requester is not active.'],
+    [404, 'Requester not found.'],
+  )
+  unblock(
+    @Headers('x-user-id') userId: unknown,
+    @Body() body: unknown,
+  ): Promise<void> {
+    return this.usersService.changeBlock(
+      requireUserId(userId),
       blockTarget(body),
       false,
     );
@@ -330,5 +443,5 @@ function blockTarget(body: unknown): string {
     !('userId' in body)
   )
     throw new BadRequestException('userId required');
-  return requireUserId(body.userId);
+  return blockedUserId(body.userId);
 }
