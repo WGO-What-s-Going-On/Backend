@@ -17,10 +17,13 @@ for key in mongodb-root-password mongodb-post-password redis-password cassandra-
 openssl rand -base64 96 > "$out/keyfile"
 openssl req -x509 -newkey rsa:3072 -nodes -days 365 -subj '/CN=WGO demo storage CA' -keyout "$out/ca.key" -out "$out/ca.pem" 2>/dev/null
 for service in mongodb redis cassandra; do
+  purpose=serverAuth
+  # Replica members also present this certificate as TLS clients.
+  [[ "$service" != mongodb ]] || purpose=serverAuth,clientAuth
   cat > "$out/$service.ext" <<CONFIG
 basicConstraints=CA:FALSE
 keyUsage=digitalSignature,keyEncipherment
-extendedKeyUsage=serverAuth
+extendedKeyUsage=$purpose
 subjectAltName=DNS:localhost,DNS:$service,DNS:$service.$namespace,DNS:$service.$namespace.svc,DNS:$service.$namespace.svc.cluster.local,DNS:$service-0.$service,DNS:$service-0.$service.$namespace.svc.cluster.local,IP:127.0.0.1
 CONFIG
   openssl req -new -newkey rsa:3072 -nodes -subj "/CN=$service.$namespace.svc.cluster.local" -keyout "$out/$service.key" -out "$out/$service.csr" 2>/dev/null

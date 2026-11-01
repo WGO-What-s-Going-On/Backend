@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readEnvironment } from './gke-lib.mjs';
+import { clusterLocation, readEnvironment } from './gke-lib.mjs';
 const config = readEnvironment(process.env.GCP_ENV_FILE);
 const repository = process.env.GITHUB_REPOSITORY;
 if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? ''))
@@ -148,7 +148,7 @@ if (apply) {
   if (
     context.status !== 0 ||
     context.stdout.trim() !==
-      `gke_${config.project}_${config.region}_${config.cluster}`
+      `gke_${config.project}_${clusterLocation(config)}_${config.cluster}`
   )
     throw new Error('Select the configured GKE context before RBAC binding');
   const result = spawnSync('kubectl', ['apply', '-f', '-'], {

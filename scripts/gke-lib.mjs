@@ -9,6 +9,9 @@ export const applications = [
   ['notification-service', 3004, 'dist/main.js'],
   ['moderation-service', 3005, 'dist/main.js'],
 ];
+export const clusterLocation = (config) =>
+  config.clusterLocation ?? config.region;
+
 export function validateEnvironment(config) {
   for (const key of ['project', 'cluster', 'namespace', 'staticIp'])
     if (!/^[a-z][a-z0-9-]{2,62}$/.test(config[key] ?? ''))
@@ -36,6 +39,19 @@ export function validateEnvironment(config) {
       !/^[1-9][0-9]*$/.test(version)
     )
       throw new Error('Invalid service secret version');
+  }
+  if (
+    config.deploymentProfile !== undefined &&
+    !['autopilot', 'standard-demo'].includes(config.deploymentProfile)
+  )
+    throw new Error('Unknown deployment profile');
+  if (config.deploymentProfile === 'standard-demo') {
+    if (!/^asia-northeast3-[abc]$/.test(config.clusterLocation ?? ''))
+      throw new Error('Standard demo requires an explicit Seoul zone');
+    if (config.replicas !== 1)
+      throw new Error('Standard demo requires one replica');
+  } else if (clusterLocation(config) !== config.region) {
+    throw new Error('Autopilot deployment requires regional cluster location');
   }
   if (config.region !== 'asia-northeast3')
     throw new Error('Seoul region required');
@@ -66,6 +82,21 @@ const limits = (cpu, memory) => ({
   requests: { cpu, memory, 'ephemeral-storage': '1Gi' },
   limits: { cpu, memory, 'ephemeral-storage': '1Gi' },
 });
+const demoResources = {
+  app: ['25m', '384Mi', '1', '512Mi'],
+  post: ['100m', '2560Mi', '2', '3Gi'],
+  proxy: ['10m', '64Mi', '250m', '128Mi'],
+  init: ['10m', '64Mi', '250m', '128Mi'],
+};
+function workloadResources(config, role, fallbackCpu, fallbackMemory) {
+  if (config.deploymentProfile !== 'standard-demo')
+    return limits(fallbackCpu, fallbackMemory);
+  const [cpu, memory, maxCpu, maxMemory] = demoResources[role];
+  return {
+    requests: { cpu, memory, 'ephemeral-storage': '128Mi' },
+    limits: { cpu: maxCpu, memory: maxMemory, 'ephemeral-storage': '1Gi' },
+  };
+}
 const meta = (name, namespace, extra = {}) => ({ name, namespace, ...extra });
 const resource = (apiVersion, kind, name, namespace, spec) => ({
   apiVersion,
@@ -156,7 +187,9 @@ export function appResources(config, name, image) {
       runAsNonRoot: true,
       runAsUser: 1000,
     },
-    resources: limits(
+    resources: workloadResources(
+      config,
+      name === 'post-service' ? 'post' : 'app',
       name === 'post-service' ? '1000m' : '250m',
       name === 'post-service' ? '3Gi' : '512Mi',
     ),
@@ -222,7 +255,7 @@ export function appResources(config, name, image) {
           runAsNonRoot: true,
           allowPrivilegeEscalation: false,
         },
-        resources: limits('250m', '256Mi'),
+        resources: workloadResources(config, 'init', '250m', '256Mi'),
       },
     ];
   if (sql)
@@ -244,7 +277,7 @@ export function appResources(config, name, image) {
           runAsNonRoot: true,
           allowPrivilegeEscalation: false,
         },
-        resources: limits('250m', '256Mi'),
+        resources: workloadResources(config, 'proxy', '250m', '256Mi'),
         startupProbe: {
           httpGet: { path: '/startup', port: 9090 },
           periodSeconds: 2,
@@ -283,7 +316,10 @@ export function appResources(config, name, image) {
         revisionHistoryLimit: 5,
         strategy: {
           type: 'RollingUpdate',
-          rollingUpdate: { maxUnavailable: 0, maxSurge: 1 },
+          rollingUpdate:
+            config.deploymentProfile === 'standard-demo'
+              ? { maxUnavailable: 1, maxSurge: 0 }
+              : { maxUnavailable: 0, maxSurge: 1 },
         },
         selector: { matchLabels: { app: name } },
         template: {
@@ -312,7 +348,7 @@ export function appResources(config, name, image) {
       ),
       spec: {
         type: 'ClusterIP',
-        selector: { app: name },
+        selector: { app: name, 'wgo/component': 'application' },
         ports: container.ports.map((p) => ({
           name: p.name,
           port: p.containerPort,
@@ -396,7 +432,7 @@ export function migrationJob(config, name, image, suffix) {
         activeDeadlineSeconds: 300,
         ttlSecondsAfterFinished: 86400,
         template: {
-          metadata: { labels: { app: name, 'wgo/component': 'application' } },
+          metadata: { labels: { app: name, 'wgo/component': 'migration' } },
           spec: pod,
         },
       },

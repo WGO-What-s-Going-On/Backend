@@ -152,3 +152,31 @@ node scripts/gke-validate.mjs
 마지막 명령은 kubeconform 0.7.0과 Kubernetes 1.33 core schema를 사용한다.
 ECK·CSI·GKE 전용 CRD는 이 검사에서 제외되므로 해당 CRD가 설치된 GKE의 server dry-run과 실제 rollout으로 별도 검증한다.
 7개 앱 각각 `node scripts/ci-run.mjs SERVICE`로 repository-defined typecheck·tests·build를 실행한다.
+
+## 기존 Standard 데모 클러스터에 배포한다
+
+월 예산을 위한 단일 노드 환경은 `deploymentProfile: "standard-demo"`,
+`clusterLocation: "asia-northeast3-a"`, `replicas: 1`을 환경 JSON에 지정한다.
+`region`은 Artifact Registry와 Cloud SQL에 사용하는 `asia-northeast3`로 유지한다.
+프로필 생략 시 기존 Autopilot 자원 설정과 regional location을 유지한다.
+`gcp-bootstrap.mjs`와 저장소 renderer는 Autopilot 초기화용이다. 이미 구성된 Standard
+클러스터와 저장소에 다시 실행하지 않는다.
+
+Standard 앱 요청량은 Post 100m CPU·2560Mi, 나머지 6개는 각각 25m·384Mi다.
+SQL proxy는 각각 10m·64Mi를 요청한다. 앱 합계는 270m·4992Mi다.
+마이그레이션 하나와 Notification cleanup이 겹치면 340m·5888Mi가 필요하다.
+배포 전 현재 시스템·저장소 요청량과 합쳐 노드 allocatable 및 namespace quota를 확인한다.
+이 수치는 스케줄링 요청량이며 실제 처리 성능이나 최대 메모리 사용량의 보장이 아니다.
+GitHub staging 환경의 `CD_DEPLOY_CONCURRENCY`는 `1`로 설정한다.
+업데이트는 추가 Pod 없이 기존 Pod를 먼저 종료하므로 잠시 서비스가 중단된다.
+
+첫 앱 배포 전에 `infra-http-gateway-maintenance`와 `infra-ws-gateway-maintenance`
+Deployment를 제거한다. 앱 Service는 `wgo/component=application`까지 선택하므로
+마이그레이션과 cleanup Job에는 사용자 요청을 전달하지 않는다.
+`main` push의 production 승격은 repository variable `CD_ENABLE_PRODUCTION=true`일 때만
+실행한다. 별도 production 인프라가 준비되기 전에는 설정하지 않는다.
+
+MongoDB 서버 인증서는 replica 내부 연결에서 TLS client로도 사용되므로
+serverAuth와 clientAuth 용도를 함께 갖는다. 기존 인증서를 교체할 때는 CA와
+DB 비밀번호를 유지하고 인증서만 재발급한다. 초기화 스크립트를 재실행해
+운영 비밀번호를 회전하지 않는다.
