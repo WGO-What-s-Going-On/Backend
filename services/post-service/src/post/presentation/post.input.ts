@@ -112,19 +112,6 @@ export function participantInput(raw: unknown): void {
   fields(object(raw), []);
 }
 
-export function similarInput(raw: unknown): PostInput & { limit: number } {
-  const body = object(raw);
-  const { limit = 5, ...draft } = body;
-  if (
-    typeof limit !== 'number' ||
-    !Number.isInteger(limit) ||
-    limit < 1 ||
-    limit > 10
-  )
-    throw new BadRequestException('limit must be an integer between 1 and 10');
-  return { ...postInput(draft), limit };
-}
-
 export function commentId(value: string): string {
   if (!/^comment_[0-9a-f-]{36}$/.test(value))
     throw new BadRequestException('Invalid commentId');

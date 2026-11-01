@@ -1,5 +1,7 @@
 # 유사 게시물 검색 기반 검증 결과
 
+> 2026-11-01 계약 변경: 이 문서의 기존 limit·임계값 관련 계획과 검증 기록은 당시 동작이다. 현재는 임계값 없이 유효 후보 상위 3개와 similarityPercent를 반환하며 limit 입력은 400이다. 모델 준비·활성화 및 의존성 검사만 유지한다. 현재 계약은 [semantic-search.md](contracts/semantic-search.md)를 따른다.
+
 검증일: 2026-10-06. Node.js 24.21.0 / pnpm 10.33.0.
 
 최신 검증은 마지막 **실제 E5 모델 연결 검증** 절을 기준으로 한다. 앞의 72개/75개 테스트 결과는 모델 연결 이전 단계의 기록이다.
@@ -77,4 +79,4 @@ Post 전체 통합 테스트 11개 파일·75개, Map 전체 통합 테스트 5�
 | `pnpm typecheck`, `pnpm build` | 통과 |
 | 루트 `npm run format`, `npm run format:check`, `git diff --check` | 통과, 무관한 변경 없음 |
 
-별도 lint 명령은 없다. 이번 변경은 Post 내부 모델 연결이며 Map 코드는 변경하지 않았다. 모델이 준비되어도 `SEMANTIC_THRESHOLD` 미설정 시 추천은 503이다. 실제 데이터의 재인덱싱과 운영 활성화는 [README](README.md)의 새 모델 별칭·backfill 절차를 따른다.
+별도 lint 명령은 없다. 이번 변경은 Post 내부 모델 연결이며 Map 코드는 변경하지 않았다. 현재 추천에는 임계값 설정이 필요하지 않다. 실제 데이터의 재인덱싱과 운영 활성화는 [README](README.md)의 새 모델 별칭·backfill 절차를 따른다.

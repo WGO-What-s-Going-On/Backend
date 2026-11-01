@@ -457,7 +457,7 @@ Post 원본은 MongoDB다. Post 내부 EmbeddingProvider 계산 포트와 ES 검
 
 작성 초안은 Post → 기존 Map 위치 인가 → MapPostQuery.SearchNearbyPosts(150m,최대200) → Post Mongo 원본 검증 → 초안 임베딩 → ES 후보 벡터 비교 → Mongo 최종 검증으로 처리한다. 생성은 기존 MongoDB+Outbox 흐름을 유지한다. 독립 그룹 post-semantic-v1 Worker가 생성 이벤트를 소비해 최신 원본을 인덱싱한다. 재구축은 버전별 소비 lease·Stream watermark·원본 스캔·따라잡기·검증·ES 별칭 전환을 사용한다.
 
-실제 E5 모델은 고정 revision/체크섬으로 연결되며 Post 운영 이미지에 포함한다. 운영 이미지 진입점은 활성 모델 파일과 CA 설정을 검사한다. 모델 warm-up·ES alias·평가된 threshold가 준비되지 않으면 추천은 503이다. 로컬 개발의 기존 degraded 시작은 유지한다. 상세 계약은 [Post 검색 계약](services/post-service/contracts/semantic-search.md)에 있다.
+실제 E5 모델은 고정 revision/체크섬으로 연결되며 Post 운영 이미지에 포함한다. 운영 이미지 진입점은 활성 모델 파일과 CA 설정을 검사한다. 모델 warm-up·ES alias가 준비되지 않으면 추천은 503이다. 로컬 개발의 기존 degraded 시작은 유지한다. 상세 계약은 [Post 검색 계약](services/post-service/contracts/semantic-search.md)에 있다.
 
 ## GCP 개발·데모 배포 프로파일
 

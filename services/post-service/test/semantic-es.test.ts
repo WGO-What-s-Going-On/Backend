@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { setTimeout as delay } from 'node:timers/promises';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   ElasticsearchIndex,
   mapping,
@@ -11,13 +12,13 @@ describe('Elasticsearch HTTP boundary', () => {
   let index: ElasticsearchIndex;
   let body: any;
   let response: any;
-  let timeout = false;
+  let responseDelayMs = 0;
   beforeAll(async () => {
     server = createServer(async (req, res) => {
       let raw = '';
       for await (const chunk of req) raw += chunk;
       body = JSON.parse(raw || '{}');
-      if (timeout) return;
+      await delay(responseDelayMs);
       res
         .writeHead(200, { 'content-type': 'application/json' })
         .end(JSON.stringify(response));
@@ -28,8 +29,11 @@ describe('Elasticsearch HTTP boundary', () => {
     index = new ElasticsearchIndex(
       'post-test',
       `http://127.0.0.1:${(server.address() as { port: number }).port}`,
-      100,
+      2000,
     );
+  });
+  beforeEach(() => {
+    responseDelayMs = 0;
   });
   afterAll(async () => {
     server.closeAllConnections();
@@ -40,9 +44,11 @@ describe('Elasticsearch HTTP boundary', () => {
       ['post_1'],
       { vector, version: 'v1' },
       new Date(),
-      AbortSignal.timeout(1000),
+      AbortSignal.timeout(4000),
     );
   it('filters IDs, version, state and time internally and restores cosine score', async () => {
+    // CI scheduling can exceed the old 100 ms budget without an HTTP failure.
+    responseDelayMs = 150;
     response = {
       timed_out: false,
       _shards: { failed: 0 },
@@ -84,8 +90,33 @@ describe('Elasticsearch HTTP boundary', () => {
     response = { ...partial, hits: { hits: [] } };
     await expect(search()).rejects.toThrow('Incomplete');
   });
-  it('enforces an HTTP timeout', async () => {
-    timeout = true;
-    await expect(search()).rejects.toThrow();
+});
+
+// Keep the short deadline confined to a server that intentionally never responds.
+it('enforces an HTTP timeout after the server receives the request', async () => {
+  let receivedRequest = false;
+  const server = createServer((req) => {
+    receivedRequest = true;
+    req.resume();
   });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string')
+      throw new Error('Missing server port');
+    const index = new ElasticsearchIndex(
+      'post-test',
+      `http://127.0.0.1:${address.port}`,
+      500,
+    );
+    const signal = AbortSignal.timeout(4000);
+    await expect(
+      index.search(['post_1'], { vector, version: 'v1' }, new Date(), signal),
+    ).rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(receivedRequest).toBe(true);
+    expect(signal.aborted).toBe(false);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
