@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "nest start --watch",
-    "build": "nest build",
+    "build": "nest build && node --input-type=module -e \"import('reflect-metadata').then(() => import('./dist/app.module.js'))\"",
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
