@@ -228,3 +228,57 @@ test('both workflow jobs use resolved location and production requires opt-in', 
     /if: github.event_name == 'push' && vars.CD_ENABLE_PRODUCTION == 'true'/,
   );
 });
+
+test('Standard demo renders an explicit localhost HTTP origin for local frontend testing', () => {
+  const local = { ...standard, webOrigins: ['http://localhost:5173'] };
+  for (const name of ['http-gateway', 'ws-gateway']) {
+    const settings = appResources(local, name, image(name)).find(
+      (resource) => resource.kind === 'ConfigMap',
+    ).data;
+    assert.equal(settings.CORS_ORIGINS, 'http://localhost:5173');
+    assert.equal(settings.WS_ALLOWED_ORIGINS, 'http://localhost:5173');
+  }
+});
+
+test('HTTP origins are limited to canonical localhost origins in Standard demo', () => {
+  for (const origin of [
+    'http://example.com',
+    'http://localhost.example.com:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:5173/',
+    'http://localhost:5173/path',
+    'http://localhost:5173?query=1',
+    'http://localhost:5173#fragment',
+    'http://user:password@localhost:5173',
+    '*',
+  ]) {
+    assert.throws(
+      () => validateEnvironment({ ...standard, webOrigins: [origin] }),
+      /webOrigins/,
+    );
+  }
+  assert.throws(
+    () =>
+      validateEnvironment({ ...config, webOrigins: ['http://localhost:5173'] }),
+    /webOrigins/,
+  );
+  assert.throws(
+    () => validateEnvironment({ ...standard, webOrigins: [] }),
+    /webOrigins/,
+  );
+  assert.doesNotThrow(() =>
+    validateEnvironment({ ...standard, webOrigins: ['https://example.com'] }),
+  );
+});
+
+test('explicit Autopilot rejects localhost HTTP origins', () => {
+  assert.throws(
+    () =>
+      validateEnvironment({
+        ...config,
+        deploymentProfile: 'autopilot',
+        webOrigins: ['http://localhost:5173'],
+      }),
+    /webOrigins/,
+  );
+});
