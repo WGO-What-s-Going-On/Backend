@@ -52,3 +52,103 @@ Post에는 미디어 버킷 객체 권한과 서명용 GSA의 `iam.serviceAccoun
 - [GKE Secret Manager CSI](https://docs.cloud.google.com/secret-manager/docs/secret-manager-managed-csi-component).
 - [Cloud SQL GKE 연결](https://docs.cloud.google.com/sql/docs/postgres/connect-kubernetes-engine).
 - [ECK Autopilot](https://www.elastic.co/docs/deploy-manage/deploy/cloud-on-k8s/deploy-eck-on-gke-autopilot).
+
+## 새 환경을 초기화한다
+
+`gcloud`, `kubectl`, Node 24, OpenSSL, JDK keytool을 준비한다. 아래 생성 명령은 비용이 발생하므로 대상 프로젝트를 확인하고 실행한다.
+
+```sh
+export GCP_ENV_FILE=/secure/wgo-demo-environment.json
+node scripts/gcp-bootstrap.mjs
+node scripts/gcp-bootstrap.mjs --apply
+```
+
+첫 명령은 수행할 명령만 출력한다. 두 번째 명령이 VPC·NAT·Autopilot·Artifact Registry·Cloud SQL·비공개 버킷·IAM을 생성한다.
+기존 리소스의 발견 오류를 미존재로 취급하지 않는다. 이미 있는 리소스의 모든 drift를 자동 교정하는 도구는 아니다.
+클러스터는 private node와 IAM으로 접근하는 DNS control-plane endpoint를 사용한다.
+Secret Manager CSI의 KSA principal 권한과 SDK용 GSA 권한을 각각 설정한다.
+`webOrigins`에는 실제 프런트엔드 HTTPS origin을 넣는다. Gateway와 GCS 버킷 CORS에 적용된다.
+
+클러스터 인증을 얻은 뒤 foundation을 적용한다. 프로젝트와 클러스터 이름은 환경 파일과 일치시킨다.
+
+```sh
+gcloud container clusters get-credentials wgo-demo --region asia-northeast3 --project YOUR_PROJECT --dns-endpoint
+node scripts/gke-render.mjs foundation > /tmp/wgo-foundation.json
+kubectl apply -f /tmp/wgo-foundation.json
+```
+
+ECK operator와 CRD를 설치하고 `elastic-system` operator readiness를 확인한다.
+[저장소 초기화·복원 절차](gcp-storage.md)에 따라 인증서·비밀번호를 생성한 후 저장소 정의를 적용한다.
+
+```sh
+node scripts/gke-render.mjs storage > /tmp/wgo-storage.json
+kubectl apply -f /tmp/wgo-storage.json
+bash scripts/gcp-storage-smoke.sh wgo-demo
+```
+
+DNS의 API·WS A 레코드는 생성한 글로벌 고정 IP를 가리켜야 한다.
+ManagedCertificate의 `certificateStatus=Active`를 확인한다. 인증서 발급 대기는 앱 오류와 구분한다.
+내부 서비스와 DB는 ClusterIP와 NetworkPolicy로 외부에서 직접 접근할 수 없다.
+
+Cloud SQL은 관리자 연결로 아래 SQL을 실행한다. 이 단계에는 private IP 경로와 관리자 DB 인증이 필요하다.
+DB와 IAM 사용자는 bootstrap에서 만들며 SQL 스크립트는 DB별 권한만 부여한다.
+
+```sh
+node scripts/gcp-sql-grants.mjs > /tmp/wgo-grants.sql
+psql "$ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -f /tmp/wgo-grants.sql
+```
+
+앱별 JSON에 JWT·서비스 간 JWK·Kakao·OpenAI·저장소 연결값을 채운다.
+Post의 ES API key와 평가한 semantic threshold를 준비하고 초기 semantic alias를 생성한다.
+JWT access secret/issuer/audience는 User와 두 Gateway가 동일하게 사용한다.
+HTTP Gateway private JWK의 public key만 각 서비스 trusted JWKS에 넣는다.
+Post private JWK의 public key만 Map과 User에, WS private JWK의 public key만 Post에 넣는다.
+Notification은 FIREBASE_PROJECT_ID를 넣고 private key/email을 생략하면 ADC를 사용한다.
+인증 키와 외부 API 키는 실제 값을 생성·발급해야 하며 저장소 예시를 그대로 배포하지 않는다.
+
+```sh
+gcloud secrets versions add wgo-demo-user-service-runtime --project YOUR_PROJECT --data-file=/secure/user-runtime.json
+```
+
+다른 6개 앱도 각자의 secret에 업로드한다. 출력된 숫자 version을 환경 파일에 고정한다.
+기본 `secretVersion`과 서비스별 `secretVersions` override를 지원한다.
+`{"secretVersions":{"user-service":"2"}}`는 User만 새 버전으로 전환한다.
+앱 JSON으로 `NODE_EXTRA_CA_CERTS`, `DB_CONNECTION_MODE`, 내부 주소 같은 검토된 manifest 설정을 임의 덮어쓰지 않는다.
+
+## CI/CD 권한을 연결한다
+
+```sh
+export GITHUB_REPOSITORY=WGO-What-s-Going-On/Backend
+node scripts/gcp-cicd-identity.mjs
+node scripts/gcp-cicd-identity.mjs --apply
+```
+
+이 명령은 main ref만 허용하는 GitHub OIDC provider와 Artifact Registry writer, namespace RBAC를 만든다.
+스토리지 Secret·PVC·StatefulSet 삭제 권한을 CD에 주지 않는다.
+출력된 비밀값 없는 provider·계정 식별자와 `.env.cd.example`의 Variables를 GitHub Environment에 설정한다.
+staging과 production은 설정·namespace·IAM 계정을 분리하고 같은 registry의 digest를 승격한다.
+개발·데모만 운영하면 staging의 수동 초기 배포를 사용하고 production Environment는 승인 전까지 실행하지 않는다.
+
+## 백업과 관측을 확인한다
+
+Cloud SQL은 일일 자동 백업 7개와 PITR 7일을 유지하며 삭제 보호를 사용한다.
+GCS 미디어는 버전 관리를 사용한다. 이전 버전 정리 정책은 보존 요구를 확정한 뒤 적용한다.
+Stateful 데이터와 ES의 별도 snapshot은 [저장소 백업](gcp-storage.md)을 따른다.
+Cloud SQL PITR은 별도 인스턴스로 복원하여 User·Notification schema와 데이터 일관성을 확인한다.
+앱 DB와 Redis snapshot의 시점이 다르므로 이벤트 dedup과 pending 처리를 함께 검증한다.
+
+클러스터 생성에서 Cloud Logging의 SYSTEM·WORKLOAD와 Cloud Monitoring의 SYSTEM 수집을 활성화한다.
+운영자는 GKE workload restart·OOM·PVC 용량·Redis 메모리·consumer pending·outbox 실패와 백업 실패를 확인한다.
+서비스 로그의 event ID와 correlation ID로 전송 지연 원인을 추적한다. 비밀 JSON을 로그나 workflow artifact로 저장하지 않는다.
+
+## 검증을 재현한다
+
+```sh
+npm run format
+node --test scripts/*.test.mjs
+node scripts/gke-validate.mjs
+```
+
+마지막 명령은 kubeconform 0.7.0과 Kubernetes 1.33 core schema를 사용한다.
+ECK·CSI·GKE 전용 CRD는 이 검사에서 제외되므로 해당 CRD가 설치된 GKE의 server dry-run과 실제 rollout으로 별도 검증한다.
+7개 앱 각각 `node scripts/ci-run.mjs SERVICE`로 repository-defined typecheck·tests·build를 실행한다.

@@ -9,5 +9,6 @@
   "wsDomain": "ws.example.com",
   "staticIp": "wgo-demo-ingress",
   "secretVersion": "1",
-  "replicas": 1
+  "replicas": 1,
+  "webOrigins": ["https://demo.example.com"]
 }
