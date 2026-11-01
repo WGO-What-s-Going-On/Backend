@@ -1,5 +1,7 @@
 # 게시물 작성 전 의미 기반 유사 게시물 추천 계획
 
+> 2026-11-01 계약 변경: 이 문서의 기존 limit·임계값 관련 계획과 검증 기록은 당시 동작이다. 현재는 임계값 없이 유효 후보 상위 3개와 similarityPercent를 반환하며 limit 입력은 400이다. 모델 준비·활성화 및 의존성 검사만 유지한다. 현재 계약은 [semantic-search.md](contracts/semantic-search.md)를 따른다.
+
 > 구현 상태(2026-10-06): 실제 모델을 제외한 Post API·Map 후보 RPC·ES 검색·이벤트 인덱싱·원본 재구축 기반을 구현하고 실제 저장소 통합 테스트를 완료했다. 모델 미연결 상태에서는 추천 503/Worker 미실행이다. 완료 범위와 검증 결과는 [SEMANTIC_VERIFICATION.md](SEMANTIC_VERIFICATION.md), 현재 계약은 [semantic-search.md](contracts/semantic-search.md)를 참조한다. 아래 모델 품질·성능 실험은 후속 계획이다.
 
 

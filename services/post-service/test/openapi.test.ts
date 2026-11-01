@@ -67,6 +67,24 @@ describe('OpenAPI document', () => {
       .get('/docs/openapi.json')
       .expect(200);
     const document = response.body;
+    expect(
+      document.paths['/api/v1/posts/similar'].post.requestBody.content[
+        'application/json'
+      ].schema,
+    ).toEqual({ $ref: '#/components/schemas/CreatePostBody' });
+    expect(
+      document.components.schemas.CreatePostBody.properties,
+    ).not.toHaveProperty('limit');
+    expect(
+      document.components.schemas.SimilarPostsResponse.properties.items
+        .maxItems,
+    ).toBe(3);
+    expect(
+      document.components.schemas.SimilarPostItem.properties.similarityPercent,
+    ).toMatchObject({ type: 'number', minimum: 0, maximum: 100 });
+    expect(document.components.schemas.SimilarPostItem.required).toContain(
+      'similarityPercent',
+    );
     expect(Object.keys(document.paths).sort()).toEqual(
       [
         '/api/v1/posts',

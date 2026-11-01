@@ -7,7 +7,6 @@ export const draft = {
   latitude: 37.5,
   longitude: 127,
   radiusM: 250,
-  limit: 5,
 };
 export const vector = [1, ...Array<number>(383).fill(0)];
 export const fixtureEmbedding = (): EmbeddingProvider => ({

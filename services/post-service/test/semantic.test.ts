@@ -47,8 +47,8 @@ describe('semantic search policy', () => {
     assertCanCreate: vi.fn(async () => {}),
     assertCanJoin: vi.fn(async () => {}),
   };
-  const search = (threshold: number | undefined = 0.7) =>
-    new FindSimilarPosts(auth, nearby, source, embedding, index, threshold);
+  const search = () =>
+    new FindSimilarPosts(auth, nearby, source, embedding, index);
   beforeEach(() => {
     vi.clearAllMocks();
     posts = Array.from({ length: 200 }, (_, i) => post(i));
@@ -81,14 +81,11 @@ describe('semantic search policy', () => {
       ),
     };
   });
-  it('ranks candidate 200 first, defaults to five and returns one in the same array', async () => {
+  it('ranks candidate 200 first, returns only the top three', async () => {
     const result = await search().execute(draft, 123);
-    expect(result.items).toHaveLength(5);
+    expect(result.items).toHaveLength(3);
     expect(result.items[0]!.postId).toBe(posts[199]!.postId);
     expect(result.checkStatus).toBe('completed');
-    expect(
-      (await search().execute({ ...draft, limit: 1 }, 123)).items,
-    ).toHaveLength(1);
     expect(auth.assertCanCreate).toHaveBeenCalledWith(123, 37.5, 127, 250);
   });
   it('sorts ties by distance then postId and excludes injected outside candidates', async () => {
@@ -117,13 +114,62 @@ describe('semantic search policy', () => {
     expect(embedding.embed).not.toHaveBeenCalled();
     expect(index.search).not.toHaveBeenCalled();
   });
-  it('returns complete empty results when scores are below the threshold', async () => {
-    const result = await search(1).execute(draft, 123);
-    expect(result).toMatchObject({
-      items: [],
-      checkStatus: 'completed',
-      partialReasons: [],
-    });
+  it.each([0, 1, 2])(
+    'returns all %s eligible candidates in the same array',
+    async (count) => {
+      posts = posts.slice(0, count);
+      const result = await search().execute(draft, 123);
+      expect(result.items).toHaveLength(count);
+      expect(result).toMatchObject({
+        checkStatus: 'completed',
+        partialReasons: [],
+      });
+    },
+  );
+  it.each([
+    {
+      scores: [-0.2, -0.1, 0.123441, 0.123449],
+      percentages: [12.34, 12.34, 0],
+    },
+    { scores: [-0.4, -0.3, -0.200009, -0.200001], percentages: [0, 0, 0] },
+  ])(
+    'keeps weak and negative scores and ranks raw scores before rounding: $scores',
+    async ({ scores, percentages }) => {
+      posts = posts.slice(0, 4);
+      vi.mocked(index.search).mockResolvedValue(
+        posts.map((p, i) => ({
+          postId: p.postId,
+          contentHash: content(p).hash,
+          embeddingVersion: 'v1',
+          similarity: scores[i]!,
+        })),
+      );
+      const result = await search().execute(draft, 123);
+      expect(result.items.map((p) => p.postId)).toEqual([
+        posts[3]!.postId,
+        posts[2]!.postId,
+        posts[1]!.postId,
+      ]);
+      expect(result.items.map((p) => p.similarityPercent)).toEqual(percentages);
+      expect(result.checkStatus).toBe('completed');
+    },
+  );
+  it('clamps display percentages and rounds to two decimal places', async () => {
+    posts = posts.slice(0, 3);
+    const scores = [1.000001, 0.76545, -1.000001];
+    vi.mocked(index.search).mockResolvedValue(
+      posts.map((p, i) => ({
+        postId: p.postId,
+        contentHash: content(p).hash,
+        embeddingVersion: 'v1',
+        similarity: scores[i]!,
+      })),
+    );
+    expect(
+      (await search().execute(draft, 123)).items.map(
+        (p) => p.similarityPercent,
+      ),
+    ).toEqual([100, 76.55, 0]);
   });
 
   it('filters status, expiry, old/future source before search and does not filter category', async () => {
@@ -172,11 +218,11 @@ describe('semantic search policy', () => {
       return hits;
     });
     const result = await search().execute(draft, 123);
-    expect(result.items).toHaveLength(5);
+    expect(result.items).toHaveLength(3);
     expect(result.items[0]!.postId).toBe(posts[2]!.postId);
     expect(result.partialReasons).toContain('INDEX_LAG');
   });
-  it('fails closed before Map when model or evaluated threshold is absent', async () => {
+  it('fails closed before Map when model is unavailable or feature is disabled', async () => {
     embedding = new E5EmbeddingProvider(false);
     await expect(search().execute(draft, 123)).rejects.toThrow(
       'SIMILARITY_CHECK_UNAVAILABLE',
@@ -189,7 +235,7 @@ describe('semantic search policy', () => {
         source,
         embedding,
         index,
-        undefined,
+        false,
       ).execute(draft, 123),
     ).rejects.toThrow('SIMILARITY_CHECK_UNAVAILABLE');
     expect(auth.assertCanCreate).not.toHaveBeenCalled();
