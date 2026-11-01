@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { createServer } from 'node:http';
+import { promisify } from 'node:util';
 import { deploy } from './cd.mjs';
 import { releaseResources, resourceHash } from './cd-lib.mjs';
 import { applications, clusterLocation } from './gke-lib.mjs';
@@ -28,6 +31,7 @@ function harness({
   changed = ['services/user-service/src/example.ts'],
   mode = 'staging',
   nextConfig = config,
+  curlRunner,
 } = {}) {
   const events = [],
     current = new Map(),
@@ -75,6 +79,7 @@ function harness({
       return '';
     }
     if (exe === 'curl') {
+      if (curlRunner) return curlRunner(args);
       if (failure === 'https' && !failed) {
         failed = true;
         throw new Error('https failed');
@@ -297,3 +302,70 @@ test('Standard zonal context completes deployment with pinned demo resources', a
   });
   await h.execute();
 });
+
+for (const gateway of ['http-gateway', 'ws-gateway']) {
+  for (const scenario of ['converges', 'not-found', 'unavailable']) {
+    test(`${gateway} ingress ${scenario} preserves release state until curl succeeds`, async (t) => {
+      let requests = 0;
+      const server = createServer((_request, response) => {
+        requests += 1;
+        response.statusCode =
+          scenario === 'not-found'
+            ? 404
+            : scenario === 'converges' && requests > 1
+              ? 200
+              : 502;
+        response.end('health response');
+      });
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      t.after(() => new Promise((resolve) => server.close(resolve)));
+      const h = harness({
+        changed: [`gateways/${gateway}/src/example.ts`],
+        curlRunner: async (args) => {
+          assert.equal(h.states.get(gateway).sha, oldSha);
+          const actualArgs = args.map((arg, index) => {
+            if (arg.startsWith('https://'))
+              return `http://127.0.0.1:${server.address().port}/health/ready`;
+            // Exercise curl's retry policy with a shorter budget in this test.
+            if (args[index - 1] === '--retry') return '2';
+            if (args[index - 1] === '--retry-delay') return '1';
+            if (args[index - 1] === '--retry-max-time') return '3';
+            return arg;
+          });
+          return (
+            await promisify(execFile)('curl', actualArgs, { timeout: 10000 })
+          ).stdout;
+        },
+      });
+      if (scenario === 'converges') {
+        await h.execute();
+        assert.equal(requests, 2);
+        assert.equal(h.states.get(gateway).sha, sha);
+        const args = h.events.find((e) => e.exe === 'curl').args;
+        for (const [flag, value] of [
+          ['--retry', '24'],
+          ['--retry-delay', '5'],
+          ['--retry-max-time', '120'],
+          ['--connect-timeout', '5'],
+          ['--max-time', '15'],
+          ['--output', '/dev/null'],
+        ]) {
+          assert.equal(args[args.indexOf(flag) + 1], value);
+        }
+        assert.ok(args.includes('--retry-connrefused'));
+        assert.ok(args.includes('--fail'));
+        assert.equal(args.includes('--retry-all-errors'), false);
+        assert.equal(args.includes('--insecure'), false);
+      } else {
+        await assert.rejects(h.execute());
+        assert.equal(requests, scenario === 'not-found' ? 1 : 3);
+        assert.equal(h.states.get(gateway).sha, oldSha);
+        assert.equal(
+          h.current.get(gateway).spec.template.spec.containers[0].image,
+          image(gateway),
+        );
+        assert.equal(h.saved, undefined);
+      }
+    });
+  }
+}
