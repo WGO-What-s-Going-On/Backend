@@ -22,6 +22,9 @@ importers:
       '@nestjs/swagger':
         specifier: 12.0.2
         version: 12.0.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)(typescript@6.0.3)
+      jose:
+        specifier: 6.1.0
+        version: 6.1.0
       openai:
         specifier: ^6.17.0
         version: 6.49.0
@@ -1510,6 +1513,12 @@ packages:
         integrity: sha512-RKYVTCjAnRthyJes037NX/IiqeidgN1xc3j1RjFfECFp28A1GVwK9nA+i0rJPaHqSZwygLzRnFlzUuHFoWWy+Q==,
       }
     engines: { node: '>=6' }
+
+  jose@6.1.0:
+    resolution:
+      {
+        integrity: sha512-TTQJyoEoKcC1lscpVDCSsVgYzUDg/0Bt3WE//WiTPK6uOCQC2KZS4MpugbMWt/zyjkopgZoXhZuCi00gLudfUA==,
+      }
 
   js-yaml@5.4.2:
     resolution:
@@ -3217,6 +3226,8 @@ snapshots:
   is-unicode-supported@2.1.0: {}
 
   iterare@1.2.1: {}
+
+  jose@6.1.0: {}
 
   js-yaml@5.4.2:
     dependencies:

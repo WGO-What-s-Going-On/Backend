@@ -446,3 +446,7 @@ Proxy와 앱은 같은 Workload Identity를 사용하며 Proxy 포트를 Service
 
 실제 Cloud SQL 검증은 migration 실행, 로그인, Proxy 재시작, IAM 권한 거부,
 토큰 갱신 이후 새 연결 순으로 수행한다. 로컬 PostgreSQL 테스트는 IAM 연결 검증을 대신하지 않는다.
+
+## 사용자 차단
+
+POST·GET `/api/v1/users/me/blocks`, DELETE `/api/v1/users/me/blocks/{blockedUserId}`를 제공한다. 기존 PUT·DELETE body API도 유지한다. [차단·이벤트 계약](contracts/user-blocks.md)을 따른다. 관계 변경과 `USER_BLOCK_CREATED`/`USER_BLOCK_REMOVED` Outbox 기록은 기존 PostgreSQL 트랜잭션에서 함께 커밋한다. Cloud SQL 연결·마이그레이션·User gRPC 구성은 유지한다.

@@ -81,16 +81,19 @@ Post·Map·Notification·Moderation은 서비스 서명과 JWT의 `userId`가 �
 | --- | --- | --- |
 | PATCH /posts/{postId} | title 및/또는 content | 작성자만, 활성·미종료 글만. 204. 위치·카테고리는 수정하지 않음 |
 | PUT /posts/{postId}/closed | `{closed:true|false}` | 작성자만, 멱등 204. 자동 만료·삭제·제재된 글의 재개는 거절 |
-| POST /moderation/reports | `{targetType:"POST"|"COMMENT",targetId,reason}` | reason 1~1,000자. `{reportId,status:"PENDING"}`. 사용자·대상별 첫 신고 유지 |
+| POST /moderation/reports | `{targetType:"POST"|"COMMENT",postId,commentId?,reason,description?}` | 201. enum 사유, description 최대 2,000자. 운영 대상 검증 계약 미지원 시 503 |
+| DELETE /moderation/reports/{reportId} | 없음 | 본인 PENDING만 취소, 200. 중복 취소는 최초 결과 |
+| POST /users/me/blocks | `{blockedUserId:"123"}` | 자기 차단 금지, ACTIVE/SUSPENDED 대상만, 멱등 204 |
+| DELETE /users/me/blocks/{blockedUserId} | 없음 | 멱등 204 |
 | PUT /users/me/blocks | `{userId:"123"}` | 자기 차단 금지, 존재 사용자만, 멱등 204 |
 | DELETE /users/me/blocks | `{userId:"123"}` | 멱등 204 |
-| GET /users/me/blocks | cursor 선택 | `{items:[{userId,nickname,createdAt}],nextCursor}`. 최대 100명 |
+| GET /users/me/blocks | cursor·limit 선택 | `{items:[{userId,nickname,profileImageKey,blockedAt,createdAt}],nextCursor}`. 기본 30/최대 100명. 기존 숫자 cursor도 유지 |
 
 차단은 User가 관계를 소유한다. 프론트는 차단 목록으로 표시할 작성자 콘텐츠를 숨긴다.
 이 API는 차단 대상의 서비스 전체 접근권을 박탈하는 제재 API가 아니다.
-신고는 기존 Moderation Redis 저장소의 `moderation:report:<reportId>`에 보관한다.
-자동으로 삭제·제재하지 않으며 대상 존재 여부와 사유의 타당성은 검토 단계에서 판단한다.
-운영의 기존 Redis 영속성·백업 정책이 신고에도 적용된다.
+신고 원본·이벤트 journal은 Redis `moderation:reports:v1:records` HASH, 복구 대상은 `moderation:reports:v1:pending` SET에 보관한다. 기존 `moderation:report:<hash>` 데이터는 보존하며 자동 이관하지 않는다. REPORT_CREATED/REPORT_WITHDRAWN은 기존 moderation:report-events로 발행한다. 자동으로 삭제·제재하지 않는다.
+신규 신고에는 대상 존재·상태 검증이 필수지만 최신 Post는 Moderation 호출자를 인증하지 못하므로 **신규 접수는 503으로 닫혀 있다**. [필요한 연동 계약](../../services/moderation-service/contracts/gateway-handoff.md)을 완료해야 운영 접수가 가능하다. 테스트 어댑터로 검증한 로컬 생성 성공과 구분한다.
+운영 Redis 영속성·백업·용량·보존 정책은 원본 데이터까지 포함해야 한다. 차단은 기존 User PostgreSQL 관계와 Outbox를 함께 커밋한다.
 
 작성자 종료 시 투표 결과를 확정하며 재개해도 이미 확정된 투표를 재시작하지 않는다.
 본문 수정·종료·재개는 MongoDB와 Outbox를 같은 트랜잭션으로 기록한다.
