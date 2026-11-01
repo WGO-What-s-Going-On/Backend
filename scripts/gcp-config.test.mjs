@@ -37,3 +37,39 @@ test('mounted secret becomes child environment without changing parent', () => {
     rmSync(dir, { recursive: true });
   }
 });
+
+test('runtime wrapper forwards SIGTERM and waits for application drain', async () => {
+  const { spawn } = await import('node:child_process');
+  const { once } = await import('node:events');
+  const dir = mkdtempSync(join(tmpdir(), 'wgo-runtime-signal-'));
+  const secret = join(dir, 'runtime.json');
+  const childFile = join(dir, 'child.cjs');
+  writeFileSync(secret, '{}');
+  writeFileSync(
+    childFile,
+    "process.on('SIGTERM',()=>{console.log('drained');process.exit(0)});console.log('ready');setInterval(()=>{},1000)",
+  );
+  const wrapper = spawn(
+    process.execPath,
+    ['deploy/gke/runtime.cjs', process.execPath, childFile],
+    {
+      env: { ...process.env, RUNTIME_SECRET_FILE: secret },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  let output = '';
+  wrapper.stdout.on('data', (chunk) => {
+    output += chunk;
+  });
+  const timer = setTimeout(() => wrapper.kill('SIGKILL'), 5000);
+  try {
+    await once(wrapper.stdout, 'data');
+    wrapper.kill('SIGTERM');
+    const [code] = await once(wrapper, 'exit');
+    assert.equal(code, 0);
+    assert.match(output, /drained/);
+  } finally {
+    clearTimeout(timer);
+    rmSync(dir, { recursive: true });
+  }
+});
