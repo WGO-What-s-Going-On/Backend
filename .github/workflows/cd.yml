@@ -88,13 +88,17 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v3
         with:
           install_components: gke-gcloud-auth-plugin
-      - uses: google-github-actions/get-gke-credentials@v3
-        with:
-          cluster_name: ${{ steps.config.outputs.cluster }}
-          location: ${{ steps.config.outputs.location }}
-          project_id: ${{ steps.config.outputs.project }}
-          use_dns_based_endpoint: true
-          use_auth_provider: true
+      - name: Connect to GKE with renewable credentials
+        env:
+          GKE_CLUSTER: ${{ steps.config.outputs.cluster }}
+          GKE_LOCATION: ${{ steps.config.outputs.location }}
+          GCP_PROJECT: ${{ steps.config.outputs.project }}
+          KUBECONFIG: ${{ runner.temp }}/wgo-kubeconfig
+          CLOUDSDK_CONTAINER_USE_APPLICATION_DEFAULT_CREDENTIALS: 'true'
+        run: |
+          gcloud container clusters get-credentials "$GKE_CLUSTER" --location="$GKE_LOCATION" --project="$GCP_PROJECT" --dns-endpoint
+          echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+          kubectl --namespace "$(node -p "JSON.parse(require('fs').readFileSync(process.env.GCP_ENV_FILE)).namespace")" auth can-i get configmaps --quiet
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Authenticate Artifact Registry
@@ -157,13 +161,17 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v3
         with:
           install_components: gke-gcloud-auth-plugin
-      - uses: google-github-actions/get-gke-credentials@v3
-        with:
-          cluster_name: ${{ steps.config.outputs.cluster }}
-          location: ${{ steps.config.outputs.location }}
-          project_id: ${{ steps.config.outputs.project }}
-          use_dns_based_endpoint: true
-          use_auth_provider: true
+      - name: Connect to GKE with renewable credentials
+        env:
+          GKE_CLUSTER: ${{ steps.config.outputs.cluster }}
+          GKE_LOCATION: ${{ steps.config.outputs.location }}
+          GCP_PROJECT: ${{ steps.config.outputs.project }}
+          KUBECONFIG: ${{ runner.temp }}/wgo-kubeconfig
+          CLOUDSDK_CONTAINER_USE_APPLICATION_DEFAULT_CREDENTIALS: 'true'
+        run: |
+          gcloud container clusters get-credentials "$GKE_CLUSTER" --location="$GKE_LOCATION" --project="$GCP_PROJECT" --dns-endpoint
+          echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+          kubectl --namespace "$(node -p "JSON.parse(require('fs').readFileSync(process.env.GCP_ENV_FILE)).namespace")" auth can-i get configmaps --quiet
       - uses: actions/download-artifact@v4
         with:
           name: release-${{ github.sha }}
