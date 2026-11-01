@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { changedFiles, selectChanges, services } from './ci-lib.mjs';
-import { readEnvironment, migrationJob } from './gke-lib.mjs';
+import { readEnvironment, migrationJob, clusterLocation } from './gke-lib.mjs';
 import {
   required,
   concurrencyLimit,
@@ -88,7 +88,10 @@ export async function deploy({
   )
     throw new Error('Unknown forced service');
   const context = await run('kubectl', ['config', 'current-context']);
-  if (context !== `gke_${config.project}_${config.region}_${config.cluster}`)
+  if (
+    context !==
+    `gke_${config.project}_${clusterLocation(config)}_${config.cluster}`
+  )
     throw new Error('Unexpected Kubernetes context');
   const kube = async (...args) =>
     run('kubectl', ['--namespace', config.namespace, ...args]);

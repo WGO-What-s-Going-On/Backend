@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { deploy } from './cd.mjs';
 import { releaseResources, resourceHash } from './cd-lib.mjs';
-import { applications } from './gke-lib.mjs';
+import { applications, clusterLocation } from './gke-lib.mjs';
 const config = {
   project: 'wgo-test',
   region: 'asia-northeast3',
@@ -61,7 +61,7 @@ function harness({
     });
     const [op, kind, name] = operation;
     if (exe === 'kubectl' && op === 'config')
-      return `gke_${config.project}_${config.region}_${config.cluster}`;
+      return `gke_${nextConfig.project}_${clusterLocation(nextConfig)}_${nextConfig.cluster}`;
     if (exe === 'git') {
       if (failure === 'older') throw new Error('older release');
       return '';
@@ -284,4 +284,16 @@ test('manifest plus service README does not rebuild an unchanged image', async (
     h.events.some((e) => e.exe === 'docker'),
     false,
   );
+});
+
+test('Standard zonal context completes deployment with pinned demo resources', async () => {
+  const h = harness({
+    first: true,
+    nextConfig: {
+      ...config,
+      deploymentProfile: 'standard-demo',
+      clusterLocation: 'asia-northeast3-a',
+    },
+  });
+  await h.execute();
 });
