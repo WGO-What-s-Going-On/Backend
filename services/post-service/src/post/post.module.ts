@@ -5,7 +5,7 @@ import { FrontendViews } from './infrastructure/frontend-views.js';
 import { UserProfiles } from './infrastructure/user-profiles.js';
 import { MediaSchema } from './media/media.schema.js';
 import { MediaService } from './media/media.service.js';
-import { S3MediaStorage } from './media/s3-media.storage.js';
+import { GcsMediaStorage } from './media/gcs-media.storage.js';
 import { MediaCleanupWorker } from './media/media.worker.js';
 import { MediaController } from './media/media.controller.js';
 import { ApplyModerationLifecycle } from './application/moderation.js';
@@ -109,7 +109,7 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
     FrontendViews,
     UserProfiles,
     MediaService,
-    S3MediaStorage,
+    GcsMediaStorage,
     MediaCleanupWorker,
     MongoosePostStore,
     MongoosePostRead,

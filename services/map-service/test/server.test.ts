@@ -301,6 +301,8 @@ describe('Map HTTP and gRPC contract', () => {
     expect(Object.keys(document.paths)).toEqual([
       '/api/v1/location',
       '/internal/v1/posts/nearby',
+      '/health/live',
+      '/health/ready',
     ]);
     expect(
       Object.keys(document.paths['/api/v1/location'].put.responses),

@@ -1,6 +1,6 @@
 # WGO Notification Service
 
-Post Redis Streams 이벤트를 사용자 알림으로 변환하고 DynamoDB 원본, 읽음 상태, FCM 구독 및 전달 상태를 관리합니다. Node.js 24 / pnpm 10을 사용합니다.
+Post Redis Streams 이벤트를 사용자 알림으로 변환하고 PostgreSQL 원본, 읽음 상태, FCM 구독 및 전달 상태를 관리합니다. Node.js 24 / pnpm 10을 사용합니다.
 
 ## 로컬 실행
 
@@ -8,17 +8,18 @@ Post Redis Streams 이벤트를 사용자 알림으로 변환하고 DynamoDB 원
 cp .env.example .env
 pnpm install
 docker info
-docker compose --profile redis --profile dynamodb up -d
+docker compose --profile redis --profile postgres up -d
 docker compose exec -T redis redis-cli PING
-pnpm db:local
+pnpm build
+pnpm db:migrate
 pnpm dev
 ```
 
-- HTTP: `http://localhost:3004`, liveness: `GET /health/live`
+- HTTP: `http://localhost:3004`, liveness: `GET /health/live`, readiness: `GET /health/ready`
 - 전용 Redis: `redis://localhost:6382`
-- 전용 DynamoDB Local: `http://127.0.0.1:8002` (in-memory, 컨테이너 재생성 시 데이터 소실)
-- `db:local`은 loopback endpoint만 허용하며 고정된 가짜 Local credential을 사용합니다. 운영 AWS나 AWS 자격 증명 체인을 사용하지 않습니다.
-- `REDIS_URL`이 없으면 Post consumer와 Push 복구 worker를 시작하지 않습니다. Redis, DynamoDB가 없어도 liveness는 응답합니다.
+- PostgreSQL은 `127.0.0.1:5432/wgo_notification`이며 Compose named volume에 데이터를 보존합니다. 이미 5432를 사용 중이면 같은 서버에 전용 DB를 만들거나 포트를 변경합니다.
+- `db:migrate`는 스키마를 멱등하게 초기화합니다. 앱 시작과 분리된 배포 Job으로 실행하며 실패하면 배포를 중단합니다. 앱은 실행 중 자동 DDL을 수행하지 않습니다.
+- `REDIS_URL`이 없으면 Post consumer와 Push 복구 worker를 시작하지 않습니다. Redis, PostgreSQL이 없어도 liveness는 응답합니다.
 
 ## 현재 기능
 
@@ -66,9 +67,9 @@ Stream은 `post:events`, group은 `post-notification`, DLQ는 `notification:post
 
 Redis는 unread snapshot을 저장합니다. Redis만으로 영속 exactly-once를 보장하지 않습니다. 기존 Redis dedup/window key가 남아 있어도 영속 처리를 생략하지 않습니다.
 
-DynamoDB transaction 하나에 다음을 함께 반영합니다.
+PostgreSQL transaction 하나에 다음을 함께 반영합니다.
 
-1. post별 revision CAS와 영속 eventId 처리 기록
+1. post 행 잠금과 영속 eventId 처리 기록
 2. 활동별 최신 version 및 기여한 notificationId
 3. recipient/post/type별 2분 window
 4. Notification 생성 또는 count 증감
@@ -82,21 +83,32 @@ FCM은 최대 500 token씩 요청합니다. 부분 응답에서 성공한 token�
 
 처리 성공 후 XACK, 일반 실패는 pending 유지, malformed/잘못된 지원 payload·producer·schema는 즉시 DLQ, 일반 poison event는 5회 전달 실패 후 DLQ입니다. DLQ 저장 성공 이후에만 ACK합니다. pending은 XAUTOCLAIM(기본 idle 30초)으로 복구합니다. input이 DLQ로 이동해도 이미 저장된 Push 작업은 별도 복구 대상입니다.
 
-## DynamoDB 테이블
+## PostgreSQL 저장소
 
-| 환경변수 | 기본 이름 | Partition / Sort key |
-| --- | --- | --- |
-| DYNAMODB_NOTIFICATIONS_TABLE | notifications | userId / notificationId |
-| DYNAMODB_PUSH_SUBSCRIPTIONS_TABLE | push-subscriptions | userId / token |
-| DYNAMODB_EVENT_STATE_TABLE | notification-event-state | postId / key |
+Notification 전용 DB와 계정을 사용합니다. User DB를 직접 조회하지 않습니다.
 
-Notification ID는 저장 시각 ISO 문자열로 시작하며 사용자 partition에서 역순 조회합니다. `expiresAt`은 생성 후 30일의 epoch seconds TTL입니다. TTL 물리 삭제 전에도 만료·count 0을 조회와 unread에서 제외합니다. 읽음은 소유 사용자 key만 변경하며 이미 읽은 알림도 안전하게 반환합니다.
+| 테이블 | 소유 데이터와 제약 |
+| --- | --- |
+| notifications | 사용자별 알림, 읽음, 삭제, 만료와 count. 사용자·알림 ID 복합 PK |
+| push_subscriptions | SHA-256 token hash PK로 전역 소유권 보장 |
+| notification_preferences, notification_board_preferences | 사용자와 게시물별 수신 설정 |
+| notification_posts | post revision, 작성자와 terminal 상태. 이벤트·전송 선점의 잠금 경계 |
+| notification_processed_events | post·event ID 복합 PK와 처리 감사 정보 |
+| notification_activities | activity version과 삭제 tombstone, 집계 참조 |
+| notification_bundle_windows | recipient·post·type의 2분 묶음 |
+| notification_deliveries | status, lease, due time, 시도 횟수와 전송 payload |
 
-Redis snapshot 유실·DB commit 직후 중단·캐시 무효화 실패를 견디기 위해 unread 응답은 매번 DynamoDB의 strongly consistent count로 검증하고 Redis에 snapshot을 저장합니다. 따라서 이 구현의 unread 캐시는 DB 조회를 줄이는 용도로 사용하지 않습니다.
+Notification ID는 저장 시각 ISO 문자열로 시작하며 `C` collation으로 역순 조회합니다. 생성 후 30일의 `expires_at`을 목록과 unread에서 검사합니다. `pnpm db:cleanup`은 실행당 만료 알림 1,000개까지 삭제합니다. 배포 CronJob 또는 운영 스케줄러에서 반복 실행하고 잔여 만료 건수를 감시합니다. 논리 만료는 정리 Job 성공 여부와 무관하게 적용됩니다.
 
-Push subscription의 `userId=__TOKEN_OWNER__`, `token=SHA256(token)` 행이 전역 소유권을 예약합니다. 사용자 행과 예약을 transaction으로 갱신·삭제하므로 다른 사용자가 token을 중복 소유하거나 삭제할 수 없습니다. 소유권 행이 없는 과거 데이터는 최초 upsert 전 다른 사용자 행을 대조합니다. 기존에 이미 여러 사용자에게 중복 저장된 token은 배포 전에 대조·정리해야 합니다.
+Unread 응답은 PostgreSQL 원본 count로 확인하고 Redis에 snapshot을 저장합니다. Redis snapshot을 권한이나 영속성의 근거로 사용하지 않습니다. Token upsert는 unique constraint와 소유자 조건으로 다른 사용자의 등록과 삭제를 차단합니다.
 
-Event-state의 key는 `meta`, `event#...`, `activity#...`, `window#...`, `delivery#...`입니다. event marker와 version/tombstone은 Redis 보존 기간보다 먼저 사라지면 안 되므로 자동 TTL을 설정하지 않습니다. 운영 보존·compaction 정책은 Stream replay 범위와 함께 정해야 합니다. 최초 구현의 복구 worker는 paginated Scan을 사용하므로 대량 운영 데이터에서는 delivery GSI/별도 worker가 필요합니다. FAILED 작업의 재개는 원인 해결 후 별도 운영 절차가 필요합니다.
+Event marker와 activity tombstone은 자동 만료시키지 않습니다. Stream replay 범위를 검토한 별도 보존 정책 없이 지우면 중복 집계가 발생할 수 있습니다. 전송 복구는 due index로 최대 100개를 조회합니다. post 행 잠금 뒤 전송 상태를 다시 검사하고 60초 lease를 부여합니다. 완료 갱신은 lease ID가 같은 worker만 수행합니다. FCM 호출은 transaction 밖에서 실행합니다. FAILED 작업은 원인 해결 후 별도 운영 절차로 재개합니다.
+
+## Cloud SQL 연결
+
+개발·데모 GKE에서는 User와 별도 DB·IAM DB 계정을 사용합니다. `DB_CONNECTION_MODE=cloud-sql-proxy`, `DB_HOST=127.0.0.1`, `DB_TLS_MODE=disable`, `DB_USER`에 Notification IAM DB 사용자 이름을 설정하고 `DB_PASSWORD`는 넣지 않습니다. 자동 IAM 인증을 사용하는 Cloud SQL Auth Proxy가 원격 구간의 인증·암호화를 담당합니다. proxy mode에서 원격 DB_HOST는 거부합니다.
+
+직접 운영 연결은 `DB_TLS_MODE=verify-full`과 명시적인 비밀번호가 필요합니다. `DB_TLS_CA_PATH`를 생략하면 system CA를 사용합니다. 실제 Cloud SQL 연결 및 IAM 권한은 GKE 환경에서 별도 검증해야 합니다.
 
 ## HTTP API와 인증 경계
 
@@ -108,7 +120,7 @@ Event-state의 key는 `meta`, `event#...`, `activity#...`, `window#...`, `delive
 | PUT | /api/v1/notifications/push-subscriptions | token/platform upsert |
 | DELETE | /api/v1/notifications/push-subscriptions | token 삭제 |
 
-개발·테스트는 양의 10진수 `X-User-Id`를 사용합니다. body/query의 userId는 수신자로 사용하지 않습니다. HTTP Gateway의 proxy 경로는 존재하지만 인증된 사용자 문맥 전달 계약은 없으므로 NODE_ENV=production에서는 이 API를 503으로 차단합니다. 운영 공개는 Gateway 인증 및 서비스 간 검증 계약 반영 후 가능합니다.
+개발·테스트는 양의 10진수 `X-User-Id`를 사용합니다. body/query의 userId는 수신자로 사용하지 않습니다. 운영에서는 HTTP Gateway ES256 service JWT 서명과 사용자 claim을 검증합니다. `NOTIFICATION_HTTP_GATEWAY_TRUSTED_JWKS`에 해당 Gateway 공개 키를 공급해야 합니다.
 
 ## 외부 계약 blocker 및 구현하지 않은 기능
 
@@ -120,26 +132,27 @@ Event-state의 key는 `meta`, `event#...`, `activity#...`, `window#...`, `delive
 | F07 종료 예정 | 확정된 예정 시각·Lifecycle 상태 버전과 작성자/동의한 수신자 계약 필요 |
 | F08 종료 | Post가 상태를 실제 적용한 뒤의 확정 종료 이벤트 필요. PostExpired와 동일시하지 않음 |
 | 실시간 인앱 | Realtime Gateway의 사용자별 Notification 전달·인증 계약 없음 |
-| Gateway 인증 | 검증된 사용자 신원 전달 및 외부 위조 헤더 차단/내부 검증 계약 필요 |
 
-현재 Notion 상세 설계의 Kafka, PK/SK+GSI, PWA 전용 표현과 root 아키텍처의 Notification PostgreSQL은 기존 코드의 Redis Streams, userId/notificationId 및 DynamoDB 설계와 다릅니다. 이번 작업은 Issue #30과 실제 코드/요청 범위에 따라 DynamoDB를 유지합니다. Post/Map/Gateway/Moderation 코드나 루트 아키텍처는 수정하지 않습니다. 참여를 동의로 보거나 ENDED를 종료로 판단하지 않습니다.
-
-Issue #30 전체는 미완료이며 외부 계약이 충족되기 전 PR을 열거나 Issue를 닫지 않습니다.
+이번 GCP 전환은 PostgreSQL을 알림 원본으로 사용합니다. 참여를 수신 동의로 보거나 ENDED 공감을 게시물 종료로 해석하지 않습니다. 위 표의 미구현 기능을 인프라 이전 완료와 혼동하지 않습니다.
 
 ## 환경변수
 
-`.env.example`은 로컬용입니다. 운영 환경에서는 Local endpoint를 제거하고 서비스 전용 AWS 권한/region/table을 설정해야 합니다.
+`.env.example`은 로컬용입니다. GKE에서는 전용 IAM DB 계정과 Secret Manager 설정을 사용합니다.
 
 | 이름 | 용도 |
 | --- | --- |
-| NODE_ENV / PORT | 환경 / HTTP 포트 (3004) |
+| NODE_ENV, PORT | 실행 환경과 HTTP 포트 3004 |
 | REDIS_URL | Post 입력 Stream 및 unread snapshot |
-| AWS_REGION | 운영 DynamoDB region |
-| DYNAMODB_ENDPOINT | DynamoDB Local endpoint. 지정 시 가짜 Local credential 사용 |
-| DYNAMODB_NOTIFICATIONS_TABLE | 알림 원본 테이블 |
-| DYNAMODB_PUSH_SUBSCRIPTIONS_TABLE | 구독·token 소유권 테이블 |
-| DYNAMODB_EVENT_STATE_TABLE | 이벤트·버전·window·delivery 테이블 (배포 전 생성 필수) |
-| FIREBASE_PROJECT_ID / FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY | FCM service account. private key의 리터럴 \\n은 실제 줄바꿈으로 변환 |
+| DB_HOST, DB_PORT, DB_NAME, DB_USER | Notification 소유 PostgreSQL 연결 |
+| DB_CONNECTION_MODE | direct 또는 cloud-sql-proxy |
+| DB_PASSWORD | 직접 연결 비밀번호. IAM proxy에서는 생략 |
+| DB_TLS_MODE, DB_TLS_CA_PATH | 직접 연결 서버 인증서 검증 |
+| DB_POOL_MAX | Pod당 연결 수. 기본 10 |
+| FIREBASE_PROJECT_ID | FCM 대상 프로젝트. GKE에서는 Workload Identity ADC 사용 |
+| FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY | 선택적인 명시적 계정 키. 둘 다 설정하거나 둘 다 생략 |
+| NOTIFICATION_HTTP_GATEWAY_TRUSTED_JWKS | HTTP Gateway service JWT 공개 키 |
+
+GKE의 Notification GSA에 FCM 대상 프로젝트의 `roles/firebasecloudmessaging.admin`을 부여합니다. `FIREBASE_PROJECT_ID`만 설정하면 SDK가 Workload Identity의 ADC를 사용합니다. 키 기반 연결이 필요한 경우에만 이메일과 private key를 함께 Secret Manager에서 공급합니다. 한쪽만 설정하면 시작을 거부합니다. [FCM 역할](https://docs.cloud.google.com/iam/docs/roles-permissions/firebasecloudmessaging)과 [Firebase Admin 초기화](https://firebase.google.com/docs/admin/setup)를 참고합니다.
 
 ## 검증
 
@@ -150,10 +163,7 @@ pnpm typecheck
 pnpm build
 ```
 
-통합 검증은 실제 Redis, 실제 DynamoDB Local, mock FCM을 사용합니다. `NOTIFICATION_TEST_REDIS_URL` 기본값은 전용 Redis DB 15이며 비어 있지 않으면 기존 데이터를 보존하고 실패합니다. `NOTIFICATION_TEST_DYNAMODB_ENDPOINT` 기본값은 localhost:8002이며 loopback만 허용합니다. 테스트마다 UUID 테이블을 생성·삭제하고 자신이 만든 Redis key만 지웁니다. FLUSHALL/FLUSHDB는 사용하지 않습니다. 같은 DB를 사용하는 테스트 명령은 동시에 실행하지 않습니다.
-
-이벤트 형태와 수신자 판단은 후속 PR에서 확정합니다.
-
+통합 검증은 실제 Redis, 실제 PostgreSQL, mock FCM을 사용합니다. `NOTIFICATION_TEST_REDIS_URL` 기본값은 `redis://localhost:6382/15`이며 비어 있지 않으면 기존 데이터를 보존하고 실패합니다. `NOTIFICATION_TEST_DATABASE_URL` 기본값은 `postgres://wgo:wgo@127.0.0.1:5432/wgo_notification`입니다. 두 endpoint 모두 loopback만 허용합니다. 각 테스트는 UUID PostgreSQL schema를 만들고 자신이 만든 schema와 Redis key만 삭제합니다. FLUSHALL/FLUSHDB는 사용하지 않습니다. 같은 Redis DB를 사용하는 테스트 명령은 동시에 실행하지 않습니다.
 
 ## HTTP OpenAPI / Swagger
 
@@ -161,10 +171,10 @@ pnpm build
 `http://localhost:3004/docs/openapi.json`에서 OpenAPI 3.0 문서를 제공한다.
 Post와 같은 Nest Swagger 방식으로 첫 요청 때 생성하며 현재 구현된
 `GET /health/live`, 알림 목록·미읽음 개수 조회, 읽음 처리, 푸시 구독 등록·삭제 경로를 포함한다.
-로컬·테스트에서는 `X-User-Id`를 사용하며, 운영 알림 API는 인증 연동 전까지 차단된다.
+로컬·테스트에서는 `X-User-Id`를 사용하며, 운영 알림 API는 Gateway service JWT를 검증한다.
 
 Gateway의 `pnpm docs:generate`는 기존 `NOTIFICATION_SERVICE_URL`의 문서를
 수집·검증한다. health는 통합 paths에서 제외하고 라우팅되는 알림 API를 포함한다.
 문서 수집 실패는 전체 갱신 실패이며 기존 파일을 보존한다.
 문서 계약 테스트는 외부 저장소 없이 `pnpm test test/openapi.test.ts`로 실행한다.
-실제 알림 처리에 필요한 DynamoDB·Redis·FCM 설정은 위 실행 절차를 따른다.
+실제 알림 처리에 필요한 PostgreSQL·Redis·FCM 설정은 위 실행 절차를 따른다.

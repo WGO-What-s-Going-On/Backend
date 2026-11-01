@@ -15,3 +15,7 @@ gateways/http-gateway/generated/
 !/qa/artifacts/**/*.md
 /qa/artifacts/**/node_modules/
 /qa/artifacts/**/dist/
+
+# GitHub OIDC credentials and generated CD artifacts
+/gha-creds-*.json
+/release.json

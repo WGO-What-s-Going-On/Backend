@@ -1,6 +1,6 @@
--- LOCAL CASSANDRA ONLY. Never execute this replication/compaction configuration on Keyspaces.
--- Production table verification: docs/deployment/aws-storage.md
-CREATE KEYSPACE IF NOT EXISTS wgo_map WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+-- Local and single-node GKE demo schema. RF 1 has no node-level redundancy.
+-- Back up the PVC and verify restore before replacing the StatefulSet.
+CREATE KEYSPACE IF NOT EXISTS wgo_map WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1};
 CREATE TABLE IF NOT EXISTS wgo_map.user_locations (
   user_id bigint PRIMARY KEY,
   latitude double,

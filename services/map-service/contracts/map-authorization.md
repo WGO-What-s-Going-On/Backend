@@ -37,5 +37,5 @@ truncated는 nextCursor 존재 여부와 같다. 구 Post 클라이언트는 새
 
 ## 운영 저장소 연결
 
-Keyspaces 모드의 원본 조회는 LOCAL_QUORUM으로 실행한다. pageState가 있는 빈 페이지도 계속 조회하며
-기존 deadline/예산 및 오류 계약은 유지한다. TLS/SigV4 설정은 [운영 연결 문서](../../../docs/deployment/aws-storage.md)를 따른다.
+운영 Cassandra 원본 조회는 기본 LOCAL_QUORUM으로 실행한다. pageState가 있는 빈 페이지도 계속 조회하며
+기존 deadline/예산 및 오류 계약은 유지한다. TLS와 비밀번호 인증 설정은 서비스 `.env.example`과 README를 따른다.

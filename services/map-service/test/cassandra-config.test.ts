@@ -1,126 +1,110 @@
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rootCertificates } from 'node:tls';
 import cassandra from 'cassandra-driver';
-import { afterAll, expect, it, vi } from 'vitest';
+import { afterAll, expect, it } from 'vitest';
 import { cassandraOptions } from '../src/cassandra-config.js';
-import { KeyspacesAuthProvider } from '../src/keyspaces-auth.js';
 
-const directory = mkdtempSync(join(tmpdir(), 'wgo-keyspaces-'));
+const directory = mkdtempSync(join(tmpdir(), 'wgo-cassandra-'));
 const caPath = join(directory, 'ca.pem');
 writeFileSync(caPath, rootCertificates[0]!);
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
 const env = {
   NODE_ENV: 'production',
-  CASSANDRA_MODE: 'keyspaces',
-  CASSANDRA_HOST: 'cassandra.example',
+  CASSANDRA_MODE: 'direct',
+  CASSANDRA_CONTACT_POINTS: 'cassandra.wgo.svc.cluster.local',
+  CASSANDRA_DATACENTER: 'datacenter1',
   CASSANDRA_KEYSPACE: 'wgo_map',
-  AWS_REGION: 'ap-northeast-2',
+  CASSANDRA_USERNAME: 'wgo_map',
+  CASSANDRA_PASSWORD: 'test-password',
+  CASSANDRA_TLS_MODE: 'verify-full',
   CASSANDRA_CA_PATH: caPath,
 };
-it('loads Keyspaces authentication in native Node ESM without bundler interop', () => {
-  const source = readFileSync(
-    new URL('../src/keyspaces-auth.ts', import.meta.url),
-    'utf8',
-  );
-  const { outputText } = ts.transpileModule(source, {
-    compilerOptions: {
-      target: ts.ScriptTarget.ES2023,
-      module: ts.ModuleKind.ESNext,
-    },
-  });
-  // Vitest's module transform can hide imports that fail in the production Node process.
-  const result = spawnSync(
-    process.execPath,
-    ['--input-type=module', '--eval', outputText],
-    {
-      cwd: fileURLToPath(new URL('..', import.meta.url)),
-      encoding: 'utf8',
-    },
-  );
-  expect(result.status, result.stderr).toBe(0);
-});
-it('keeps local Cassandra defaults', () => {
+it('keeps unauthenticated local Cassandra defaults', () => {
   const options = cassandraOptions({});
   expect(options.contactPoints).toEqual(['localhost']);
   expect(options.protocolOptions?.port).toBe(9042);
   expect(options.sslOptions).toBeUndefined();
   expect(options.authProvider).toBeUndefined();
 });
-it('configures verified TLS, refreshable auth and Keyspaces consistency', () => {
+it('uses verified Service DNS TLS and password authentication with explicit consistency', () => {
   const options = cassandraOptions(env);
-  expect(options.protocolOptions?.port).toBe(9142);
-  expect(options.localDataCenter).toBe(env.AWS_REGION);
+  expect(options.localDataCenter).toBe('datacenter1');
   expect(options.sslOptions).toMatchObject({
     rejectUnauthorized: true,
-    servername: env.CASSANDRA_HOST,
+    servername: env.CASSANDRA_CONTACT_POINTS,
     ca: rootCertificates[0],
   });
-  expect(options.authProvider).toBeInstanceOf(KeyspacesAuthProvider);
+  expect(options.authProvider).toBeInstanceOf(
+    cassandra.auth.PlainTextAuthProvider,
+  );
+  expect(options.queryOptions).toMatchObject({
+    consistency: cassandra.types.consistencies.localQuorum,
+    serialConsistency: cassandra.types.consistencies.localSerial,
+  });
   expect(options.policies?.timestampGeneration).toBeNull();
   expect(() => new cassandra.Client(options)).not.toThrow();
+});
+it('supports contact points with a shared TLS certificate name', () => {
+  const options = cassandraOptions({
+    ...env,
+    CASSANDRA_CONTACT_POINTS: 'cassandra-0.cassandra, cassandra-1.cassandra',
+    CASSANDRA_TLS_SERVER_NAME: 'cassandra.wgo.svc.cluster.local',
+    CASSANDRA_CONSISTENCY: 'localOne',
+  });
+  expect(options.contactPoints).toEqual([
+    'cassandra-0.cassandra',
+    'cassandra-1.cassandra',
+  ]);
   expect(options.queryOptions?.consistency).toBe(
-    cassandra.types.consistencies.localQuorum,
+    cassandra.types.consistencies.localOne,
+  );
+  expect(options.sslOptions?.servername).toBe(
+    'cassandra.wgo.svc.cluster.local',
   );
 });
-it('rejects incomplete or unsafe production settings', () => {
+it('requires explicit production credentials, topology and TLS', () => {
   for (const name of [
-    'CASSANDRA_HOST',
+    'CASSANDRA_CONTACT_POINTS',
+    'CASSANDRA_DATACENTER',
     'CASSANDRA_KEYSPACE',
-    'AWS_REGION',
+    'CASSANDRA_USERNAME',
+    'CASSANDRA_PASSWORD',
     'CASSANDRA_CA_PATH',
   ])
     expect(() => cassandraOptions({ ...env, [name]: '' })).toThrow(name);
   for (const extra of [
-    { CASSANDRA_PORT: '9042' },
-    { CASSANDRA_DATACENTER: 'datacenter1' },
+    { CASSANDRA_PORT: '0' },
+    { CASSANDRA_PORT: '65536' },
     { CASSANDRA_MODE: 'local' },
-    { AWS_ACCESS_KEY_ID: 'do-not-print' },
+    { CASSANDRA_MODE: 'keyspaces' },
+    { CASSANDRA_TLS_MODE: 'disable' },
     { CASSANDRA_CA_PATH: '/absent' },
+    { CASSANDRA_CONTACT_POINTS: 'host:9042' },
+    { CASSANDRA_CONTACT_POINTS: 'host,' },
+    { CASSANDRA_TLS_SERVER_NAME: 'https://host' },
+    { CASSANDRA_CONSISTENCY: 'any' },
   ])
     expect(() => cassandraOptions({ ...env, ...extra })).toThrow();
 });
-it('resolves credentials for every reconnect and signs with the current session token', async () => {
-  const credentials = vi
-    .fn()
-    .mockResolvedValueOnce({
-      accessKeyId: 'test-1',
-      secretAccessKey: 'test-secret',
-      sessionToken: 'test-token-1',
-    })
-    .mockResolvedValueOnce({
-      accessKeyId: 'test-2',
-      secretAccessKey: 'test-secret',
-      sessionToken: 'test-token-2',
-    });
-  const provider = new KeyspacesAuthProvider('ap-northeast-2', credentials);
-  for (const token of ['test-token-1', 'test-token-2']) {
-    const auth = provider.newAuthenticator('cassandra.example:9142', 'test');
-    await new Promise<void>((resolve, reject) =>
-      auth.initialResponse((error) => (error ? reject(error) : resolve())),
-    );
-    const signed = await new Promise<Buffer>((resolve, reject) =>
-      auth.evaluateChallenge(
-        Buffer.from('nonce=test-nonce'),
-        (error, response) => (error ? reject(error) : resolve(response!)),
-      ),
-    );
-    expect(signed.toString()).toContain(`session_token=${token}`);
-  }
-  expect(credentials).toHaveBeenCalledTimes(2);
+it('rejects credentials in local mode rather than silently sending an unauthenticated connection', () => {
+  expect(() =>
+    cassandraOptions({
+      CASSANDRA_USERNAME: 'user',
+      CASSANDRA_PASSWORD: 'secret',
+    }),
+  ).toThrow('direct');
 });
-it('returns credential lookup failures to the driver without exposing metadata', async () => {
-  const provider = new KeyspacesAuthProvider(
-    'ap-northeast-2',
-    vi.fn().mockRejectedValue(new Error('sensitive provider error')),
-  );
-  const auth = provider.newAuthenticator('cassandra.example:9142', 'test');
-  const error = await new Promise<Error | null>((resolve) =>
-    auth.initialResponse((error) => resolve(error)),
-  );
-  expect(error?.message).toBe('Keyspaces Task Role credentials unavailable');
+it('rejects malformed and private-key CA bundles', () => {
+  for (const contents of [
+    'not a certificate',
+    `${rootCertificates[0]}\n-----BEGIN PRIVATE KEY-----`,
+  ]) {
+    const path = join(directory, 'invalid.pem');
+    writeFileSync(path, contents);
+    expect(() => cassandraOptions({ ...env, CASSANDRA_CA_PATH: path })).toThrow(
+      'readable PEM',
+    );
+  }
 });

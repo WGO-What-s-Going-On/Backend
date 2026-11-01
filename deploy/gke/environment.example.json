@@ -1,0 +1,14 @@
+{
+  "project": "replace-project-id",
+  "region": "asia-northeast3",
+  "cluster": "wgo-demo",
+  "namespace": "wgo-demo",
+  "registry": "asia-northeast3-docker.pkg.dev/replace-project-id/wgo",
+  "sqlInstance": "replace-project-id:asia-northeast3:wgo-demo",
+  "domain": "api.example.com",
+  "wsDomain": "ws.example.com",
+  "staticIp": "wgo-demo-ingress",
+  "secretVersion": "1",
+  "replicas": 1,
+  "webOrigins": ["https://demo.example.com"]
+}

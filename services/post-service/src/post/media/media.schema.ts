@@ -43,7 +43,7 @@ export const MediaSchema = new Schema<MediaRecord>(
   },
   { versionKey: false, strict: true },
 );
-// TTL로 DB 기록만 지우면 S3 파일이 남으므로 삭제 성공 후 worker가 기록을 지운다.
+// TTL로 DB 기록만 지우면 GCS 파일이 남으므로 삭제 성공 후 worker가 기록을 지운다.
 MediaSchema.index({ status: 1, expiresAt: 1 });
 MediaSchema.index({ status: 1, cleanupAt: 1 });
 MediaSchema.index({ status: 1, mediaId: 1 });

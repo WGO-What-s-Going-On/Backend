@@ -12,7 +12,7 @@ const dependencies = {
   user: ['postgres', 'redis6379'],
   post: ['mongo', 'redis6380', 'cassandra', 'elasticsearch'],
   map: ['cassandra', 'redis6381'],
-  notification: ['redis6382', 'dynamodb'],
+  notification: ['redis6382', 'postgres'],
   moderation: ['redis6383'],
 }[service.dependencies];
 const project = `wgo-ci-${process.env.GITHUB_RUN_ID ?? 'local'}-${process.env.GITHUB_RUN_ATTEMPT ?? '1'}-${name}`;
@@ -48,19 +48,21 @@ async function start() {
       readFileSync('services/map-service/schema.cql'),
     );
   if (service.dependencies === 'notification') {
-    let ready = false;
-    for (let attempt = 0; attempt < 60; attempt++) {
-      try {
-        await fetch('http://127.0.0.1:8002', {
-          signal: AbortSignal.timeout(1000),
-        });
-        ready = true;
-        break;
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    }
-    if (!ready) throw new Error('DynamoDB Local did not start');
+    docker(
+      [
+        'exec',
+        '-T',
+        'postgres',
+        'psql',
+        '-U',
+        'wgo',
+        '-d',
+        'postgres',
+        '-v',
+        'ON_ERROR_STOP=1',
+      ],
+      "SELECT 'CREATE DATABASE wgo_notification' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'wgo_notification')\\gexec\n",
+    );
   }
 }
 

@@ -428,3 +428,21 @@ User 작업을 사용자 Bearer 인증으로 변환하고 내부 헤더 입력�
 추가 테스트는 실제 Gateway 빌드와 User Controller·Guard·비즈니스 서비스·PostgreSQL·Redis를
 연결해 로그인→프로필 조회/수정→Refresh 회전→로그아웃과 위조 헤더 차단을 검증한다.
 외부 Kakao 응답만 대체한다. 단독 User 테스트 실행에서는 이 교차 서비스 테스트만 생략된다.
+
+## Cloud SQL 연결
+
+GKE에서는 같은 Pod의 Cloud SQL Auth Proxy를 `--auto-iam-authn`으로 실행한다.
+`DB_CONNECTION_MODE=cloud-sql-proxy`, `DB_HOST=127.0.0.1`, `DB_PORT=5432`,
+`DB_NAME=wgo_user`, `DB_USER=<Cloud SQL IAM DB 사용자>`를 설정한다.
+`DB_PASSWORD`와 `DB_TLS_CA_*`는 설정하지 않는다. `DB_TLS_MODE=disable`은
+Pod 내부 loopback 구간에만 적용한다. Proxy가 Cloud SQL TLS와 IAM 토큰 갱신을 담당한다.
+Proxy와 앱은 같은 Workload Identity를 사용하며 Proxy 포트를 Service로 노출하지 않는다.
+
+앱과 migration은 같은 연결 검증을 사용한다. migration Job은 schema 소유 권한이 있는
+별도 IAM DB 사용자와 서비스 계정으로 실행하고, 앱 계정에는 업무 테이블 접근 권한만 부여한다.
+`DB_POOL_MAX` 기본값은 10이며 replica 수를 곱한 전체 연결 수를 Cloud SQL 한도에 맞춘다.
+직접 연결은 `DB_CONNECTION_MODE=direct`를 사용한다. production 직접 연결에는
+`DB_PASSWORD`와 `DB_TLS_MODE=verify-full`이 필요하다.
+
+실제 Cloud SQL 검증은 migration 실행, 로그인, Proxy 재시작, IAM 권한 거부,
+토큰 갱신 이후 새 연결 순으로 수행한다. 로컬 PostgreSQL 테스트는 IAM 연결 검증을 대신하지 않는다.

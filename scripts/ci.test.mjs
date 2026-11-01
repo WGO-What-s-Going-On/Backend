@@ -229,3 +229,14 @@ test('WS user authentication changes run actual User-token contract integration'
   assert.ok(names(selected.matrix).includes('http-gateway'));
   assert.deepEqual(names(selected.deploy_matrix), ['ws-gateway']);
 });
+
+test('GKE configuration selects deployment validation without rebuilding app images', () => {
+  const result = selectChanges(['deploy/gke/environment.example.json']);
+  assert.equal(result.has_deploy, true);
+  assert.equal(result.deploy_matrix.include.length, 7);
+  assert.equal(result.matrix.include.length, 7);
+  assert.equal(
+    result.matrix.include.some((service) => service.build_image),
+    false,
+  );
+});

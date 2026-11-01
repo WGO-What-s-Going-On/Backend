@@ -96,11 +96,9 @@ flowchart LR
 데이터베이스는 사설 네트워크에 배치하고 명시적으로 허용한 경로로만
 접근한다.
 
-Staging의 User PostgreSQL은 기존 Aurora Express 클러스터를 유지하는 예외를 둔다.
-이 DB는 사용자 VPC 밖의 AWS 인터넷 액세스 게이트웨이를 통해 연결하며 IAM 인증과
-서버 인증서·호스트 이름 검증을 강제한다. User task role은 지정된 DB 사용자만
-접속할 수 있고 앱과 migration은 새 연결마다 단기 토큰을 발급한다.
-다른 서비스의 저장소 접근 정책과 데이터 소유권은 그대로 유지한다.
+User와 Notification은 Cloud SQL PostgreSQL 인스턴스 하나에서 DB와 IAM 계정을
+분리한다. 각 Pod의 Cloud SQL Auth Proxy가 private IP·TLS·자동 IAM 인증을 담당한다.
+앱과 migration은 loopback Proxy를 사용하며 다른 서비스 DB에 접근하지 않는다.
 
 ## 4. 애플리케이션별 책임
 
@@ -352,14 +350,14 @@ Realtime Consumer Group이 받은 이벤트를 Redis Pub/Sub으로 각 Gateway i
   Redis 지속성, 복제, 백업과 복구 절차를 운영 환경에 맞게 검증한다.
 - 알림 Provider 장애가 게시물 생성을 실패시키지 않는다. Notification Service가
   시도 결과를 기록하고 정책에 따라 재시도한다.
-- Realtime Gateway 장애는 해당 Task의 연결에만 영향을 준다. 클라이언트는
-  정상 Task에 다시 연결하고 영속 상태를 재조회한다.
+- Realtime Gateway 장애는 해당 Pod의 연결에만 영향을 준다. 클라이언트는
+  정상 Pod에 다시 연결하고 영속 상태를 재조회한다.
 
 ## 9. 배포와 확장
 
-7개 애플리케이션은 각각 별도의 **ECS Fargate Service**로 배포한다. Container
+7개 애플리케이션은 각각 별도의 **GKE Autopilot Deployment**로 배포한다. Container
 Image는 불변으로 관리하고 설정과 Secret은 Runtime에 주입한다. Health Check를
-통해 비정상 Task 교체와 배포 Rollout을 제어한다.
+통해 비정상 Pod 교체와 배포 Rollout을 제어한다.
 
 CD는 서비스별 마지막 성공 SHA를 기준으로 변경된 런타임만 선택한다. 선택된 이미지 빌드를
 병렬 실행하고 모두 성공한 뒤 서비스 의존 순서에 따라 제한된 동시성으로 배포한다.
@@ -380,8 +378,8 @@ Post는 선택된 User·Map 이후, WS Gateway는 선택된 Post·User 이후, H
 - 이벤트 Stream의 보존·지속성 정책이 Redis GEO, Rate Limit 같은 만료 가능한
   데이터의 Eviction 정책에 종속되지 않도록 별도 Redis 배포 등으로 격리한다.
 
-애플리케이션 Task는 로컬 Disk에 영속 상태를 저장하지 않는다. 모든 Cache는
-폐기 가능해야 한다. WebSocket 연결 자체는 실행 중인 Task에 종속되지만 사용자
+애플리케이션 Pod는 로컬 Disk에 영속 상태를 저장하지 않는다. 모든 Cache는
+폐기 가능해야 한다. WebSocket 연결 자체는 실행 중인 Pod에 종속되지만 사용자
 신원, 인가 및 복구해야 할 도메인 상태는 종속되지 않는다.
 
 ## 10. 관측 가능성
@@ -398,7 +396,7 @@ gRPC, Redis Streams, WebSocket 경계를 넘어 전달한다.
   가장 오래된 Pending 시간, 재시도, Dead Letter Stream 수
 - 데이터베이스와 Redis의 지연, 오류, 포화도, Connection Pool 압력
 - 알림 Fan-out 크기, 전송 상태, Provider 실패율
-- ECS Task 상태, 재시작, CPU와 Memory
+- GKE Pod 상태, 재시작, CPU와 Memory
 - 주변 보드 검색, 게시물 생성, 운영 조치 등의 비즈니스 지표
 
 Telemetry에는 개인정보와 불필요한 정밀 위치를 포함하지 않는다. Alert는
@@ -410,7 +408,7 @@ Secret, 비공개 본문 또는 불필요한 원본 좌표를 기록하지 않�
 - 외부 연결에는 TLS를 강제하며 내부 통신도 플랫폼 정책에 따라 암호화한다.
 - Gateway에서 클라이언트를 인증하되 민감한 작업의 최종 인가는 데이터를
   소유한 서비스가 수행한다. 클라이언트가 보낸 사용자 ID와 Role을 신뢰하지 않는다.
-- 공개 및 비공개 Workload를 네트워크로 분리하고 최소 권한 Security Group을
+- 공개 및 비공개 Workload를 네트워크로 분리하고 최소 권한 NetworkPolicy을
   적용한다.
 - 서비스마다 독립된 Runtime Identity, 데이터베이스 계정, Redis ACL과 Secret
   접근 권한을 사용한다.
@@ -437,7 +435,7 @@ Secret, 비공개 본문 또는 불필요한 원본 좌표를 기록하지 않�
 | User/Notification/Moderation에 PostgreSQL 사용 | 관계형 제약, 트랜잭션, 감사 데이터에 적합 | 도메인마다 계정, Schema, Migration 분리 |
 | 영속 공간 조회에 Cassandra + H3 사용 | 지역 Cell 중심의 수평 확장 가능한 조회 지원 | Partition과 Hotspot을 실제 데이터로 검증해야 함 |
 | 활성 공간 조회에 Redis GEO 사용 | 빠른 반경 및 후보 검색 | 기준 저장소가 아닌 만료·복구 가능한 파생 인덱스 |
-| ECS Fargate와 무상태 Task 사용 | Host 관리 없이 독립 확장과 교체 가능 | 모든 영속·공유 상태를 Container 외부에 저장 |
+| GKE Autopilot과 무상태 Pod 사용 | Host 관리 없이 독립 확장과 교체 가능 | 모든 영속·공유 상태를 Container 외부에 저장 |
 
 ## 13. 아키텍처 변경 규칙
 
@@ -461,14 +459,20 @@ Post 원본은 MongoDB다. Post 내부 EmbeddingProvider 계산 포트와 ES 검
 
 실제 E5 모델은 고정 revision/체크섬으로 연결되며 Post 운영 이미지에 포함한다. 운영 이미지 진입점은 활성 모델 파일과 CA 설정을 검사한다. 모델 warm-up·ES alias·평가된 threshold가 준비되지 않으면 추천은 503이다. 로컬 개발의 기존 degraded 시작은 유지한다. 상세 계약은 [Post 검색 계약](services/post-service/contracts/semantic-search.md)에 있다.
 
-## AWS 최초 배포 프로파일
+## GCP 개발·데모 배포 프로파일
 
-현재 구현 기준 연결은 User=RDS PostgreSQL, Post=인스턴스 기반 DocumentDB, Map=Keyspaces,
-Notification=DynamoDB, 공통 Redis=노드 기반 ElastiCache(클러스터 모드 비활성화), 검색=Private EC2 Elasticsearch다.
-위의 초기 PostgreSQL 설계와 달리 Notification 실제 영속 어댑터는 DynamoDB이며 이번 작업으로 저장소를 전환한 것은 아니다.
-서비스 데이터 소유권과 동기/비동기 통신 계약은 유지한다. TLS/Task Role/CA 공급 및 미검증 호환성 차단 조건은
-[AWS 저장소 연결](docs/deployment/aws-storage.md)을 따른다. 이 프로파일은 AWS 연결 검증 완료를 뜻하지 않는다.
-실제 모델은 아직 연결하지 않는다. 일반 실행의 추천은 503이며 Worker는 이벤트를 소비하지 않는다. 기존 앱 시작/생존/생성/조회는 ES·모델 준비에 의존하지 않는다. 상세 계약은 [Post 검색 계약](services/post-service/contracts/semantic-search.md)에 있다.
+서울 `asia-northeast3`에 새 환경을 구성한다. User·Notification은 Cloud SQL PostgreSQL,
+Post는 GKE의 단일 노드 MongoDB replica set, Map은 Cassandra와 Redis GEO를 사용한다.
+Elasticsearch는 ECK, 공통 Redis는 TLS·AOF·noeviction 설정의 StatefulSet으로 운영한다.
+MongoDB·Redis·Cassandra에는 PVC와 Backup for GKE를 구성하고 Elasticsearch는 GCS snapshot을 사용한다.
+단일 노드는 개발·데모용이며 고가용성을 보장하지 않는다. 실제 복원 결과를 확인해야 복구 가능하다고 판단한다.
+
+미디어는 비공개 Cloud Storage 버킷과 서명 URL을 사용한다. HTTPS Load Balancer에는
+두 Gateway만 연결한다. GitHub Actions는 OIDC로 Artifact Registry와 GKE에 접근하며
+앱은 Workload Identity와 버전이 고정된 Secret Manager 값을 사용한다.
+Cloud Logging·Monitoring 수집을 활성화한다. 설정과 초기화는 [GCP 배포](docs/deployment/gcp.md),
+백업·복원은 [저장소 운영](docs/deployment/gcp-storage.md), 확인한 범위는 [검증 기록](docs/deployment/gcp-verification.md)을 따른다.
+
 ## Moderation 검사 결과 전달 및 운영 스케줄 (2026-10-27)
 
 현재 Moderation 구현은 Redis 결과·projection과 Streams를 사용하며 이 작업에서
@@ -493,7 +497,7 @@ HTTP Gateway의 Access JWT 검증을 Post·Map·Notification·Moderation 공개 
 Post는 기존 User gRPC BatchGetUserProfiles를 호출해 공개 닉네임을 조합하며 실명은 User의 본인 프로필에만 남긴다.
 Map의 ResolveRegion RPC가 Kakao Local H 행정동 코드를 반환하고 Post는 해당 게시글의 지역 스냅샷을 저장한다.
 행정동 랭킹과 칭호는 Post 소유 활동 데이터에서 집계한다. User DB를 직접 조회하지 않는다.
-Notification 설정은 기존 DynamoDB event-state 테이블의 별도 사용자 파티션, 신고는 기존 Moderation Redis에 저장한다.
+Notification 설정은 전용 PostgreSQL DB의 사용자·보드별 설정 테이블에, 신고는 기존 Moderation Redis에 저장한다.
 작성자 종료는 자동 만료와 별도의 가역 상태이며 수정·종료·재개는 PostUpdated Outbox 이벤트를 발행한다.
 Map 공간 후보는 유지하되 Post가 원본 공개 상태를 검증하고 Semantic/WS가 변경 이벤트를 소비한다.
 배포 순서, 조회 한도, 외부 설정 및 기존 데이터 보완은 [프론트엔드 연동 계약](docs/contracts/frontend-integration.md)을 따른다.

@@ -2,525 +2,373 @@ import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { changedFiles, selectChanges } from './ci-lib.mjs';
+import { pathToFileURL } from 'node:url';
+import { randomBytes } from 'node:crypto';
+import { changedFiles, selectChanges, services } from './ci-lib.mjs';
+import { readEnvironment, migrationJob } from './gke-lib.mjs';
 import {
   required,
-  parseSecretJson,
-  validateService,
-  renderTask,
-  deploymentRuntime,
-  deploymentRuntimeChanged,
-  selectReleaseServices,
-  validateRelease,
-  waitForDeployment,
   concurrencyLimit,
   mapConcurrent,
   deploymentWaves,
-  validateDeploymentTargets,
+  validateRelease,
+  validateState,
+  releaseResources,
+  resourceHash,
+  validImage,
+  deploymentRuntimeChanged,
 } from './cd-lib.mjs';
 
-const mode = process.argv[2];
-const env = process.env;
-const sha = required(env, 'CD_SHA');
-if (!/^[a-f0-9]{40}$/.test(sha))
-  throw new Error('CD_SHA must be a full commit SHA');
-const scratch = mkdtempSync(join(tmpdir(), 'wgo-cd-'));
-const file = (name, value) => {
-  const path = join(scratch, name);
-  writeFileSync(path, JSON.stringify(value), { mode: 0o600 });
-  return path;
-};
-function run(command, args, options = {}) {
+export async function command(executable, args, input) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ['ignore', 'pipe', 'ignore'],
-      ...options,
+    const child = spawn(executable, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const output = [];
+    let size = 0;
+    child.stdout.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > 16 * 1024 * 1024) child.kill();
+      else output.push(chunk);
     });
-    const chunks = [];
-    let bytes = 0;
-    let failed = false;
-    child.stdout?.on('data', (chunk) => {
-      bytes += chunk.length;
-      if (bytes > 16 * 1024 * 1024) {
-        failed = true;
-        child.kill();
-      } else {
-        chunks.push(chunk);
-      }
-    });
-    child.on('error', () => {
-      failed = true;
-    });
-    child.on('close', (code) => {
-      // CLI errors can echo task definitions or secret JSON: never print raw stdout/stderr on failure.
-      if (failed || code !== 0)
-        reject(
-          new Error(
-            `${command} ${args[0] ?? ''} failed (details withheld to protect configuration)`,
+    child.stderr.resume();
+    const timeout = setTimeout(() => child.kill('SIGKILL'), 15 * 60 * 1000);
+    child.once('close', () => clearTimeout(timeout));
+    child.on('error', () => reject(new Error(`${executable} failed to start`)));
+    child.on('close', (code) =>
+      code === 0 && size <= 16 * 1024 * 1024
+        ? resolve(Buffer.concat(output).toString('utf8').trim())
+        : reject(
+            new Error(
+              `${executable} ${args[0]} failed; inspect redacted service diagnostics`,
+            ),
           ),
-        );
-      else resolve(Buffer.concat(chunks).toString('utf8').trim());
-    });
+    );
+    child.stdin.on('error', () => {});
+    child.stdin.end(input);
   });
 }
-async function aws(...args) {
-  const output = await run('aws', [
-    ...args,
-    '--output',
-    'json',
-    '--no-cli-pager',
-  ]);
-  try {
-    return JSON.parse(output || '{}');
-  } catch {
-    throw new Error(
-      'AWS returned invalid JSON (details withheld to protect configuration)',
-    );
-  }
-}
-async function sameOrNewer(previous) {
-  if (!previous) return;
-  if (!/^[a-f0-9]{40}$/.test(previous.sha))
-    throw new Error('Invalid deployment state SHA');
-  try {
-    await run('git', ['merge-base', '--is-ancestor', previous.sha, sha]);
-  } catch {
-    throw new Error(
-      'Refusing an older/divergent release; use an explicit recovery procedure',
-    );
-  }
-}
-async function deploy() {
+
+export async function deploy({
+  mode,
+  env = process.env,
+  run = command,
+  config = readEnvironment(required(env, 'GCP_ENV_FILE')),
+  changes = changedFiles,
+  readRelease = () => JSON.parse(readFileSync('release.json', 'utf8')),
+  saveRelease = (release) =>
+    writeFileSync('release.json', JSON.stringify(release), { mode: 0o600 }),
+}) {
   if (!['staging', 'production'].includes(mode))
     throw new Error('Usage: node scripts/cd.mjs staging|production');
-  if (mode === 'staging') rmSync('release.json', { force: true });
-  const buildConcurrency = concurrencyLimit(
+  const sha = required(env, 'CD_SHA');
+  if (!/^[a-f0-9]{40}$/.test(sha))
+    throw new Error('CD_SHA must be a full commit SHA');
+  const buildLimit = concurrencyLimit(
     env.CD_BUILD_CONCURRENCY,
     2,
     'CD_BUILD_CONCURRENCY',
   );
-  const deployConcurrency = concurrencyLimit(
+  const deployLimit = concurrencyLimit(
     env.CD_DEPLOY_CONCURRENCY,
     4,
     'CD_DEPLOY_CONCURRENCY',
   );
-  const initialDeployment = env.CD_INITIAL_DEPLOYMENT === 'true';
+  const platform = env.CD_IMAGE_PLATFORM ?? 'linux/amd64';
+  if (platform !== 'linux/amd64')
+    throw new Error('GKE demo images and ONNX require linux/amd64');
   if (!['true', 'false'].includes(env.CD_INITIAL_DEPLOYMENT ?? 'false'))
-    throw new Error('CD_INITIAL_DEPLOYMENT must be true or false');
-  if (initialDeployment && mode !== 'staging')
-    throw new Error('Initial deployment is only supported for staging');
-  const account = required(env, 'AWS_ACCOUNT_ID');
+    throw new Error('Invalid CD_INITIAL_DEPLOYMENT');
+  const initial = env.CD_INITIAL_DEPLOYMENT === 'true';
+  if (initial && mode !== 'staging')
+    throw new Error('Only staging can bootstrap');
+  const force = (env.CD_FORCE_SERVICES ?? '').split(',').filter(Boolean);
   if (
-    !/^\d{12}$/.test(account) ||
-    (await aws('sts', 'get-caller-identity')).Account !== account
-  )
-    throw new Error('AWS role resolved to an unexpected account');
-  const cluster = required(env, 'ECS_CLUSTER');
-  const registry = required(env, 'ECR_REGISTRY');
-  if (!/^\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?$/.test(registry))
-    throw new Error('Invalid ECR_REGISTRY');
-  const platform = required(env, 'CD_IMAGE_PLATFORM');
-  if (!['linux/amd64', 'linux/arm64'].includes(platform))
-    throw new Error('CD_IMAGE_PLATFORM must be linux/amd64 or linux/arm64');
-  const prefix = required(env, 'CD_STATE_PREFIX');
-  if (!/^\/[a-zA-Z0-9_.\/-]+$/.test(prefix))
-    throw new Error('Invalid CD_STATE_PREFIX');
-  const configured = parseSecretJson(
-    required(env, 'CD_SERVICES_JSON'),
-    'CD_SERVICES_JSON',
-  );
-  const runtime = parseSecretJson(
-    required(env, 'CD_RUNTIME_SECRETS_JSON'),
-    'CD_RUNTIME_SECRETS_JSON',
-  );
-  const manifest = JSON.parse(readFileSync('scripts/ci-services.json', 'utf8'));
-  const services = selectReleaseServices(manifest, configured);
-  if (!services.length)
-    throw new Error('At least one service must be configured');
-  const forced = (env.CD_FORCE_SERVICES ?? '')
-    .split(',')
-    .map((name) => name.trim())
-    .filter(Boolean);
-  if (
-    forced.some(
-      (name) =>
-        name !== 'all' && !services.some((service) => service.name === name),
+    force.some(
+      (name) => name !== 'all' && !services.some((s) => s.name === name),
     )
   )
-    throw new Error('Unknown force service');
-  for (const service of services)
-    validateService(service.name, configured[service.name], platform);
-  validateDeploymentTargets(services, configured);
-  const statePath = (name) => `${prefix.replace(/\/$/, '')}/${mode}/${name}`;
-  async function state(name) {
-    // GetParameters reports missing names separately; IAM/network errors never become first deployments.
-    const result = await aws(
-      'ssm',
-      'get-parameters',
-      '--names',
-      statePath(name),
+    throw new Error('Unknown forced service');
+  const context = await run('kubectl', ['config', 'current-context']);
+  if (context !== `gke_${config.project}_${config.region}_${config.cluster}`)
+    throw new Error('Unexpected Kubernetes context');
+  const kube = async (...args) =>
+    run('kubectl', ['--namespace', config.namespace, ...args]);
+  const apply = async (resources) =>
+    run(
+      'kubectl',
+      ['--namespace', config.namespace, 'apply', '-f', '-'],
+      JSON.stringify({ apiVersion: 'v1', kind: 'List', items: resources }),
     );
-    const record = result.Parameters?.[0];
-    return record ? parseSecretJson(record.Value, 'deployment state') : null;
-  }
-  let release = { sha, services: [] };
-  if (mode === 'production')
-    release = validateRelease(
-      JSON.parse(readFileSync('release.json', 'utf8')),
-      sha,
-    );
-  if (
-    mode === 'production' &&
-    (release.services.length !== services.length ||
-      services.some(
-        (service) =>
-          !release.services.some((entry) => entry.name === service.name),
-      ))
-  )
-    throw new Error('Staging/production configured service sets must match');
-  const changesBySha = new Map();
-  const planned = [];
-  for (const service of services) {
-    const name = service.name;
-    const config = configured[name];
-    const previous = await state(name);
-    await sameOrNewer(previous);
-    const force = forced.includes('all') || forced.includes(name);
-    let image;
-    let sourceSha = sha;
-    if (mode === 'staging') {
-      if (previous && !changesBySha.has(previous.sha))
-        changesBySha.set(previous.sha, changedFiles(previous.sha, sha));
-      const files = previous ? changesBySha.get(previous.sha) : [];
-      const changed =
-        !previous ||
-        deploymentRuntimeChanged(name, files) ||
-        selectChanges(files).deploy_matrix.include.some(
-          (entry) => entry.name === name,
-        );
-      if (!changed && !force) {
-        release.services.push({
-          name,
-          image: previous.image,
-          sourceSha: previous.sha,
-        });
-        console.log(
-          `${name}: no runtime change since last successful staging deployment`,
-        );
-        continue;
-      }
-    } else {
-      const entry = release.services.find((entry) => entry.name === name);
-      image = entry.image;
-      sourceSha = entry.sourceSha;
-      if (!image.startsWith(`${registry}/${config.ecrRepository}@sha256:`))
-        throw new Error(
-          `${name}: release image does not match configured repository`,
-        );
-      if (previous?.image === image && !force) {
-        console.log(`${name}: production already uses the staged image`);
-        continue;
-      }
-    }
-    const existing = (
-      await aws(
-        'ecs',
-        'describe-services',
-        '--cluster',
-        cluster,
-        '--services',
-        config.ecsService,
-      )
-    ).services?.[0];
-    const bootstrap =
-      initialDeployment && !previous && existing?.desiredCount === 0;
-    if (
-      !existing ||
-      existing.status !== 'ACTIVE' ||
-      existing.deploymentController?.type !== 'ECS' ||
-      !Number.isInteger(existing.desiredCount) ||
-      (existing.desiredCount < 1 && !bootstrap)
-    )
-      throw new Error(
-        `${name}: active ECS rolling service required; zero count requires staging initial deployment and no successful state`,
+  const promoted =
+    mode === 'production'
+      ? validateRelease(readRelease(), sha, config.registry)
+      : null;
+  const scratch = mkdtempSync(join(tmpdir(), 'wgo-gcp-cd-'));
+  const prepared = [];
+  try {
+    for (const service of services) {
+      const { name } = service;
+      // --ignore-not-found distinguishes absent state from authentication and connectivity failures.
+      const raw = await kube(
+        'get',
+        'configmap',
+        `wgo-release-${name}`,
+        '--ignore-not-found',
+        '-o',
+        'json',
       );
-    if (
-      existing.deployments?.some(
-        (deployment) => deployment.rolloutState === 'IN_PROGRESS',
-      )
-    )
-      throw new Error(`${name}: another deployment is still in progress`);
-    const secretValues = deploymentRuntime(name, mode, runtime[name]);
-    renderTask(
-      config,
-      image ?? `${registry}/${config.ecrRepository}@sha256:${'0'.repeat(64)}`,
-      secretValues,
-      randomUUID(),
-    );
-    planned.push({
-      ...service,
-      config,
-      existing,
-      bootstrap,
-      image,
-      sourceSha,
-      secretValues,
-    });
-  }
-  console.log(
-    `${mode}: selected ${planned.map(({ name }) => name).join(', ') || 'no services'}`,
-  );
-  const prepared = await mapConcurrent(
-    planned,
-    buildConcurrency,
-    async (entry) => {
-      if (mode === 'production') return entry;
-      const { name, config, path } = entry;
-      const tag = `${sha}-${required(env, 'GITHUB_RUN_ID')}-${required(env, 'GITHUB_RUN_ATTEMPT')}`;
-      const tagImage = `${registry}/${config.ecrRepository}:${tag}`;
-      console.log(`${name}: building image`);
-      await run(
-        'docker',
-        [
+      const previous = raw
+        ? validateState(JSON.parse(JSON.parse(raw).data.release), config, name)
+        : null;
+      if (previous)
+        await run('git', ['merge-base', '--is-ancestor', previous.sha, sha]);
+      if (!previous && !initial && mode === 'staging')
+        throw new Error(
+          `${name}: initial deployment requires explicit staging bootstrap`,
+        );
+      const files = previous ? changes(previous.sha, sha) : [];
+      const codeChanged =
+        !previous ||
+        selectChanges(files).matrix.include.some(
+          (s) => s.name === name && s.build_image,
+        );
+      const promotion = promoted?.services.find((entry) => entry.name === name);
+      let image = promotion?.image ?? previous?.image;
+      let sourceSha = promotion?.sourceSha ?? previous?.sourceSha ?? sha;
+      if (promotion)
+        await run('git', ['merge-base', '--is-ancestor', sourceSha, sha]);
+      const build = mode === 'staging' && codeChanged;
+      const resources = image
+        ? releaseResources(config, name, image, mode)
+        : null;
+      const changed =
+        build ||
+        !previous ||
+        previous.image !== image ||
+        previous.hash !== resourceHash(resources) ||
+        deploymentRuntimeChanged(name, files) ||
+        force.includes('all') ||
+        force.includes(name);
+      prepared.push({ ...service, previous, image, sourceSha, build, changed });
+    }
+    // Finish all image builds before the first schema or running workload changes.
+    await mapConcurrent(
+      prepared.filter((s) => s.build),
+      buildLimit,
+      async (service) => {
+        const tag = `${config.registry}/${service.name}:${sha}`;
+        const metadata = join(scratch, `${service.name}.json`);
+        await run('docker', [
           'buildx',
           'build',
           '--platform',
           platform,
-          '--provenance=false',
-          '--label',
-          `org.opencontainers.image.revision=${sha}`,
-          '--tag',
-          tagImage,
           '--push',
-          path,
-        ],
-        { stdio: 'inherit' },
-      );
-      const result = await aws(
-        'ecr',
-        'describe-images',
-        '--repository-name',
-        config.ecrRepository,
-        '--image-ids',
-        `imageTag=${tag}`,
-      );
-      const digest = result.imageDetails?.[0]?.imageDigest;
-      if (!/^sha256:[a-f0-9]{64}$/.test(digest ?? ''))
-        throw new Error(`${name}: no immutable image digest`);
-      return {
-        ...entry,
-        image: `${registry}/${config.ecrRepository}@${digest}`,
-      };
-    },
-  );
-  async function deployService({
-    name,
-    config,
-    existing,
-    bootstrap,
-    image,
-    sourceSha,
-    secretValues,
-  }) {
-    console.log(`${name}: starting ${mode} deployment`);
-    const secret = await aws(
-      'secretsmanager',
-      'put-secret-value',
-      '--secret-id',
-      config.runtimeSecretArn,
-      '--secret-string',
-      `file://${file(`${name}-secret.json`, secretValues)}`,
-      '--client-request-token',
-      randomUUID(),
-    );
-    const task = renderTask(config, image, secretValues, secret.VersionId);
-    const revision = (
-      await aws(
-        'ecs',
-        'register-task-definition',
-        '--cli-input-json',
-        `file://${file(`${name}-task.json`, task)}`,
-      )
-    ).taskDefinition?.taskDefinitionArn;
-    if (!revision)
-      throw new Error(`${name}: task definition registration failed`);
-    async function oneOff(command, purpose) {
-      const input = {
-        cluster,
-        taskDefinition: revision,
-        launchType: 'FARGATE',
-        platformVersion: existing.platformVersion ?? 'LATEST',
-        count: 1,
-        networkConfiguration: existing.networkConfiguration,
-        overrides: {
-          containerOverrides: [{ name: config.containerName, command }],
-        },
-        startedBy: `wgo-${purpose}`,
-      };
-      const result = await aws(
-        'ecs',
-        'run-task',
-        '--cli-input-json',
-        `file://${file(`${name}-${purpose}.json`, input)}`,
-      );
-      const arn = result.tasks?.[0]?.taskArn;
-      if (!arn || result.failures?.length)
-        throw new Error(`${name}: ${purpose} task failed to start`);
-      try {
-        await run('aws', [
-          'ecs',
-          'wait',
-          'tasks-stopped',
-          '--cluster',
-          cluster,
-          '--tasks',
-          arn,
+          '--tag',
+          tag,
+          '--metadata-file',
+          metadata,
+          service.path,
         ]);
-      } catch (error) {
-        await aws(
-          'ecs',
-          'stop-task',
-          '--cluster',
-          cluster,
-          '--task',
-          arn,
-          '--reason',
-          `${purpose} timeout`,
-        );
-        throw error;
-      }
-      const finished = (
-        await aws('ecs', 'describe-tasks', '--cluster', cluster, '--tasks', arn)
-      ).tasks?.[0];
-      if (
-        finished?.containers?.find(
-          (container) => container.name === config.containerName,
-        )?.exitCode !== 0
-      )
-        throw new Error(
-          `${name}: ${purpose} failed; inspect CloudWatch task logs`,
-        );
-    }
-    if (config.migrationCommand)
-      await oneOff(config.migrationCommand, 'migration');
-    try {
-      await aws(
-        'ecs',
-        'update-service',
-        '--cluster',
-        cluster,
-        '--service',
-        config.ecsService,
-        '--task-definition',
-        revision,
-        ...(bootstrap ? ['--desired-count', '1'] : []),
-        '--deployment-configuration',
-        JSON.stringify({
-          deploymentCircuitBreaker: { enable: true, rollback: true },
-        }),
-      );
-      await run('aws', [
-        'ecs',
-        'wait',
-        'services-stable',
-        '--cluster',
-        cluster,
-        '--services',
-        config.ecsService,
-      ]);
-      // The CLI stable waiter can finish while ECS still reports IN_PROGRESS.
-      // Wait for the target revision's completion instead of rolling back healthy tasks.
-      const completed = await waitForDeployment(
-        async () =>
-          (
-            await aws(
-              'ecs',
-              'describe-services',
-              '--cluster',
-              cluster,
-              '--services',
-              config.ecsService,
-            )
-          ).services?.[0],
-        revision,
-        () => new Promise((resolve) => setTimeout(resolve, 10000)),
-      );
-      if (!completed)
-        throw new Error(`${name}: deployment rolled back or did not complete`);
-      if (config.smokeUrl) {
-        const response = await fetch(config.smokeUrl, {
-          signal: AbortSignal.timeout(15000),
-          redirect: 'error',
-        });
-        await response.body?.cancel();
-        if (response.status !== 200)
-          throw new Error(`${name}: HTTPS smoke check failed`);
-      }
-      if (config.smokeCommand) await oneOff(config.smokeCommand, 'smoke');
-      const record = { sha: sourceSha, image, taskDefinition: revision };
-      await aws(
-        'ssm',
-        'put-parameter',
-        '--name',
-        statePath(name),
-        '--type',
-        'String',
-        '--overwrite',
-        '--value',
-        JSON.stringify(record),
-      );
-      console.log(`${name}: ${mode} deployment verified`);
-      return { name, image, sourceSha };
-    } catch (error) {
-      // Keep last-success state unchanged. Secret references in the previous revision remain pinned.
-      await aws(
-        'ecs',
-        'update-service',
-        '--cluster',
-        cluster,
-        '--service',
-        config.ecsService,
-        '--task-definition',
-        existing.taskDefinition,
-        // A failed first release has no healthy predecessor: return it to stopped.
-        ...(bootstrap ? ['--desired-count', '0'] : []),
-      );
-      await run('aws', [
-        'ecs',
-        'wait',
-        'services-stable',
-        '--cluster',
-        cluster,
-        '--services',
-        config.ecsService,
-      ]);
-      throw error;
-    }
-  }
-  // Complete every image push before starting migrations or updating a running service.
-  for (const wave of deploymentWaves(prepared)) {
-    const completed = await mapConcurrent(
-      wave,
-      deployConcurrency,
-      deployService,
+        const digest = JSON.parse(readFileSync(metadata, 'utf8'))[
+          'containerimage.digest'
+        ];
+        const image = `${config.registry}/${service.name}@${digest}`;
+        if (!validImage(image, config.registry, service.name))
+          throw new Error('Build returned invalid digest');
+        service.image = image;
+        service.sourceSha = sha;
+      },
     );
-    if (mode === 'staging') release.services.push(...completed);
-  }
-  if (mode === 'staging') {
-    const entries = new Map(
-      release.services.map((entry) => [entry.name, entry]),
-    );
-    release.services = services.map(({ name }) => entries.get(name));
-    validateRelease(release, sha);
-    writeFileSync('release.json', JSON.stringify(release), { mode: 0o600 });
+    for (const wave of deploymentWaves(prepared.filter((s) => s.changed))) {
+      await mapConcurrent(wave, deployLimit, async (service) => {
+        const { name, previous, image, sourceSha } = service;
+        const resources = releaseResources(config, name, image, mode);
+        const deployment = resources.find((r) => r.kind === 'Deployment');
+        let jobName;
+        try {
+          await apply(
+            resources.filter(
+              (r) => !['Deployment', 'Service', 'CronJob'].includes(r.kind),
+            ),
+          );
+          if (['user-service', 'notification-service'].includes(name)) {
+            const job = migrationJob(
+              config,
+              name,
+              image,
+              `${sha.slice(0, 12)}${randomBytes(4).toString('hex')}`,
+            );
+            // Jobs use exactly the same pinned secret/config/bootstrap as the application.
+            const appPod = deployment.spec.template.spec;
+            job.spec.template.spec.volumes = structuredClone(appPod.volumes);
+            job.spec.template.spec.containers[0].envFrom = structuredClone(
+              appPod.containers[0].envFrom,
+            );
+            jobName = job.metadata.name;
+            await apply([job]);
+            await kube(
+              'wait',
+              '--for=condition=complete',
+              `job/${jobName}`,
+              '--timeout=330s',
+            );
+          }
+          await apply(
+            resources.filter((r) =>
+              ['Deployment', 'Service', 'CronJob'].includes(r.kind),
+            ),
+          );
+          await kube(
+            'rollout',
+            'status',
+            `deployment/${name}`,
+            '--timeout=600s',
+          );
+          const ready = JSON.parse(
+            await kube('get', 'deployment', name, '-o', 'json'),
+          );
+          if (
+            ready.spec.template.spec.containers.find((c) => c.name === 'app')
+              ?.image !== image ||
+            ready.status?.observedGeneration < ready.metadata.generation ||
+            ready.status?.updatedReplicas !== ready.spec.replicas ||
+            ready.status?.availableReplicas !== ready.spec.replicas
+          )
+            throw new Error(`${name}: target revision is not available`);
+          // Smoke each backend from inside its Pod; ingress TLS is verified after the gateway wave.
+          const port = deployment.spec.template.spec.containers[0].ports.find(
+            (p) => p.name === 'http',
+          ).containerPort;
+          await kube(
+            'exec',
+            `deployment/${name}`,
+            '-c',
+            'app',
+            '--',
+            'node',
+            '-e',
+            `fetch('http://127.0.0.1:${port}/health/ready',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))`,
+          );
+          if (name === 'http-gateway' || name === 'ws-gateway')
+            await run('curl', [
+              '--fail',
+              '--silent',
+              '--show-error',
+              '--max-time',
+              '15',
+              `https://${name === 'http-gateway' ? config.domain : config.wsDomain}/health/ready`,
+            ]);
+          const state = {
+            sha,
+            sourceSha,
+            image,
+            hash: resourceHash(resources),
+            resources,
+          };
+          await apply([
+            {
+              apiVersion: 'v1',
+              kind: 'ConfigMap',
+              metadata: {
+                name: `wgo-release-${name}`,
+                namespace: config.namespace,
+              },
+              data: { release: JSON.stringify(state) },
+            },
+          ]);
+          console.log(`${name}: ${mode} release verified`);
+        } catch (error) {
+          const failures = [error];
+          if (jobName) {
+            try {
+              await kube(
+                'delete',
+                'job',
+                jobName,
+                '--ignore-not-found',
+                '--wait=true',
+              );
+            } catch (cleanupError) {
+              failures.push(cleanupError);
+            }
+          }
+          try {
+            if (previous) {
+              await apply(previous.resources);
+              await kube(
+                'rollout',
+                'status',
+                `deployment/${name}`,
+                '--timeout=600s',
+              );
+              // A successful state write can lose its response. Restore the record with the workload.
+              await apply([
+                {
+                  apiVersion: 'v1',
+                  kind: 'ConfigMap',
+                  metadata: {
+                    name: `wgo-release-${name}`,
+                    namespace: config.namespace,
+                  },
+                  data: { release: JSON.stringify(previous) },
+                },
+              ]);
+            } else {
+              if (name === 'notification-service')
+                await kube(
+                  'delete',
+                  'cronjob',
+                  'notification-service-expiry',
+                  '--ignore-not-found',
+                );
+              await kube(
+                'delete',
+                'deployment',
+                name,
+                '--ignore-not-found',
+                '--wait=true',
+              );
+              await kube(
+                'delete',
+                'configmap',
+                `wgo-release-${name}`,
+                '--ignore-not-found',
+              );
+            }
+          } catch (rollbackError) {
+            failures.push(rollbackError);
+          }
+          throw new AggregateError(
+            failures,
+            failures.map((f) => f.message).join('; '),
+          );
+        }
+      });
+    }
+    const release = {
+      sha,
+      services: prepared.map(({ name, image, sourceSha }) => ({
+        name,
+        image,
+        sourceSha,
+      })),
+    };
+    validateRelease(release, sha, config.registry);
+    if (mode === 'staging') saveRelease(release);
+    return release;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
 }
-try {
-  await deploy();
-} catch (error) {
-  console.error(error.message);
-  process.exitCode = 1;
-} finally {
-  rmSync(scratch, { recursive: true, force: true });
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  try {
+    await deploy({ mode: process.argv[2] });
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
 }

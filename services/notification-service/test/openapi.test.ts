@@ -28,6 +28,7 @@ describe('Notification OpenAPI contract', () => {
       .expect(200);
     const operations = {
       '/health/live': ['get'],
+      '/health/ready': ['get'],
       '/api/v1/notifications': ['get'],
       '/api/v1/notifications/settings': ['get', 'patch'],
       '/api/v1/notifications/boards/{postId}': ['get', 'put'],

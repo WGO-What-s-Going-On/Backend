@@ -49,7 +49,7 @@ MongoDB replica set(:27017), Redis(:6380/:6381), Cassandra(:9042), 실제 Map gR
 
 기반 구현 당시 실제 모델은 연결하지 않았다. 이후 E5 모델 연결을 완료했으며 아래 최신 검증 절에 기록했다. 모델 파일 누락/비활성/로딩 실패 시에는 추천 503·Worker 미실행을 유지한다. 기존 생성·조회·health와 MongoDB posts 스키마/공개 batch-get 최대 100개는 그대로다.
 
-fixture를 환경 변수로 운영 모델로 선택하는 경로는 없다. `pnpm semantic:fixture`는 테스트 suite에서만 fixture를 주입하고 테스트용 데이터를 적재한다. 한국어 의미 품질·운영 임계값·학습·양자화·ECS 추론 부하/성능·운영 사용자 인증 개방은 후속 범위다.
+fixture를 환경 변수로 운영 모델로 선택하는 경로는 없다. `pnpm semantic:fixture`는 테스트 suite에서만 fixture를 주입하고 테스트용 데이터를 적재한다. 한국어 의미 품질·운영 임계값·학습·양자화·GKE 추론 부하/성능·운영 사용자 인증 개방은 후속 범위다.
 
 실행/복구 절차는 [README](README.md), 상세 HTTP·이벤트·인덱스 계약은 [검색 계약](contracts/semantic-search.md)에 있다. 테스트에 사용한 선택적 로컬 ES 컨테이너는 실행 상태로 남겼다.
 

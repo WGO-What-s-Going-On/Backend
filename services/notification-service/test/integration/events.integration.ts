@@ -1,8 +1,3 @@
-import {
-  GetCommand,
-  TransactWriteCommand,
-  UpdateCommand,
-} from '@aws-sdk/lib-dynamodb';
 import { FirebasePushAdapter } from '../../src/firebase/firebase-push.adapter.js';
 import type { Messaging } from 'firebase-admin/messaging';
 import { createClient } from 'redis';
@@ -12,17 +7,17 @@ import { PostEventHandler } from '../../src/event-consumer/post-event.handler.js
 import { parsePostEvent } from '../../src/event-consumer/post-event.js';
 import {
   BusyDeliveryError,
-  DynamoDbEventStore,
-} from '../../src/persistence/dynamodb-event.store.js';
+  PostgresEventStore,
+} from '../../src/persistence/postgres-event.store.js';
 import { wire } from '../helpers/post-events.js';
 import { harness } from './harness.js';
 
 const STREAM = 'post:events',
   GROUP = 'post-notification',
   DEAD = 'notification:post:dead';
-describe('real Redis + DynamoDB Local + mock FCM', () => {
+describe('real Redis + PostgreSQL + mock FCM', () => {
   let h: Awaited<ReturnType<typeof harness>>;
-  let store: DynamoDbEventStore;
+  let store: PostgresEventStore;
   let handler: PostEventHandler;
   let consumer: PostEventConsumer;
   let connection: ReturnType<typeof createClient>;
@@ -32,7 +27,7 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
     [STREAM, DEAD, 'notification:unread:1'].forEach((key) =>
       h.ownedKeys.add(key),
     );
-    store = new DynamoDbEventStore(h.client, h.config);
+    store = new PostgresEventStore(h.database);
     send.mockReset().mockResolvedValue({
       attempted: 1,
       succeeded: 1,
@@ -67,19 +62,16 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
   const parsed = (fields: ReturnType<typeof wire>) =>
     parsePostEvent(fields.data, fields)!;
   async function readyDelivery(postId: string) {
-    for (const d of await store.deliveries(postId))
-      await h.client.send(
-        new UpdateCommand({
-          TableName: h.tables.eventStateTable,
-          Key: { postId, key: d.key },
-          UpdateExpression: 'SET nextAttemptAt = :zero, leaseUntil = :zero',
-          ExpressionAttributeValues: { ':zero': 0 },
-        }),
-      );
+    await h.database.pool.query(
+      'UPDATE notification_deliveries SET next_attempt_at=0,lease_until=CASE WHEN lease_id IS NULL THEN NULL ELSE 0 END WHERE post_id=$1',
+      [postId],
+    );
   }
 
   it('creates the group, consumes a comment, stores unread, pushes, ACKs and shuts down', async () => {
+    expect(consumer.isReady()).toBe(false);
     await consumer.onModuleInit();
+    expect(consumer.isReady()).toBe(true);
     const fields = wire('PostCommentCreated');
     await h.redis.xAdd(STREAM, '*', fields);
     await expect
@@ -97,6 +89,7 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
     });
     await consumer.onModuleDestroy();
     expect(connection.isOpen).toBe(false);
+    expect(consumer.isReady()).toBe(false);
   });
 
   it.each(['CURIOUS', 'STILL_HAPPENING', 'HELPFUL', 'ENDED', 'LIKE'])(
@@ -112,7 +105,7 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
         count: 1,
       });
       expect(
-        await store.get(parsed(fields).aggregateId, 'meta'),
+        await store.postState(parsed(fields).aggregateId),
       ).not.toMatchObject({ closed: true });
       expect(send).toHaveBeenCalledOnce();
       expect(await pending()).toBe(0);
@@ -132,7 +125,7 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
     expect(send).toHaveBeenCalledOnce();
     await h.redis.del('notification:unread:1');
     const restarted = new PostEventHandler(
-      new DynamoDbEventStore(h.client, h.config),
+      new PostgresEventStore(h.database),
       h.state,
       { send },
     );
@@ -154,22 +147,16 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
     const postId = parsed(fields).aggregateId;
     h.ownedKeys.add(`notification:bundle:1:${postId}:POST_COMMENTED`);
     await h.state.reserveBundle('1', postId, 'POST_COMMENTED', 'not-durable');
-    const original = h.client.send.bind(h.client);
-    let fail = true;
-    const spy = vi.spyOn(h.client, 'send').mockImplementation((async (
-      command: unknown,
-    ) => {
-      if (command instanceof TransactWriteCommand && fail) {
-        fail = false;
-        throw new Error('simulated DB outage before commit');
-      }
-      return original(command as never);
-    }) as never);
+    await h.database.pool.query(
+      'ALTER TABLE notification_processed_events ADD CONSTRAINT fail_commit CHECK (false)',
+    );
     await input(fields);
     expect(await pending()).toBe(1);
     expect(await items()).toHaveLength(0);
     expect(send).not.toHaveBeenCalled();
-    spy.mockRestore();
+    await h.database.pool.query(
+      'ALTER TABLE notification_processed_events DROP CONSTRAINT fail_commit',
+    );
     await consumer.onModuleDestroy();
     const recovered = new PostEventConsumer(h.config, handler);
     await recovered.onModuleInit();
@@ -201,39 +188,17 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
     ).toBe(true);
   });
 
-  it('serializes simultaneous workers with CAS and creates one bundle with two contributions', async () => {
+  it('serializes simultaneous workers with post row locks and creates one bundle with two contributions', async () => {
     const first = parsed(wire('PostCommentCreated'));
     const postId = first.aggregateId;
     const second = parsed(wire('PostCommentCreated', { postId, actor: 3 }));
-    const other = new DynamoDbEventStore(h.client, h.config);
-    const original = h.client.send.bind(h.client);
-    let reads = 0;
-    let release!: () => void;
-    const barrier = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const spy = vi.spyOn(h.client, 'send').mockImplementation((async (
-      command: unknown,
-    ) => {
-      const result = await original(command as never);
-      if (
-        command instanceof GetCommand &&
-        command.input.Key?.key === 'meta' &&
-        reads < 4
-      ) {
-        if (++reads === 4) release();
-        await barrier;
-      }
-      return result;
-    }) as never);
+    const other = new PostgresEventStore(h.database);
     await Promise.all([
       store.apply(first),
       other.apply(first),
       store.apply(second),
       other.apply(second),
     ]);
-    spy.mockRestore();
-    expect(reads).toBe(4);
     expect(await items()).toHaveLength(1);
     expect((await items())[0]?.count).toBe(2);
     await handler.dispatch(postId);
@@ -303,7 +268,7 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
     expect((await items())[0]?.count).toBe(1);
     expect((await items())[0]?.commentId).toBeUndefined();
     expect(send.mock.calls[0]?.[0].data.commentId).toBeUndefined();
-    expect(await store.get(postId, `event#${removed.eventId}`)).toMatchObject({
+    expect(await store.processedEvent(postId, removed.eventId)).toMatchObject({
       reason: 'MODERATION_VIOLATION',
       actorType: 'MODERATION',
     });
@@ -352,10 +317,10 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
       expect((await items())[0]?.count).toBe(1);
       expect(await items()).toHaveLength(1);
       expect(await store.deliveries(postId)).toHaveLength(0);
-      expect(await store.get(postId, 'meta')).toMatchObject({
+      expect(await store.postState(postId)).toMatchObject({
         closed: true,
-        postVersion: 2,
-        terminalType: type,
+        post_version: 2,
+        terminal_type: type,
       });
     },
   );
@@ -449,7 +414,7 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
     expect(await pending()).toBe(1);
     expect((await items())[0]?.count).toBe(1);
     const restarted = new PostEventHandler(
-      new DynamoDbEventStore(h.client, h.config),
+      new PostgresEventStore(h.database),
       h.state,
       { send },
     );
@@ -480,7 +445,7 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
     finish.mockRestore();
     await readyDelivery(postId);
     const restarted = new PostEventHandler(
-      new DynamoDbEventStore(h.client, h.config),
+      new PostgresEventStore(h.database),
       h.state,
       { send },
     );
@@ -515,7 +480,7 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
     await handler.handle(second);
     expect(await store.deliveries(second.aggregateId)).toHaveLength(0);
     expect(
-      await store.get(
+      await store.delivery(
         second.aggregateId,
         `delivery#${send.mock.calls.at(-1)![0].data.notificationId}`,
       ),
@@ -534,24 +499,29 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
     expect(await h.notifications.unread('1')).toBe(1);
   });
 
+  it('rejects stale lease completion after a second worker recovers the delivery', async () => {
+    const event = parsed(wire('PostCommentCreated'));
+    await store.apply(event);
+    const pending = (await store.deliveries(event.aggregateId))[0]!;
+    const first = (await store.acquire(pending))!;
+    await readyDelivery(event.aggregateId);
+    const second = (await store.acquire(pending))!;
+    expect(second.leaseId).not.toBe(first.leaseId);
+    await expect(store.finish(first, 'SENT')).rejects.toBeInstanceOf(
+      BusyDeliveryError,
+    );
+    await store.finish(second, 'SENT');
+    expect(await store.deliveries(event.aggregateId)).toHaveLength(0);
+  });
+
   it('does not acquire a stale delivery snapshot after a post deletion commits', async () => {
     const first = parsed(wire('PostCommentCreated'));
     await store.apply(first);
     const work = (await store.deliveries(first.aggregateId))[0]!;
-    const original = store.get.bind(store);
-    let race = true;
-    const spy = vi
-      .spyOn(store, 'get')
-      .mockImplementation(async (postId, key) => {
-        const result = await original(postId, key);
-        if (key === 'meta' && race) {
-          race = false;
-          await store.apply(parsed(wire('PostDeleted', { postId })));
-        }
-        return result;
-      });
-    await expect(store.acquire(work)).rejects.toBeInstanceOf(BusyDeliveryError);
-    spy.mockRestore();
+    await store.apply(
+      parsed(wire('PostDeleted', { postId: first.aggregateId })),
+    );
+    expect(await store.acquire(work)).toBeUndefined();
     await handler.dispatch(first.aggregateId);
     expect(send).not.toHaveBeenCalled();
     expect(await store.deliveries(first.aggregateId)).toHaveLength(0);
@@ -565,18 +535,13 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
       postId: parsed(first).aggregateId,
       actor: 3,
     });
-    const original = h.client.send.bind(h.client);
-    let loseResponse = true;
-    const spy = vi.spyOn(h.client, 'send').mockImplementation((async (
-      command: unknown,
-    ) => {
-      const result = await original(command as never);
-      if (command instanceof TransactWriteCommand && loseResponse) {
-        loseResponse = false;
+    const original = h.database.transaction.bind(h.database);
+    const spy = vi
+      .spyOn(h.database, 'transaction')
+      .mockImplementationOnce(async (work) => {
+        await original(work);
         throw new Error('commit response lost');
-      }
-      return result;
-    }) as never);
+      });
     await input(next);
     expect(await pending()).toBe(1);
     expect((await items())[0]?.count).toBe(2);
@@ -609,7 +574,7 @@ describe('real Redis + DynamoDB Local + mock FCM', () => {
         failureCount: 0,
         responses: [{ success: true }],
       });
-    // DynamoDB Query는 token을 사전순으로 반환한다: invalid, temporary, valid.
+    // 저장소의 token 정렬 순서에 맞춰 FCM 부분 응답을 만든다.
     const adapter = new FirebasePushAdapter(h.config, h.subscriptions, {
       sendEachForMulticast,
     } as unknown as Messaging);

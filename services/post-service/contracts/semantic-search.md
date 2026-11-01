@@ -28,7 +28,7 @@ MongoDB posts 스키마는 바뀌지 않는다. ES `_id=postId`, keyword: postId
 
 실제 모델의 별칭은 `post-semantic-e5-small-761b726-fp32-w480-o64-v1-read`, 그룹은 `post-semantic-e5-small-761b726-fp32-w480-o64-v1`이다. 위 v1 예시는 fixture/기존 버전이며 실제 모델과 별도 인덱스·그룹을 사용한다. 모델/별칭/평가된 임계값을 같은 배포 설정으로 관리한다. 임계값 기본값은 없고 미설정 시 추천은 503이다. 인덱싱은 임계값 없이 실행할 수 있다.
 
-Post가 삭제·만료 상태와 Outbox를 함께 기록하고 PostDeleted/PostExpired를 발행한다. 상세 계약은 [post-events.md](./post-events.md)를 따른다. 전달 지연 중에는 만료 필터·최종 원본 확인이 노출을 막으며 정기 rebuild로 남은 파생 문서를 정리한다. 실제 모델 연결·기준 벡터 일치·전체 연동은 테스트한다. 한국어 중복 품질·운영 임계값·ECS 추론 부하는 별도 평가 대상이다.
+Post가 삭제·만료 상태와 Outbox를 함께 기록하고 PostDeleted/PostExpired를 발행한다. 상세 계약은 [post-events.md](./post-events.md)를 따른다. 전달 지연 중에는 만료 필터·최종 원본 확인이 노출을 막으며 정기 rebuild로 남은 파생 문서를 정리한다. 실제 모델 연결·기준 벡터 일치·전체 연동은 테스트한다. 한국어 중복 품질·운영 임계값·GKE 추론 부하는 별도 평가 대상이다.
 
 
 ## Map 주변 조회 커서 연결
@@ -42,4 +42,4 @@ Post가 삭제·만료 상태와 Outbox를 함께 기록하고 PostDeleted/PostE
 Docker build가 기존 고정 revision/체크섬 준비 스크립트로 모델을 /opt/wgo/models/e5에 포함한다.
 이미지 dist/start.js는 모델 활성화 시 파일 읽기/해시 및 설정된 CA 파일을 검사한 뒤 앱을 실행한다.
 로컬 dev의 degraded 시작 동작은 유지한다. 추론 warm-up 실패·미평가 threshold·미초기화 alias는
-여전히 검색 준비 완료가 아니다. [운영 연결·CA 볼륨·검증 절차](../../../docs/deployment/aws-storage.md)를 따른다.
+여전히 검색 준비 완료가 아니다. [운영 연결·CA 볼륨·검증 절차](../../../docs/deployment/gcp-storage.md)를 따른다.

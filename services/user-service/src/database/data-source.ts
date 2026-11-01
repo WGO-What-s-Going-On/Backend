@@ -32,4 +32,5 @@ export default new DataSource({
     AddTermsCodeEffectiveAtIndex1789993249262,
   ],
   synchronize: false,
+  poolSize: database.poolSize,
 });
