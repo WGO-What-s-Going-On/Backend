@@ -67,7 +67,10 @@ export class GatewayAuthGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     if (context.getType() !== 'http') return true;
     const request = context.switchToHttp().getRequest<Request>();
-    if (request.method === 'GET' && request.path === '/health/live')
+    if (
+      request.method === 'GET' &&
+      (request.path === '/health/live' || request.path === '/health/ready')
+    )
       return true;
     try {
       const count = (name: string) =>
