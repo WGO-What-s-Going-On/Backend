@@ -41,6 +41,9 @@ export function configureSwagger(app: INestApplication): void {
           }
         }
       }
+      const blockRequest = document.components?.schemas?.CreateBlockRequest;
+      if (blockRequest && 'properties' in blockRequest)
+        blockRequest.additionalProperties = false;
       return document;
     },
     { jsonDocumentUrl: 'docs/openapi.json' },

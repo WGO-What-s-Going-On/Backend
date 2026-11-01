@@ -140,3 +140,15 @@ pnpm test:openai-smoke
 사용하며, REDIS_URL을 명시하고 원래 ID를 유지합니다. 자동 제재·Push는 수행하지 않습니다.
 
 통합 로컬 실행에서는 Post 발행자와 Moderation/Notification 소비자가 같은 Redis endpoint/DB를 사용해야 합니다. 이번 로컬 .env는 localhost:6383으로 맞췄습니다. 서비스별 compose의 서로 다른 기본 포트는 자동으로 이벤트를 복제하지 않습니다. 실제 OpenAI smoke는 제공된 로컬 키로 통과했으며, 키가 없으면 외부 호출 전에 미설정 오류를 반환합니다.
+
+## 사용자 신고 API
+
+게시글·댓글 신고/본인 취소는 기존 REDIS_URL을 원본과 이벤트 저장소로 사용한다. Lua에서 상태·불변 journal 기록과 moderation:report-events XADD를 처리하며, ReportOutboxWorker는 Redis pending journal의 재시도를 계속 담당한다. 기존 Lifecycle/AI 저장소·입출력 스트림·Consumer Group은 변경하지 않았다. /docs, /docs/openapi.json과 Gateway 공개 API 계약도 유지한다.
+
+별도 PostgreSQL과 reports:migrate는 필요 없다. REDIS_URL과 MODERATION_HTTP_GATEWAY_TRUSTED_JWKS가 필요하며 미설정/장애를 우회하지 않는다. 최신 Post는 Moderation 호출자 인증을 지원하지 않으므로 신규 접수는 네트워크 호출 없이 503이다. REPORTS_POST_SERVICE_URL 설정만으로 활성화되지 않는다. 운영 접수 전 인증된 대상 검증 계약이 필요하다. [신고 계약](contracts/reports.md), [Redis 전환 검증 보고](REDIS_REPORTS_IMPLEMENTATION_REPORT.md), [팀 후속 요청](contracts/gateway-handoff.md)을 따른다.
+
+pnpm test는 단위/HTTP/OpenAPI, pnpm test:integration은 실제 Redis 장애/동시성/이벤트/Lifecycle/AI 회귀 테스트다. 신고 테스트 기본 주소는 redis://127.0.0.1:6383/13이고 MODERATION_TEST_REDIS_URL로 변경할 수 있다. 원격 주소와 데이터가 들어 있는 테스트 DB는 거부한다. FLUSHDB/FLUSHALL을 사용하지 않고 이 테스트가 만든 키만 정리한다. 운영 Redis에서 실행하지 않는다.
+
+강제 종료/AOF 재시작 테스트는 새 전용 컨테이너를 생성한 경우에만 MODERATION_REPORT_RESTART_CONTAINER로 선택한다. 이름은 wgo-report-redis-test- 접두사, label com.wgo.moderation-report-test=1, AOF=yes/appendfsync=always여야 한다. 실제 endpoint run_id까지 컨테이너와 대조한 후에만 kill/start한다. 기존 Compose Redis 재시작 테스트는 별도 opt-in이며 기본은 실행하지 않는다.
+
+신고 원본·journal에는 임의 TTL이 없다. 공용 Redis에 CONFIG SET/초기화/기존 데이터 이관을 실행하지 않는다. 원본 eviction 방지, 운영 persistence/backup/RPO·보존 정책을 확인해야 하며 Redis 원본 전체 유실을 PostgreSQL에서 복구할 수는 없다.

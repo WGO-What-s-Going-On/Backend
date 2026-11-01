@@ -99,7 +99,7 @@ psql "$ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -f /tmp/wgo-grants.sql
 ```
 
 앱별 JSON에 JWT·서비스 간 JWK·Kakao·OpenAI·저장소 연결값을 채운다.
-Post의 ES API key와 평가한 semantic threshold를 준비하고 초기 semantic alias를 생성한다.
+Post의 ES API key를 준비하고 초기 semantic alias를 생성한다.
 JWT access secret/issuer/audience는 User와 두 Gateway가 동일하게 사용한다.
 HTTP Gateway private JWK의 public key만 각 서비스 trusted JWKS에 넣는다.
 Post private JWK의 public key만 Map과 User에, WS private JWK의 public key만 Post에 넣는다.

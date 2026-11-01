@@ -541,10 +541,25 @@ describe('Finalization and internal gRPC integration', () => {
       } else {
         const finalizing = scheduler.finalizePending();
         await entered.promise;
+        // Hold finalization until login has read the pre-commit OAuth mapping.
+        const accountRead = deferred();
+        const accounts = db.getRepository(OAuthAccountEntity);
+        const findAccount = accounts.findOne.bind(accounts);
+        vi.spyOn(accounts, 'findOne').mockImplementationOnce(
+          async (options) => {
+            const account = await findAccount(options);
+            accountRead.resolve();
+            return account;
+          },
+        );
         const restoring = login();
+        await accountRead.promise;
         release.resolve();
         await finalizing;
-        const registered = await restoring;
+        const rejected = await restoring;
+        expect(rejected.status).toBe(401);
+        expect(rejected.body.message).toBe('Account is not available');
+        const registered = await login();
         expect(registered.status).toBe(201);
         expect(registered.body).toMatchObject({
           isNewUser: true,

@@ -58,7 +58,7 @@ flowchart LR
     MapDB[(Map Cassandra)]
     Geo[(Redis GEO)]
     NotificationDB[(Notification PostgreSQL)]
-    ModerationDB[(Moderation PostgreSQL)]
+    ModerationDB[(Moderation Redis source + journal)]
 
     Client -->|HTTPS| HTTP
     Client <-->|WSS| RT
@@ -187,7 +187,7 @@ Consumer의 복구 시간과 재처리 요구를 고려해 정하고, 만료 또
 | 게시물 | Post Service | MongoDB | 문서 형태의 콘텐츠와 유연한 콘텐츠 구조 |
 | 지도와 보드 위치 | Map Service | Cassandra + Redis GEO + H3 | 영속 공간 데이터와 실시간 위치 검색 |
 | 알림 | Notification Service | PostgreSQL | 알림 설정, Inbox, 전송 상태 |
-| 운영 및 신고 | Moderation Service | PostgreSQL | 신고, 검토, 정책 결정, 감사 이력 |
+| 운영 및 신고 | Moderation Service | Redis | 신고 원본·이벤트 journal·복구 대기열. 검토·제재 API는 별도 후속 범위 |
 
 서비스별 데이터베이스는 최소한 논리적 소유권, 계정, Migration과 쓰기 권한이
 분리되어야 한다. 초기에는 물리 인프라를 공유할 수 있지만, 서비스 간 직접
@@ -432,7 +432,7 @@ Secret, 비공개 본문 또는 불필요한 원본 좌표를 기록하지 않�
 | 도메인 이벤트에 Redis Streams 사용 | 후속 작업 분리와 서비스별 독립 Consumer Group 지원 | 보존·지속성 정책, 멱등성, Outbox와 Pending 재처리 체계 필요 |
 | 서비스별 데이터 소유권 | 자율성과 장애 경계 보존 | 서비스 간 DB 접근과 Join 금지 |
 | Post에 MongoDB 사용 | 문서 중심이며 변화 가능한 콘텐츠 구조에 적합 | 여러 Document에 걸친 불변 조건은 별도 설계 필요 |
-| User/Notification/Moderation에 PostgreSQL 사용 | 관계형 제약, 트랜잭션, 감사 데이터에 적합 | 도메인마다 계정, Schema, Migration 분리 |
+| User/Notification에 PostgreSQL 사용 | 관계형 제약, 트랜잭션, 감사 데이터에 적합 | 도메인마다 계정, Schema, Migration 분리 |
 | 영속 공간 조회에 Cassandra + H3 사용 | 지역 Cell 중심의 수평 확장 가능한 조회 지원 | Partition과 Hotspot을 실제 데이터로 검증해야 함 |
 | 활성 공간 조회에 Redis GEO 사용 | 빠른 반경 및 후보 검색 | 기준 저장소가 아닌 만료·복구 가능한 파생 인덱스 |
 | GKE Autopilot과 무상태 Pod 사용 | Host 관리 없이 독립 확장과 교체 가능 | 모든 영속·공유 상태를 Container 외부에 저장 |
@@ -457,7 +457,7 @@ Post 원본은 MongoDB다. Post 내부 EmbeddingProvider 계산 포트와 ES 검
 
 작성 초안은 Post → 기존 Map 위치 인가 → MapPostQuery.SearchNearbyPosts(150m,최대200) → Post Mongo 원본 검증 → 초안 임베딩 → ES 후보 벡터 비교 → Mongo 최종 검증으로 처리한다. 생성은 기존 MongoDB+Outbox 흐름을 유지한다. 독립 그룹 post-semantic-v1 Worker가 생성 이벤트를 소비해 최신 원본을 인덱싱한다. 재구축은 버전별 소비 lease·Stream watermark·원본 스캔·따라잡기·검증·ES 별칭 전환을 사용한다.
 
-실제 E5 모델은 고정 revision/체크섬으로 연결되며 Post 운영 이미지에 포함한다. 운영 이미지 진입점은 활성 모델 파일과 CA 설정을 검사한다. 모델 warm-up·ES alias·평가된 threshold가 준비되지 않으면 추천은 503이다. 로컬 개발의 기존 degraded 시작은 유지한다. 상세 계약은 [Post 검색 계약](services/post-service/contracts/semantic-search.md)에 있다.
+실제 E5 모델은 고정 revision/체크섬으로 연결되며 Post 운영 이미지에 포함한다. 운영 이미지 진입점은 활성 모델 파일과 CA 설정을 검사한다. 모델 warm-up·ES alias가 준비되지 않으면 추천은 503이다. 로컬 개발의 기존 degraded 시작은 유지한다. 상세 계약은 [Post 검색 계약](services/post-service/contracts/semantic-search.md)에 있다.
 
 ## GCP 개발·데모 배포 프로파일
 
@@ -501,3 +501,9 @@ Notification 설정은 전용 PostgreSQL DB의 사용자·보드별 설정 테�
 작성자 종료는 자동 만료와 별도의 가역 상태이며 수정·종료·재개는 PostUpdated Outbox 이벤트를 발행한다.
 Map 공간 후보는 유지하되 Post가 원본 공개 상태를 검증하고 Semantic/WS가 변경 이벤트를 소비한다.
 배포 순서, 조회 한도, 외부 설정 및 기존 데이터 보완은 [프론트엔드 연동 계약](docs/contracts/frontend-integration.md)을 따른다.
+
+## 차단·Redis 신고 최신 dev 통합 (2026-11-01)
+
+User 차단은 기존 PostgreSQL user_blocks와 transaction Outbox로 관리한다. Moderation 신고는 기존 Redis의 `moderation:reports:v1` 원본·journal과 Lua 발행·pending Worker 복구를 사용한다. Lifecycle·AI Streams는 유지한다. GCP Cloud SQL·GKE·Redis TLS/AOF/백업 설정은 변경하지 않는다.
+
+운영 신규 신고 접수는 Moderation→Post 호출자 인증·대상 확인 계약 미지원으로 503을 반환한다. 무인증 조회를 대체 경로로 사용하지 않는다. [배포 인계와 저장 계약](services/moderation-service/contracts/gateway-handoff.md)을 참고한다.

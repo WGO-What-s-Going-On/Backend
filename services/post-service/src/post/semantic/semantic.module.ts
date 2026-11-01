@@ -50,9 +50,6 @@ import { createEmbeddingProvider } from './embedding-provider.js';
           source,
           embedding,
           index,
-          process.env.SEMANTIC_THRESHOLD?.trim()
-            ? Number(process.env.SEMANTIC_THRESHOLD)
-            : undefined,
           process.env.SEMANTIC_ENABLED !== 'false',
         ),
       inject: [

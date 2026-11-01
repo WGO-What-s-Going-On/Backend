@@ -26,13 +26,21 @@ export function validateEnvironment(config) {
     config.webOrigins.some((origin) => {
       try {
         const url = new URL(origin);
-        return url.protocol !== 'https:' || url.origin !== origin;
+        const localDemo =
+          config.deploymentProfile === 'standard-demo' &&
+          url.protocol === 'http:' &&
+          url.hostname === 'localhost';
+        return (
+          (url.protocol !== 'https:' && !localDemo) || url.origin !== origin
+        );
       } catch {
         return true;
       }
     })
   )
-    throw new Error('Explicit HTTPS webOrigins required');
+    throw new Error(
+      'Explicit HTTPS webOrigins required (HTTP localhost allowed for Standard demo)',
+    );
   for (const [name, version] of Object.entries(config.secretVersions ?? {})) {
     if (
       !applications.some(([app]) => app === name) ||

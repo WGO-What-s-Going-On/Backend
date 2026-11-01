@@ -16,10 +16,7 @@ import { MongooseVote } from './infrastructure/mongoose-vote.js';
 import { VoteBody, VoteResponse } from './presentation/vote.openapi.js';
 import { CommentReactionType, PostReactionType } from './domain/post.js';
 import { FindSimilarPosts } from './semantic/search.js';
-import {
-  SimilarPostsBody,
-  SimilarPostsResponse,
-} from './presentation/similar.openapi.js';
+import { SimilarPostsResponse } from './presentation/similar.openapi.js';
 import {
   BadRequestException,
   Body,
@@ -73,7 +70,6 @@ import {
   participantInput,
   postId,
   postInput,
-  similarInput,
   reactionInput,
   reactionType,
   userId,
@@ -433,25 +429,25 @@ export class PostController {
   @ApiOperation({
     summary: '작성 초안의 유사 게시물 조회',
     description:
-      '150m·최근 24시간, 후보 최대 200개. 초안을 저장하지 않습니다. 로컬 E5 모델 로딩·워밍업 또는 평가된 임계값이 준비되지 않으면 SIMILARITY_CHECK_UNAVAILABLE(503). 로컬·테스트 인증 정책은 작성 API와 같습니다.',
+      '150m·최근 24시간, 후보 최대 200개에서 임계값 없이 상위 3개와 유사도 퍼센트를 반환합니다. 초안을 저장하지 않습니다. 로컬 E5 모델 로딩·워밍업이 준비되지 않으면 SIMILARITY_CHECK_UNAVAILABLE(503). 로컬·테스트 인증 정책은 작성 API와 같습니다.',
   })
   @ApiHeader({
     name: 'X-User-Id',
     description: '양의 정수 사용자 ID (로컬·테스트 전용)',
   })
-  @ApiBody({ type: SimilarPostsBody })
+  @ApiBody({ type: CreatePostBody })
   @ApiOkResponse({ type: SimilarPostsResponse })
   @ApiForbiddenResponse({ description: '사용자 또는 위치 인가 거부' })
   @ApiServiceUnavailableResponse({
     description:
-      'SIMILARITY_CHECK_UNAVAILABLE: 모델·임계값 미준비, 의존성 오류 또는 timeout.',
+      'SIMILARITY_CHECK_UNAVAILABLE: 모델 미준비, 의존성 오류 또는 timeout.',
   })
   similar(
     @Headers('x-user-id') header: string | undefined,
     @Body() body: unknown,
   ) {
     const actorId = userId(header);
-    return this.findSimilar.execute(similarInput(body), actorId);
+    return this.findSimilar.execute(postInput(body), actorId);
   }
 
   @Get(':postId/media')

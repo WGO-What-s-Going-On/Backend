@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "title": "User block event v1",
+  "required": [
+    "eventId",
+    "type",
+    "version",
+    "producer",
+    "target",
+    "occurredAt",
+    "correlationId",
+    "payload"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "type": {
+      "enum": ["USER_BLOCK_CREATED", "USER_BLOCK_REMOVED"]
+    },
+    "version": {
+      "const": 1
+    },
+    "producer": {
+      "const": "user-service"
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "const": "USER"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,15}$",
+          "description": "Decimal BIGINT string in 1..9007199254740991."
+        }
+      }
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "correlationId": {
+      "type": "string"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["blockerUserId", "blockedUserId"],
+      "properties": {
+        "blockerUserId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,15}$",
+          "description": "Decimal BIGINT string in 1..9007199254740991."
+        },
+        "blockedUserId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,15}$",
+          "description": "Decimal BIGINT string in 1..9007199254740991."
+        }
+      }
+    }
+  }
+}

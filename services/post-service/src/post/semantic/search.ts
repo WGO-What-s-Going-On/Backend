@@ -23,21 +23,13 @@ export class FindSimilarPosts {
     private readonly source: SemanticSource,
     private readonly embedding: EmbeddingProvider,
     private readonly index: SemanticPostIndex,
-    private readonly threshold: number | undefined,
     private readonly enabled = true,
   ) {}
 
-  async execute(input: PostInput & { limit: number }, userId: number) {
+  async execute(input: PostInput, userId: number) {
     // 생성과 같은 도메인 검증을 거치지만 원본이나 Outbox는 저장하지 않는다.
     createPost(input, userId, 'draft', new Date());
-    if (
-      !this.enabled ||
-      !this.embedding.ready ||
-      this.threshold === undefined ||
-      !Number.isFinite(this.threshold) ||
-      this.threshold < -1 ||
-      this.threshold > 1
-    )
+    if (!this.enabled || !this.embedding.ready)
       throw new SimilarityUnavailableError();
     const signal = AbortSignal.timeout(10000);
     try {
@@ -48,11 +40,7 @@ export class FindSimilarPosts {
     }
   }
 
-  private async search(
-    input: PostInput & { limit: number },
-    userId: number,
-    signal: AbortSignal,
-  ) {
+  private async search(input: PostInput, userId: number, signal: AbortSignal) {
     await this.authorization.assertCanCreate(
       userId,
       input.latitude,
@@ -93,6 +81,7 @@ export class FindSimilarPosts {
         excerpt: string;
         category: string;
         distanceM: number;
+        similarityPercent: number;
         createdAt: string;
       }[],
     ) => ({
@@ -138,7 +127,6 @@ export class FindSimilarPosts {
       }
       if (!Number.isFinite(hit.similarity))
         throw new Error('Invalid similarity score');
-      if (hit.similarity < this.threshold!) return [];
       return [
         {
           post,
@@ -159,12 +147,15 @@ export class FindSimilarPosts {
     );
     signal.throwIfAborted();
     return respond(
-      ranked.slice(0, input.limit).map(({ post, distanceM }) => ({
+      ranked.slice(0, 3).map(({ post, distanceM, similarity }) => ({
         postId: post.postId,
         title: post.title,
         excerpt: [...post.content].slice(0, 160).join(''),
         category: post.category,
         distanceM,
+        // 표시값만 반올림한다. 낮거나 음수인 점수도 원점수 순위에는 포함한다.
+        similarityPercent:
+          Math.round(Math.max(0, Math.min(1, similarity)) * 10000) / 100,
         createdAt: post.createdAt.toISOString(),
       })),
     );

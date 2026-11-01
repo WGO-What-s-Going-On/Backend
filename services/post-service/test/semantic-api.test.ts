@@ -18,6 +18,8 @@ import { ReadPosts } from '../src/post/application/queries.js';
 import { FindSimilarPosts } from '../src/post/semantic/search.js';
 import { E5EmbeddingProvider } from '../src/post/semantic/embedding-provider.js';
 import { type SemanticPostIndex } from '../src/post/semantic/ports.js';
+import { createPost } from '../src/post/domain/post.js';
+import { content } from '../src/post/semantic/policy.js';
 import { draft, fixtureEmbedding } from './fixtures/semantic.js';
 
 const auth = {
@@ -66,19 +68,17 @@ describe('similar HTTP contract', () => {
       .post('/api/v1/posts/similar')
       .set('X-User-Id', header)
       .send(body);
-  it('returns 200 with default limit five and empty result without saving', async () => {
+  it('returns 200 with empty result without saving', async () => {
     const usecase = new FindSimilarPosts(
       auth,
       nearby,
       source,
       fixtureEmbedding(),
       index,
-      0.7,
     );
     execute.mockImplementation(usecase.execute.bind(usecase));
-    const { limit: _, ...body } = draft;
-    const response = await run(body).expect(200);
-    expect(execute.mock.lastCall?.[0].limit).toBe(5);
+    const response = await run(draft).expect(200);
+    expect(execute.mock.lastCall?.[0]).not.toHaveProperty('limit');
     expect(response.body).toMatchObject({
       items: [],
       checkStatus: 'completed',
@@ -86,8 +86,55 @@ describe('similar HTTP contract', () => {
       scope: { radiusM: 150, lookbackHours: 24 },
     });
   });
-  it.each([0, 11, 1.5, '1', null])(
-    'rejects invalid limit %s',
+  it('returns three ranked items with display percentages over HTTP', async () => {
+    const posts = Array.from({ length: 4 }, (_, i) =>
+      createPost(
+        draft,
+        123,
+        `post_00000000-0000-0000-0000-${String(i).padStart(12, '0')}`,
+        new Date(),
+      ),
+    );
+    const usecase = new FindSimilarPosts(
+      auth,
+      {
+        search: async () => ({
+          items: posts.map((p) => ({ postId: p.postId, distanceM: 1 })),
+          truncated: false,
+        }),
+      },
+      { batch: async () => posts, async *scan() {} },
+      fixtureEmbedding(),
+      {
+        ...index,
+        search: async () =>
+          posts.map((p, i) => ({
+            postId: p.postId,
+            contentHash: content(p).hash,
+            embeddingVersion: 'v1',
+            similarity: [0.123456, 0.01, -0.1, -0.2][i]!,
+          })),
+      },
+    );
+    execute.mockImplementation(usecase.execute.bind(usecase));
+    const response = await run(draft).expect(200);
+    expect(
+      response.body.items.map(
+        (p: { similarityPercent: number }) => p.similarityPercent,
+      ),
+    ).toEqual([12.35, 1, 0]);
+    expect(response.body.items[0]).toEqual({
+      postId: posts[0]!.postId,
+      title: draft.title,
+      excerpt: draft.content,
+      category: draft.category,
+      distanceM: 1,
+      similarityPercent: 12.35,
+      createdAt: posts[0]!.createdAt.toISOString(),
+    });
+  });
+  it.each([0, 1, 3, 5, 10, 11, 1.5, '1', null])(
+    'rejects removed limit %s',
     async (limit) => {
       await run({ ...draft, limit }).expect(400);
     },
@@ -105,7 +152,6 @@ describe('similar HTTP contract', () => {
       source,
       new E5EmbeddingProvider(false),
       index,
-      undefined,
     );
     execute.mockImplementation(usecase.execute.bind(usecase));
     await run(draft, '').expect(403);

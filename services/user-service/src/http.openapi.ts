@@ -155,3 +155,5 @@ export function userErrorResponses(...responses: Array<[number, string]>) {
     ),
   );
 }
+
+export { BlockPage, CreateBlockRequest } from './users/dto/user-block.dto.js';

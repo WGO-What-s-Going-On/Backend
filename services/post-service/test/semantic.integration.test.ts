@@ -73,7 +73,6 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
       `mongodb://localhost:27017/${prefix.replaceAll('-', '_')}?replicaSet=rs0`,
     );
     vi.stubEnv('REDIS_URL', 'redis://localhost:6380/14');
-    vi.stubEnv('SEMANTIC_THRESHOLD', '0.7');
     vi.stubEnv('SEMANTIC_WORKER_ENABLED', 'false');
     vi.stubEnv('SEMANTIC_INDEX_ALIAS', `${prefix}-read`);
     vi.stubEnv('MAP_GRPC_TIMEOUT_MS', '10000');
@@ -220,7 +219,6 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
         .set('X-User-Id', '912341')
         .send({
           ...draft,
-          limit: undefined,
           title: i < 199 ? 'other' : 'best',
           latitude,
           longitude: longitude + i * 0.000005,
@@ -246,10 +244,14 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
     expect(entries).toHaveLength(201);
     for (const entry of entries) await consumer.process(entry);
     await index.refresh();
-    const response = await similar({ limit: 1 }).expect(200);
-    expect(response.body.items.map((p: any) => p.postId)).toEqual([ids[199]]);
+    const response = await similar().expect(200);
+    expect(response.body.items[0].postId).toBe(ids[199]);
+    expect(response.body.items[0].similarityPercent).toBe(100);
+    expect(response.body.items.map((p: any) => p.postId)).not.toContain(
+      ids[200],
+    );
     expect(response.body.partialReasons).toEqual(['CANDIDATE_LIMIT']);
-    expect((await similar().expect(200)).body.items).toHaveLength(5);
+    expect((await similar().expect(200)).body.items).toHaveLength(3);
     expect(
       (await mapIndex.nearby({ latitude, longitude, radiusM: 150, limit: 200 }))
         .items,
@@ -312,7 +314,6 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
       .set('X-User-Id', '912341')
       .send({
         ...draft,
-        limit: undefined,
         latitude,
         longitude: longitude - 0.00001,
       })
@@ -698,10 +699,12 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
             longitude,
             title: record.title,
             content: record.content,
-            limit: 1,
           })
           .expect(200);
-        expect(response.body.items).toHaveLength(1);
+        expect(response.body.items).toHaveLength(3);
+        expect(response.body.items[0].similarityPercent).toBeGreaterThanOrEqual(
+          99.99,
+        );
         expect(response.body.items[0].title).toBe(record.title);
         expect(response.body.scope.radiusM).toBe(150);
 
