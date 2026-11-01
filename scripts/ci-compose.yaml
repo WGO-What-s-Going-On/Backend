@@ -62,10 +62,6 @@ services:
       interval: 10s
       timeout: 10s
       retries: 30
-  dynamodb:
-    image: amazon/dynamodb-local:latest
-    command: '-jar DynamoDBLocal.jar -inMemory -sharedDb'
-    ports: ['127.0.0.1:8002:8000']
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.19.4
     environment:

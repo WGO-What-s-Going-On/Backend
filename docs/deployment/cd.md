@@ -1,154 +1,55 @@
-# ECS Fargate 서비스별 배포
+# GKE 배포 파이프라인
 
-최초 AWS 인프라 준비와 환경별 배포 실행 순서는 [AWS 배포 체크리스트](./aws-deployment-checklist.md)를 따른다.
+GitHub Actions는 main 변경을 Artifact Registry 이미지와 GKE Deployment로 배포한다.
+`staging`에서 확인한 image digest를 `production`에 그대로 승격한다. production에서 재빌드하지 않는다.
+개발·데모 인프라는 서울 `asia-northeast3` GKE Autopilot이다.
 
-이 구현은 **이미 생성된 AWS 인프라에 애플리케이션을 배포**한다. VPC·DB·ECS·ECR·IAM·ALB를
-생성하지 않는다. 실제 AWS 호출이나 배포는 로컬 구현 검증에서 실행하지 않는다.
+## 최초 실행을 준비한다
 
-## GitHub 설정
+1. `gcp.md`와 저장소 배포 안내에 따라 인프라·DB·Secret Manager·TLS·Ingress를 초기화한다.
+2. `.env.cd.example`의 비밀값 없는 설정을 각 GitHub Environment의 Variables에 등록한다.
+3. `GCP_ENV_FILE=환경파일 GITHUB_REPOSITORY=WGO-What-s-Going-On/Backend node scripts/gcp-cicd-identity.mjs`로 IAM/RBAC 계획을 확인한 뒤 `--apply`로 생성한다. OIDC는 이 저장소와 `refs/heads/main`으로 제한한다. production Environment에 승인자를 지정한다.
+4. 배포 GSA에 Artifact Registry writer, GKE 클러스터 조회 및 DNS endpoint 접근 권한을 부여한다.
+5. namespace RBAC는 앱 ServiceAccount, SecretProviderClass, ConfigMap, Deployment, Service, migration Job, Pod 상태 조회와 smoke exec에 한정한다. PVC·StatefulSet·Secret 값 접근은 필요하지 않다.
+6. main에서 `workflow_dispatch`의 `initial_deployment=true`로 staging을 초기화한다.
 
-전체 Secret 이름·형식·환경별 범위는 루트 [`.env.cd.example`](../../.env.cd.example)에 있다.
-실제 값을 채운 파일을 커밋하지 말고 GitHub Secrets에 직접 등록한다.
+GKE DNS 기반 control-plane endpoint를 사용한다. 배포 runner가 private node 네트워크에 직접 연결할 필요는 없다.
+생성 스크립트의 `roles/container.clusterViewer`는 클러스터 조회와 DNS endpoint 연결 권한을 제공한다. Kubernetes 쓰기는 namespace Role로 제한한다. [GKE IAM 권한](https://docs.cloud.google.com/iam/docs/roles-permissions/container)을 따른다.
+일반 PR CI는 GCP 인증 없이 코드와 배포 renderer 및 orchestration 테스트를 실행한다.
 
-- `staging`, `production` Environment Secrets: `AWS_REGION`, `AWS_ACCOUNT_ID`, `AWS_ROLE_ARN`,
-  `ECR_REGISTRY`, `ECS_CLUSTER`, `CD_IMAGE_PLATFORM`, `CD_STATE_PREFIX`, `CD_SERVICES_JSON`,
-  `CD_RUNTIME_SECRETS_JSON`.
-- 두 Environment 모두 배포 브랜치를 `main`으로 제한한다. `production`에는 required reviewers를
-  설정한다. YAML의 `environment: production` 자체는 승인자를 생성하지 않는다.
-- 배포 대상 서비스 이름 집합과 ECR registry/region/repository 이름은 두 환경에서 같아야 한다.
-  Production은 staging에서 만든 동일 digest를 pull한다. 다른 AWS 계정이면 ECR repository policy와
-  task execution role의 cross-account pull 권한을 구성한다.
-- main Ruleset/branch protection에서 PR 병합과 `ci` 체크 성공을 필수로 지정하고 최신 main 반영을 요구한다.
-  이 설정은 저장소 코드가 자동으로 생성하지 않는다. CD에서 push CI 성공을 재조회하지 않는다.
-- Secret/task definition만 바꿀 때는 선택적으로 `CD_FORCE_SERVICES` Secret에 서비스 이름 목록 또는
-  `all`을 설정하고 main으로 변경 안내 PR을 병합한다. staging/production에 같은 값을 적용하고
-  배포 성공 후 비운다. 실패한 기존 실행은 GitHub에서 재실행할 수 있다.
-- GitHub Actions Variables의 `CD_BUILD_CONCURRENCY`는 이미지 빌드 동시 실행 수이며 기본값은 2다.
-  `CD_DEPLOY_CONCURRENCY`는 서비스 배포 동시 실행 수이며 기본값은 4다. 두 값 모두 1~7의 정수다.
-  Repository 또는 Environment Variables로 설정한다. 1로 설정하면 해당 작업을 순차 실행한다.
-  빌드는 같은 runner의 CPU·메모리·Docker를 공유하므로 runner 용량에 맞춰 조정한다.
+DB 이름은 `wgo_user`, `wgo_notification`으로 고정되어 있다. production을 추가할 때는 staging과 별도 Cloud SQL 인스턴스·namespace·도메인·Secret을 사용한다. namespace만 분리해서는 DB가 격리되지 않는다.
 
-### staging 최초 배포
+최초 HTTPS smoke 전에 DNS와 ManagedCertificate가 준비되어야 한다. 인증서 발급 중 실패한 배포는 발급 완료 후 다시 실행한다.
 
-Actions → CD → Run workflow에서 **main** 브랜치를 선택하고 `initial_deployment`를 체크한다.
-이 수동 실행은 staging만 배포하고 production job은 실행하지 않는다. GitHub 수동 실행 버튼에는
-기본 브랜치에도 `workflow_dispatch` 선언이 필요하다. 기본 브랜치가 dev인 저장소는 동일한 workflow
-변경을 dev에도 반영하되, 실행 브랜치는 반드시 main으로 선택한다.
+## 변경 서비스를 배포한다
 
-- 기본값은 false다. 옵션이 없으면 실행 수가 0인 서비스를 시작하지 않는다.
-- 옵션이 true이고 성공 SSM state가 없으며 desiredCount가 0인 기존 서비스만 1로 시작한다.
-- 이미 성공 배포 이력이 있는 중지 서비스는 옵션을 켜도 시작하지 않는다. 별도의 운영 재시작 절차를 따른다.
-- 이미 실행 중인 서비스의 desiredCount는 유지한다. 부분 성공 후 재실행하면 성공한 서비스는 기존 변경 감지를 따른다.
-- 최초 배포의 안정화/smoke 실패 시 이전 태스크 정의와 desiredCount=0으로 복구한다.
-  마이그레이션 실패 시 서비스는 시작하지 않으며, DB 변경 자체는 자동 rollback하지 않는다.
+`scripts/cd.mjs`는 각 서비스의 `wgo-release-<name>` ConfigMap에서 마지막 성공 SHA를 읽는다.
+마지막 성공 이후의 소스 변경만 빌드한다. 중간 배포 실행이 생략돼도 누락된 서비스 변경을 다음 실행에서 발견한다.
+manifest·secret 버전·bootstrap 변경은 기존 digest로 재배포한다.
+모든 이미지 push가 성공한 다음 dependency wave 순서로 migration과 rollout을 실행한다.
+User와 Notification migration은 같은 이미지·인증·고정 설정을 가진 Job에서 실행한다.
 
-## 파이프라인 흐름
+ConfigMap과 SecretProviderClass는 내용 hash로 이름을 고정한다. 기존 Pod는 새 설정을 조용히 읽지 않는다.
+Secret Manager 값은 읽거나 GitHub artifact에 저장하지 않는다. release artifact에는 SHA와 이미지 digest만 들어간다.
+Pod readiness와 내부 smoke 및 두 Gateway의 HTTPS smoke가 성공한 후에만 마지막 성공 기록을 갱신한다.
 
-1. **main 브랜치의 `push` 이벤트**로 배포한다. PR 병합도 main push를 발생시킨다.
-   dev push, 태그 push, PR 닫기만으로는 실행되지 않는다. 수동 실행은 main의 staging만 지원한다.
-   checkout 전에 push 이벤트·main ref·대상 저장소·브랜치 삭제 여부·SHA 일치를 검사한다.
-   checkout, `CD_SHA`, release artifact 이름 모두 실행 시점의 `github.sha`로 고정한다.
-   저장소 기본 브랜치가 dev여도 실행 ref는 main이므로 Environment의 main 제한과 일치한다.
-   직접 main push도 트리거되므로 **PR·필수 ci·최신 main 반영을 요구하고 우회를 제한하는
-   main 보호 규칙**이 필요하다. CD 자체는 PR 병합 여부나 CI 성공을 재조회하지 않는다.
-   CI는 기존처럼 PR 단계에서만 실행한다.
-2. staging에서 서비스별 SSM 마지막 성공 SHA와 현재 SHA의 런타임 변경을 비교한다.
-   테스트·문서만 변경되면 이미지를 다시 만들지 않는다. 누락된 state는 최초 배포로 간주한다.
-   권한/네트워크 오류를 state 없음으로 처리하지 않는다. 삭제되거나 유효하지 않은 과거 Git SHA는
-   배포를 중단하므로 히스토리 rewrite를 피하고 state 복구를 검토한다.
-   CI의 계약 검증 대상이 늘어나도 변경되지 않은 소비자 서비스를 재배포하지 않는다.
-   예를 들어 Post 소스만 바뀌면 Post만 배포한다. 공통 `shared/`, `packages/` 변경은 전체 서비스에 적용한다.
-   CD 스크립트의 Gateway 런타임 설정 변경 감지와 명시적인 강제 배포는 예외다.
-   변경 없는 서비스는 ECS 조회·빌드·Secret 갱신·배포를 건너뛰고 기존 digest를 release에 유지한다.
-3. 선택된 이미지를 제한된 동시성으로 빌드하고 ECR에 push한다. 모든 digest가 준비된 뒤 배포를 시작한다.
-   하나라도 빌드에 실패하면 진행 중인 빌드가 끝날 때까지 기다리고 서비스 배포는 시작하지 않는다.
-   배포는 선택된 서비스 사이의 의존 순서에 따라 병렬 실행한다.
-   User·Map·Notification·Moderation은 병렬 배포할 수 있다. Post는 선택된 User·Map 이후,
-   WS Gateway는 선택된 Post·User 이후, HTTP Gateway는 나머지 선택된 서비스 이후에 배포한다.
-   변경되지 않은 선행 서비스는 배포 대상으로 추가하지 않는다.
-   각 배포 단계가 성공해야 다음 단계를 시작한다. 호환되지 않는 계약은 별도 단계적 릴리스가 필요하다.
-4. 서비스의 런타임 값은 GitHub Secret JSON에서 Secrets Manager의 기존 서비스 전용 Secret에 저장한다.
-   Task definition은 JSON key와 **VersionId를 고정한 참조**만 가진다. plaintext 런타임 값은
-   task definition·Docker layer·artifact에 넣지 않는다. 구 버전 Secret을 삭제하면 rollback이 불가능하다.
-5. 선택적으로 migration Fargate task를 한 번 실행한다. 성공 후 서비스 revision을 갱신하고 ECS
-   circuit breaker/rollback을 활성화한다. 안정화 확인 시 **목표 revision이 실제 COMPLETED인지**도 검사한다.
-   `services-stable`만 통과한 자동 rollback을 성공 배포로 기록하지 않는다.
-   CLI waiter가 먼저 끝나고 ECS가 아직 `IN_PROGRESS`라면 10초 간격으로 최대 60회 완료 상태를 확인한다.
-   다른 revision으로 복구됐거나 목표 배포가 `FAILED`이면 즉시 실패 처리한다.
-6. 선택적 HTTPS smoke와 VPC 내 일회성 `smokeCommand`를 실행한 후에만 SSM 성공 상태를 갱신한다.
-   서비스별 ECS container healthCheck는 필수다. 비즈니스 smoke를 설정하지 않으면 readiness 수준을
-   넘어 인증·WS 실제 동작까지 배포 후 확인한 것은 아니다. CI의 인증/위치 통합 테스트도 유지한다.
-7. main push 실행에서만 같은 workflow의 release artifact를 production에 전달한다. 수동 실행은 staging에서 끝난다. artifact에는 SHA·서비스 이름·
-   image digest만 있으며 배포 설정/런타임 secret은 없다. Production은 이미지를 다시 빌드하지 않는다.
-   staging에서 변경되지 않은 서비스도 release에 포함해 이전 production 실패로 미반영된 이미지를 따라잡는다.
-8. 전체 CD workflow는 취소하지 않고 직렬화한다. 대기 실행이 새 실행으로 대체되어도 서비스별 마지막
-   성공 SHA를 기준으로 다음 실행이 누락 변경을 포함한다. 과거/분기된 SHA로 되돌아가는 자동 배포는 거부한다.
+## 실패를 복구한다
 
-## AWS 사전 준비
+rollout이나 smoke가 실패하면 마지막 성공 resource snapshot을 다시 적용한다.
+이 snapshot에는 이전 image, 설정 ConfigMap, SecretProviderClass 버전, bootstrap이 포함된다.
+첫 배포 실패에는 성공한 predecessor가 없으므로 새 Deployment를 제거하고 성공 기록을 남기지 않는다.
+이미 성공한 다른 서비스는 유지한다. 실패 서비스는 다음 실행에서 마지막 성공 SHA부터 다시 판단한다.
+DB migration을 자동으로 되돌리지 않는다. migration은 구버전 앱과 호환되게 작성하고 데이터 복구는 별도 runbook을 따른다.
 
-- 기존 ECR repositories, ECS rolling (`ECS` controller) Fargate services, desiredCount >= 1
-  (명시적인 staging 최초 배포는 성공 이력이 없는 desiredCount=0 서비스도 허용).
-  서비스별 task definition JSON과 app healthCheck는 Secret으로 제공한다. 컨테이너 CPU 아키텍처는
-  `CD_IMAGE_PLATFORM`과 일치해야 한다. Task definition family, IAM roles, 로그 그룹 등은 실제 값을 사용한다.
-- User/Post/Map/Notification/Moderation과 저장소는 사설 네트워크. Gateway만 ALB 등 외부 진입점에 연결한다.
-  내부 서비스 DNS, HTTP/gRPC 포트, TLS와 보안 그룹을 구성한다. Gateway의 HOST는 `0.0.0.0`으로 설정한다.
-- Task execution role: ECR pull, CloudWatch logs, 서비스 전용 Secret 조회 및 필요 시 KMS decrypt.
-- GitHub OIDC role: ECR push(주로 staging), ECS describe/register/update/run/wait/stop에 필요한 권한,
-  제한된 task/execution role의 `iam:PassRole`, 해당 Secret의 `PutSecretValue`, 해당 SSM prefix의
-  `GetParameters`/`PutParameter`. `GetParameters`는 ARN path별 권한을 부여한다.
-  OIDC trust의 `aud=sts.amazonaws.com` 및 `sub=repo:ORG/REPO:environment:staging|production`을 제한한다.
-- Application task role은 배포 역할과 분리한다. 애플리케이션이 직접 필요한 AWS 권한만 부여한다.
-- Secrets Manager secret은 서비스·환경별로 별도 생성한다. 실행 역할이 참조된 모든 VersionId를 읽을 수 있어야 한다.
-- 같은 환경의 서비스끼리 ECS service, ECR repository, task definition family, runtime Secret ARN을 공유하지 않는다.
-  병렬 작업의 이미지·revision·Secret 덮어쓰기를 막기 위해 중복 설정은 배포 전에 거부한다.
-- NAT/VPC endpoints 또는 적절한 네트워크 경로로 ECR·Secrets Manager·CloudWatch 및 외부 OAuth에 접근한다.
-- DB/Redis는 배포 파이프라인이 생성·삭제하지 않는다. MongoDB transaction 및 Cassandra 기능은 현재
-  드라이버/구현과 실제 선택한 AWS 저장소의 호환성을 먼저 검증한다.
+실패 진단 시 앱 로그나 Secret JSON을 Actions 출력에 복사하지 않는다.
+내용 hash ConfigMap과 SecretProviderClass의 정리는 rollback 보존 기간 뒤에 운영자가 수행한다.
+현재 Deployment와 마지막 성공 기록이 참조하는 리소스는 삭제하지 않는다.
 
-## 마이그레이션과 실패 복구
+## 검증한다
 
-`migrationCommand`/`smokeCommand`는 shell 문자열이 아닌 argv 배열이며 해당 app image 안에서 실행한다.
-기존 ECS 서비스의 awsvpc 네트워크 설정을 사용한다. User TypeORM 예시는 `.env.cd.example`에 있다.
-스키마 명령은 독립적·멱등적이어야 하고, 신·구 버전이 공존하는 expand/contract 절차를 따른다.
-마이그레이션 실패 시 service update를 실행하지 않는다. 앱 rollback은 DB rollback을 의미하지 않는다.
+`node --test scripts/*.test.mjs`는 변경 선택, digest 승격, 권한 오류, migration·rollout 실패 복구를 검증한다.
+실제 GKE 배포는 `gcloud`와 환경 자격증명이 있는 staging에서 별도로 실행한다.
+로컬 모의 CLI 결과를 실제 클라우드 배포 성공으로 취급하지 않는다.
 
-안정화·smoke·상태 기록 실패 시 이전 task definition으로 복구하고 마지막 성공 SSM state는 유지한다.
-최초 배포에도 기존 서비스가 필요하지만 최초 정상 릴리스가 없는 경우 복구 대상이 정상이라는 보장은 없다.
-실패한 task의 CloudWatch 로그와 ECS events를 확인하고 수정 후 같은 SHA 재실행 또는 새 CI 성공으로 재시도한다.
-Production 실패 후 `Re-run failed jobs`는 기존 staging release artifact를 다시 사용한다.
-`Re-run all jobs`는 같은 SHA 이름의 artifact를 명시적으로 교체해 upload-artifact v4 충돌을 피한다.
-실패 이전에 성공한 서비스는 유지되므로 여러 서비스가 함께 실패하면 전체 원자적 rollback이라고 가정하지 않는다.
-병렬 배포 중 하나가 실패하면 같은 단계에서 시작한 다른 작업의 검증·복구까지 기다린다.
-실패한 단계 뒤의 서비스는 배포하지 않으며 불완전한 release artifact를 발행하지 않는다.
-성공한 서비스의 SSM state는 유지하므로 다음 실행은 서비스별로 남은 변경을 다시 판단한다.
-
-WS 롤링 배포 중 기존 소켓은 새 task로 이전되지 않는다. 클라이언트 재연결·재인가·재참여가 필요하다.
-WS 사용자 토큰 알고리즘 불일치 등 남은 운영 공개 차단 이슈를 배포 성공만으로 해제하지 않는다.
-
-## 로컬 검증
-
-`node --test scripts/cd*.test.mjs`는 AWS 호출 없이 secret 비노출, digest 고정, 버전 고정,
-필수 healthCheck, 아키텍처 및 release 유효성을 검증한다. Fake AWS/docker CLI를 사용하는
-별도 프로세스 테스트는 smoke 이전 state 갱신 방지, 자동 rollback 판별, smoke 실패 복구,
-SSM 권한 오류, production 미반영 배포 따라잡기와 강제 Secret 회전을 검증한다. CI도 `scripts/*.test.mjs`를 실행한다.
-병렬 실행 검증은 서비스별로 분리된 fake state와 동기화 지점을 사용한다. 빌드·배포의 실제 중첩,
-동시 실행 제한, 전체 빌드 성공 전 배포 금지, 실패한 서비스의 복구와 성공한 서비스의 state 유지,
-변경 없는 서비스 생략 및 HTTP Gateway의 선행 배포 완료 조건을 검증한다.
-`actionlint .github/workflows/cd.yml`로 workflow 문법을 검증한다. 실제 배포 검증은 Secrets와 사전 인프라
-설정 후 staging에서 진행해야 한다.
-
-참고: [GitHub AWS OIDC](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws),
-[AWS ECS update-service](https://docs.aws.amazon.com/cli/latest/reference/ecs/update-service.html),
-[ECS 배포 circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html).
-
-트리거 기준: [GitHub의 push 이벤트](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#push).
-
-전환 시 변경된 workflow를 main에 반영해야 한다. 기존 pull_request_target 실패 실행을 재실행해도
-새 트리거로 바뀌지 않는다. 반영 후 생성된 push 실행에서 staging과 production을 검증한다.
-
-## 운영 저장소 및 파일 공급
-
-[최초 AWS 저장소 연결](./aws-storage.md)의 변수 표·CA 읽기 전용 볼륨·모델 이미지·IAM·검증 차단 조건을 따른다.
-Post 모델 다운로드는 기존 Docker build 내부에서 고정 revision/체크섬으로 수행하며 runtime Secret을 빌드에 전달하지 않는다.
-인증서는 기존 Task Definition volumes/mountPoints로 공급하고 새 버전 경로를 사용한다.
-Secret VersionId 고정·rollback·production 동일 digest 승격과 최초 ECS Service 생성 제외 범위는 변경하지 않는다.
+- [GitHub GCP 인증 Action](https://github.com/google-github-actions/auth).
+- [GKE credentials Action](https://github.com/google-github-actions/get-gke-credentials).
