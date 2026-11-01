@@ -208,8 +208,19 @@ test('Services never route application traffic to migrations or cleanup jobs', (
 test('both workflow jobs use resolved location and production requires opt-in', () => {
   const workflow = readFileSync('.github/workflows/cd.yml', 'utf8');
   assert.equal(
-    workflow.match(/location: \$\{\{ steps.config.outputs.location \}\}/g)
+    workflow.match(/GKE_LOCATION: \$\{\{ steps.config.outputs.location \}\}/g)
       ?.length,
+    2,
+  );
+  assert.doesNotMatch(workflow, /use_auth_provider: true/);
+  assert.equal(
+    workflow.match(
+      /CLOUDSDK_CONTAINER_USE_APPLICATION_DEFAULT_CREDENTIALS: 'true'/g,
+    )?.length,
+    2,
+  );
+  assert.equal(
+    workflow.match(/gcloud container clusters get-credentials/g)?.length,
     2,
   );
   assert.match(
