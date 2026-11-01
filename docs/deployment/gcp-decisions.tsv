@@ -1,2 +1,15 @@
 ts	phase	decision	why	evidence	result
 2026-11-01T00:00:00+09:00	frame	12 commits in one PR; fresh GCP Seoul Autopilot	User selected infrastructure and no data migration	docs/deployment/gcp.md	implementation started
+2026-11-01T01:04:23.668780+00:00	audit	Backfilled phase checkpoints after implementation; timestamps below are audit time	Earlier trail contained only the framing row; commit history is the execution order	docs/deployment/gcp-verification.md	corrected
+2026-11-01T01:04:23.668780+00:00	config	Mounted pinned Secret Manager JSON before starting app	No persistent GCP keys; keep existing env based application contracts	462a0f7	runtime validation and signal test passed
+2026-11-01T01:04:23.668780+00:00	user	Use Cloud SQL Auth Proxy automatic IAM on loopback	Let proxy renew tokens; isolate User and Notification DB roles	466ea9c	User tests and typecheck/build passed; GCP IAM unverified
+2026-11-01T01:04:23.668780+00:00	map	Use authenticated TLS Cassandra direct connection	Remove Keyspaces SigV4 while keeping query and consistency contracts	0a0e173	Map 91 tests passed; local Cassandra TLS LWT verified
+2026-11-01T01:04:23.668780+00:00	notification	Prepare SQL schema then switch every persistence provider together	Avoid mixed DynamoDB/PostgreSQL state during implementation	86240bb a14a9fd	59 unit and 36 real PG/Redis tests passed
+2026-11-01T01:04:23.668780+00:00	media	Pin GCS generation and validate streamed bytes before final copy	Retries must not overwrite or reuse different uploaded bytes	79cb17b	adapter and media tests passed; real GCS smoke unverified
+2026-11-01T01:04:23.668780+00:00	post	Keep Mongo replica set and ECK TLS with bundled fixed model	Preserve transactions and run the actual model in amd64 image	4b88365	storage/model tests passed
+2026-11-01T01:04:23.668780+00:00	redis	Use TLS AOF always and noeviction	Keep Redis command contracts and surface capacity failures	65c8375 docs/deployment/redis-gcp.md	command and local restart smoke passed
+2026-11-01T01:04:23.668780+00:00	infra	Restrict database restore to ProtectedApplication	Restored app or ES writer must not modify original cloud resources	3942291 scripts/gke-storage.mjs	core schemas valid; cloud restore unverified
+2026-11-01T01:04:23.668780+00:00	review	Add managed CSI KSA access and browser GCS CORS	Independent infrastructure review found missing permission and browser preflight setup	scripts/gcp-bootstrap.mjs	fixed and renderer tests passed
+2026-11-01T01:04:23.668780+00:00	runtime	Separate live/ready and forward termination to app	Pod replacement must stop routing before store shutdown	e66eb21	health and actual SIGTERM tests passed
+2026-11-01T01:04:23.668780+00:00	cd	Pin runtime resources and restore previous full resource snapshots	Image-only rollback would leave changed secrets or settings in use	bfc3b55	54 script tests passed; live GKE deployment unverified
+2026-11-01T01:04:23.668780+00:00	audit	Report skipped CRDs and external cloud checks explicitly	Independent gpt-6-astra review flagged evidence gaps, no confirmed High/Critical defect	docs/deployment/gcp-verification.md	review caveats documented

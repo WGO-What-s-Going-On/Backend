@@ -22,7 +22,7 @@ TLS·인증, noeviction, GEO, Lua lease, 미ACK 이벤트 회수·ACK, Pub/Sub�
 3. client reconnect, pending reclaim, 알림 중복 방지, WS 재연결·재인가를 확인한다.
 4. 별도 복원 환경에서 Backup for GKE 복원을 실행하고 같은 데이터를 읽는다.
 
-AOF `appendfsync everysec`는 마지막 약 1초의 쓰기 유실 가능성이 있다.
+AOF `appendfsync always`로 각 쓰기의 디스크 동기화를 요청한다. 단일 노드와 백업 시점 사이의 유실 위험은 남는다.
 Redis Streams의 보존과 PVC는 절대 유실 방지를 보장하지 않는다.
 noeviction 상태에서 메모리가 가득 차면 쓰기가 실패하므로 메모리와 outbox lag를 모니터링한다.
 GEO는 Cassandra에서 재구축하고 Post 검색은 MongoDB에서 재구축한다.

@@ -30,7 +30,7 @@
 런타임 변경 서비스는 Dockerfile 빌드도 확인한다. 현재 lint 명령이 없는 패키지에는 임의 도구를 추가하지 않는다.
 
 `scripts/ci-compose.yaml`은 CI 작업에 필요한 저장소만 실행한다. User는 PostgreSQL·Redis,
-Post는 MongoDB replica set·Redis·Cassandra·Elasticsearch, Map은 Cassandra·Redis, Notification은 DynamoDB Local·Redis,
+Post는 MongoDB replica set·Redis·Cassandra·Elasticsearch, Map은 Cassandra·Redis, Notification은 PostgreSQL·Redis,
 Moderation과 Gateway는 해당 테스트의 Redis를 사용한다. 로컬 Compose 볼륨과 애플리케이션 컨테이너는 사용하지 않는다.
 각 GitHub 작업은 별도 runner이며 Compose 프로젝트 이름에 run ID·attempt·service를 포함한다. 종료 시 해당 프로젝트만 정리한다.
 
@@ -94,3 +94,9 @@ OOMKilled=false였고 메모리/디스크 부족 증거는 없었다. Docker는 
 [MongoDB SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)의 수정 버전과 실제 runner 커널 조합을 검증한 뒤 pin을 해제한다.
 Ubuntu 22 runner는 [지원 종료 예정](https://github.com/actions/runner-images/issues/14254)이므로 장기 해결책으로 두지 않는다.
 MongoDB 외의 CI 작업과 배포 workflow는 변경하지 않는다. 실제 hosted runner 통과 여부는 변경 후 CI에서 확인한다.
+
+## GKE 배포 정의 검증
+
+공통 검사에서 `node --test scripts/*.test.mjs`와 `node scripts/gke-validate.mjs`를 실행한다.
+kubeconform은 고정 버전·체크섬으로 설치하며 core Kubernetes schema를 검증한다.
+GKE/ECK/CSI CRD는 이 schema 검사에서 제외되므로 실제 클러스터 admission 검증이 별도로 필요하다.
