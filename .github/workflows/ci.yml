@@ -43,6 +43,14 @@ jobs:
           node-version: 24
       - name: Test CI and CD selection and deployment helpers
         run: node --test scripts/*.test.mjs
+      - name: Validate rendered Kubernetes core resources
+        env:
+          KUBECONFORM: ${{ runner.temp }}/kubeconform
+        run: |
+          curl --fail --silent --show-error --location https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz --output "$RUNNER_TEMP/kubeconform.tar.gz"
+          echo "c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3  $RUNNER_TEMP/kubeconform.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/kubeconform.tar.gz" -C "$RUNNER_TEMP" kubeconform
+          node scripts/gke-validate.mjs
       - name: Check duplicated Map RPC contract
         run: diff -u services/map-service/contracts/map-authorization.proto services/post-service/contracts/map-authorization.proto
 

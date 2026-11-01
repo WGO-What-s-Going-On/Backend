@@ -11,6 +11,8 @@ import { UsersController } from '../src/users/users.controller.js';
 import { UsersService } from '../src/users/users.service.js';
 import { AuthController } from '../src/auth/auth.controller.js';
 import { AuthService } from '../src/auth/auth.service.js';
+import { DataSource } from 'typeorm';
+import { ReadinessController } from '../src/health/readiness.controller.js';
 import { HealthController } from '../src/health/health.controller.js';
 
 const { privateKey, publicKey } = generateKeyPairSync('ec', {
@@ -41,6 +43,10 @@ function bearer(
     })
     .sign(key);
 }
+const database = {
+  isInitialized: true,
+  query: vi.fn(async () => [{ '?column?': 1 }]),
+};
 const users = { getProfile: vi.fn(async (userId: string) => ({ userId })) };
 const auth = {
   loginWithKakao: vi.fn(async () => ({ accessToken: 'issued' })),
@@ -66,11 +72,17 @@ describe('User REST Gateway trust boundary', () => {
       ],
     });
     const module = await Test.createTestingModule({
-      controllers: [UsersController, AuthController, HealthController],
+      controllers: [
+        UsersController,
+        AuthController,
+        HealthController,
+        ReadinessController,
+      ],
       providers: [
         { provide: UsersService, useValue: users },
         { provide: AuthService, useValue: auth },
         { provide: APP_GUARD, useClass: GatewayAuthGuard },
+        { provide: DataSource, useValue: database },
       ],
     }).compile();
     app = module.createNestApplication();
@@ -191,6 +203,16 @@ describe('User REST Gateway trust boundary', () => {
   });
   it('keeps liveness independent from authentication', async () => {
     await request(app.getHttpServer()).get('/health/live').expect(200);
+  });
+  it('reports database readiness without a Gateway token', async () => {
+    await request(app.getHttpServer())
+      .get('/health/ready')
+      .expect(200)
+      .expect({ status: 'ready' });
+    expect(database.query).toHaveBeenCalledWith('SELECT 1');
+    database.query.mockRejectedValueOnce(new Error('database disconnected'));
+    await request(app.getHttpServer()).get('/health/ready').expect(503);
+    await request(app.getHttpServer()).head('/health/ready').expect(401);
   });
   it('rejects missing keys and private keys at initialization', () => {
     const valid = process.env.USER_HTTP_GATEWAY_TRUSTED_JWKS;

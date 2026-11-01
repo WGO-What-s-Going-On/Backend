@@ -8,12 +8,12 @@ import type { Connection, Model } from 'mongoose';
 import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
 import { LOCATION_AUTHORIZATION } from '../src/post/application/ports.js';
-import { S3MediaStorage } from '../src/post/media/s3-media.storage.js';
+import { GcsMediaStorage } from '../src/post/media/gcs-media.storage.js';
 import { MediaCleanupWorker } from '../src/post/media/media.worker.js';
 import { MediaService } from '../src/post/media/media.service.js';
 import type { MediaRecord } from '../src/post/media/media.schema.js';
 const suite = process.env.RUN_INTEGRATION === '1' ? describe : describe.skip;
-suite('media HTTP and MongoDB transactions (S3 adapter stubbed)', () => {
+suite('media HTTP and MongoDB transactions (GCS adapter stubbed)', () => {
   let app: INestApplication;
   let records: Model<MediaRecord>;
   const upload = {
@@ -29,7 +29,7 @@ suite('media HTTP and MongoDB transactions (S3 adapter stubbed)', () => {
     longitude: 127,
     radiusM: 250,
   };
-  const s3 = {
+  const gcs = {
     config: {
       enabled: true,
       cleanupMs: 3600000,
@@ -82,8 +82,8 @@ suite('media HTTP and MongoDB transactions (S3 adapter stubbed)', () => {
       })
       .overrideProvider(OutboxWorker)
       .useValue({ wake() {} })
-      .overrideProvider(S3MediaStorage)
-      .useValue(s3)
+      .overrideProvider(GcsMediaStorage)
+      .useValue(gcs)
       .overrideProvider(UserProfiles)
       .useValue({
         names: async (ids: number[]) =>
@@ -239,7 +239,7 @@ suite('media HTTP and MongoDB transactions (S3 adapter stubbed)', () => {
     );
     expect(responses.map((r) => r.status).sort()).toEqual([201, 409]);
   });
-  it('rejects pending/expired media and retries cleanup after S3 failure', async () => {
+  it('rejects pending/expired media and retries cleanup after GCS failure', async () => {
     const pending = await api()
       .post('/api/v1/posts/media/uploads')
       .set('X-User-Id', '123')
@@ -265,7 +265,7 @@ suite('media HTTP and MongoDB transactions (S3 adapter stubbed)', () => {
       { mediaId: id },
       { $set: { cleanupAt: new Date(0) } },
     );
-    s3.remove.mockRejectedValueOnce(new Error('unavailable'));
+    gcs.remove.mockRejectedValueOnce(new Error('unavailable'));
     await app.get(MediaCleanupWorker).runOnce();
     expect(await records.exists({ mediaId: id })).not.toBeNull();
     await records.updateOne(
@@ -334,7 +334,7 @@ suite('media HTTP and MongoDB transactions (S3 adapter stubbed)', () => {
     const start = new Promise<void>((resolve) => {
       entered = resolve;
     });
-    s3.verifyAndPromote.mockImplementationOnce(async () => {
+    gcs.verifyAndPromote.mockImplementationOnce(async () => {
       entered();
       await new Promise<void>((resolve) => {
         release = resolve;

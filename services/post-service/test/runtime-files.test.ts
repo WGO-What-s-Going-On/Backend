@@ -58,7 +58,8 @@ it('fails production startup on missing storage settings or TLS bypass', async (
   ).rejects.toThrow('TLS verification');
   const base = {
     NODE_ENV: 'production',
-    MONGODB_URI: 'mongodb://db.example/test?tls=true&tlsCAFile=/absent',
+    MONGODB_URI:
+      'mongodb://db.example/test?tls=true&replicaSet=rs0&tlsCAFile=/absent',
   };
   await expect(
     validateRuntimeFiles({
@@ -79,4 +80,41 @@ it('fails production startup on missing storage settings or TLS bypass', async (
       ELASTICSEARCH_URL: 'https://search.example:9200',
     }),
   ).rejects.toThrow('ELASTICSEARCH_API_KEY');
+});
+
+it('supports explicit system trust without disabling TLS', async () => {
+  const env = {
+    NODE_ENV: 'production',
+    MONGODB_URI: 'mongodb://mongo.example/wgo_post?tls=true&replicaSet=rs0',
+    MONGODB_TLS_CA_SOURCE: 'system',
+    ELASTICSEARCH_URL: 'https://search.example:9200',
+    ELASTICSEARCH_TLS_CA_SOURCE: 'system',
+    ELASTICSEARCH_API_KEY: 'test-key',
+    SEMANTIC_MODEL_ENABLED: 'false',
+  };
+  await expect(validateRuntimeFiles(env)).resolves.toBeUndefined();
+  await expect(
+    validateRuntimeFiles({ ...env, MONGODB_TLS_CA_SOURCE: 'file' }),
+  ).rejects.toThrow('tlsCAFile');
+  await expect(
+    validateRuntimeFiles({ ...env, MONGODB_TLS_CA_SOURCE: 'typo' }),
+  ).rejects.toThrow('file or system');
+  await expect(
+    validateRuntimeFiles({
+      ...env,
+      MONGODB_URI: env.MONGODB_URI + '&tlsCAFile=/unused',
+    }),
+  ).rejects.toThrow('omitted');
+  await expect(
+    validateRuntimeFiles({ ...env, ELASTICSEARCH_TLS_CA_SOURCE: 'file' }),
+  ).rejects.toThrow('NODE_EXTRA_CA_CERTS');
+  await expect(
+    validateRuntimeFiles({ ...env, NODE_EXTRA_CA_CERTS: '/unused' }),
+  ).rejects.toThrow('omitted');
+  await expect(
+    validateRuntimeFiles({
+      ...env,
+      MONGODB_URI: 'mongodb://mongo.example/wgo_post?tls=true',
+    }),
+  ).rejects.toThrow('replicaSet');
 });

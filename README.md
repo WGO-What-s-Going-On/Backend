@@ -169,3 +169,11 @@ Moderation은 문서 수집 미지원이다. `/api/v1/terms`는 현재 Gateway �
 일반 API는 계속 동작한다. production에서는 활성화 설정과 관계없이 문서·자산을
 노출하지 않는다. 활성화·인증 계약·컨테이너 설정·제한 사항은
 [HTTP Gateway README](gateways/http-gateway/README.md#통합-공개-openapi--swagger-로컬dev-전용)를 참고한다.
+
+## GCP 개발·데모 배포
+
+서울 GKE Autopilot에 7개 앱을 독립 배포한다. User·Notification은 Cloud SQL PostgreSQL,
+Post는 MongoDB replica set과 Cloud Storage, Map은 Cassandra·Redis GEO를 사용한다.
+MongoDB·Redis·Cassandra와 ECK Elasticsearch는 클러스터 내부에서 PVC를 사용한다.
+[초기화·설정](docs/deployment/gcp.md), [저장소·백업·복원](docs/deployment/gcp-storage.md),
+[CI/CD](docs/deployment/cd.md), [검증 결과와 미검증 항목](docs/deployment/gcp-verification.md)을 참고한다.

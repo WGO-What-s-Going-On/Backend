@@ -11,7 +11,7 @@ Backend architecture:
 - Event-driven architecture
 - Redis Streams for asynchronous domain events
 - gRPC/HTTP for synchronous communication
-- ECS Fargate deployment
+- GKE Autopilot deployment
 
 Applications:
 
@@ -324,7 +324,7 @@ Use repository-defined commands.
 17. **마이그레이션과 운영 안정성**
     - 스키마·인덱스·제약 변경의 기존 데이터 호환성, 잠금, 실행 시간, backfill과 배포 순서를 검토한다.
     - 신·구 버전이 공존하는 배포에서 계약과 데이터를 호환하고, 실패 시 rollback 또는 복구 절차가 가능한지 확인한다.
-    - ECS Fargate의 다중 인스턴스·무상태 실행, readiness/liveness, graceful shutdown 중 요청·이벤트 처리를 확인한다.
+    - GKE Autopilot의 다중 Pod·무상태 실행, readiness/liveness, graceful shutdown 중 요청·이벤트 처리를 확인한다.
     - 위험한 변경에 필요한 단계적 전환과 feature flag를 검토하되 모든 변경에 일률적으로 요구하지 않는다.
 
 ---

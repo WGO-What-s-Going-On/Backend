@@ -11,6 +11,7 @@ async function bootstrap(): Promise<void> {
   const config = app.get(ConfigService);
   const port = config.getOrThrow<number>('app.port');
 
+  app.enableShutdownHooks();
   configureSwagger(app);
 
   await app.listen(port);

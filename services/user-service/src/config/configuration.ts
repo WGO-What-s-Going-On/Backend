@@ -28,7 +28,8 @@ export function configuration() {
     database: {
       ssl: databaseTls(),
       ...connection,
-      password: databasePassword(connection),
+      password: databasePassword(),
+      poolSize: positiveInteger(process.env.DB_POOL_MAX, 10, 'DB_POOL_MAX'),
       name: process.env.DB_NAME ?? 'wgo_user',
     },
     redis: {

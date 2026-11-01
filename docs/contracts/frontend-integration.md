@@ -109,7 +109,7 @@ Swagger에 목록 응답 스키마가 포함된다.
 - `GET/PATCH /notifications/settings`: nearby, replies, reactions, lifecycle boolean. 기본 모두 true.
   PATCH는 일부 필드만 보내도 되며 동시 수정은 서로 다른 설정을 덮어쓰지 않는다.
 - `GET/PUT /notifications/boards/{postId}`: `{postId,enabled}` / PUT body `{enabled:boolean}`.
-- 설정은 기존 Notification DynamoDB event-state 테이블의 `USER#<id>` 파티션에 보관한다.
+- 설정은 Notification PostgreSQL의 `notification_preferences`·`notification_board_preferences` 테이블에 보관한다.
 - 구현된 댓글·게시글 반응 이벤트는 설정이 꺼져 있으면 신규 Inbox·Push를 생성하지 않는다.
   대기 중 Push도 전달 직전에 설정을 확인한다. 이미 만들어진 Inbox 기록은 설정 변경으로 삭제하지 않는다.
   nearby/lifecycle 값 저장은 지원하되 기존에 없던 주변 새 글·종료 알림 fan-out을 새로 생성하지는 않는다.
@@ -159,5 +159,5 @@ Swagger에 목록 응답 스키마가 포함된다.
 
 MongoDB 통합 테스트는 프론트 응답·답글·반응·종료/재개·권한·행정동 점수 분리를 검증한다.
 닉네임 RPC와 Map 후보는 테스트 대역이며, Map 행정동 응답과 좌표 순서는 HTTP 대역으로 별도 검증한다.
-Notification은 실제 로컬 DynamoDB/Redis에서 설정·삭제·전체 읽음을 검증한다.
-실제 카카오 OAuth/행정구역, 운영 DocumentDB 호환성·성능, 실제 FCM 전송은 로컬 테스트 통과로 대체하지 않는다.
+Notification은 실제 로컬 PostgreSQL/Redis에서 설정·삭제·전체 읽음을 검증한다.
+실제 카카오 OAuth/행정구역, 운영 MongoDB replica set 호환성·성능, 실제 FCM 전송은 로컬 테스트 통과로 대체하지 않는다.

@@ -236,10 +236,29 @@ export async function listenGrpc(server: Server, port: number): Promise<void> {
 export function createHttpServer(
   store: LocationStore,
   index?: Pick<PostIndex, 'nearby'>,
+  readiness: () => Promise<boolean> = async () => false,
 ): HttpServer {
   return createServer(async (request, response) => {
     if (await serveSwagger(request, response)) return;
     const url = new URL(request.url ?? '/', 'http://localhost');
+    if (
+      request.method === 'GET' &&
+      ['/health/live', '/health/ready'].includes(url.pathname)
+    ) {
+      let ready = url.pathname === '/health/live';
+      if (!ready) {
+        try {
+          ready = await readiness();
+        } catch {
+          ready = false;
+        }
+      }
+      response.writeHead(ready ? 200 : 503, {
+        'content-type': 'application/json',
+      });
+      response.end(JSON.stringify({ status: ready ? 'ok' : 'unavailable' }));
+      return;
+    }
     if (
       request.method === 'GET' &&
       url.pathname === '/internal/v1/posts/nearby'

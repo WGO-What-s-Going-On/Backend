@@ -21,6 +21,10 @@ describe('health endpoint', () => {
     await app.close();
   });
 
+  it('reports unavailable readiness without a database', async () => {
+    await request(app.getHttpServer()).get('/health/ready').expect(503);
+  });
+
   it('reports liveness without a database connection', async () => {
     await request(app.getHttpServer())
       .get('/health/live')

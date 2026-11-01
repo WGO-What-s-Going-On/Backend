@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       initial_deployment:
-        description: 'Start staging services with no successful deployment from 0 to 1'
+        description: 'Bootstrap GKE staging applications after infrastructure initialization'
         type: boolean
         default: false
         required: true
@@ -53,19 +53,14 @@ jobs:
       contents: read
       id-token: write
     env:
-      CD_INITIAL_DEPLOYMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.initial_deployment && 'true' || 'false' }}
       CD_SHA: ${{ github.sha }}
+      CD_INITIAL_DEPLOYMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.initial_deployment && 'true' || 'false' }}
       CD_BUILD_CONCURRENCY: ${{ vars.CD_BUILD_CONCURRENCY || '2' }}
       CD_DEPLOY_CONCURRENCY: ${{ vars.CD_DEPLOY_CONCURRENCY || '4' }}
-      CD_FORCE_SERVICES: ${{ secrets.CD_FORCE_SERVICES }}
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-      ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-      ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-      CD_IMAGE_PLATFORM: ${{ secrets.CD_IMAGE_PLATFORM }}
-      CD_STATE_PREFIX: ${{ secrets.CD_STATE_PREFIX }}
-      CD_SERVICES_JSON: ${{ secrets.CD_SERVICES_JSON }}
-      CD_RUNTIME_SECRETS_JSON: ${{ secrets.CD_RUNTIME_SECRETS_JSON }}
+      CD_FORCE_SERVICES: ${{ vars.CD_FORCE_SERVICES }}
+      CD_IMAGE_PLATFORM: linux/amd64
+      GCP_ENV_FILE: /tmp/wgo-gcp-environment.json
+      GCP_ENV_JSON: ${{ vars.GCP_ENV_JSON }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,21 +70,38 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Validate non-secret environment configuration
+        id: config
+        run: |
+          node --input-type=module <<'JS'
+          import { writeFileSync, appendFileSync } from 'node:fs';
+          import { validateEnvironment, clusterLocation } from './scripts/gke-lib.mjs';
+          const config = validateEnvironment(JSON.parse(process.env.GCP_ENV_JSON));
+          writeFileSync(process.env.GCP_ENV_FILE, JSON.stringify(config), { mode: 0o600 });
+          appendFileSync(process.env.GITHUB_OUTPUT, `project=${config.project}\ncluster=${config.cluster}\nlocation=${clusterLocation(config)}\n`);
+          JS
+      - uses: google-github-actions/auth@v3
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-          mask-aws-account-id: true
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          project_id: ${{ steps.config.outputs.project }}
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          install_components: gke-gcloud-auth-plugin
+      - uses: google-github-actions/get-gke-credentials@v3
+        with:
+          cluster_name: ${{ steps.config.outputs.cluster }}
+          location: ${{ steps.config.outputs.location }}
+          project_id: ${{ steps.config.outputs.project }}
+          use_dns_based_endpoint: true
+          use_auth_provider: true
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-      - name: Authenticate to ECR without logging credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-      - name: Build changed images and deploy staging in parallel
+      - name: Authenticate Artifact Registry
+        run: gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet
+      - name: Build changed images and deploy GKE
         run: node scripts/cd.mjs staging
-      - name: Save tested immutable release (no task definitions or secret values)
+      - name: Save verified image digests without runtime secrets
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ github.sha }}
@@ -99,30 +111,25 @@ jobs:
           retention-days: 30
       - name: Remove registry credentials
         if: always()
-        run: docker logout "$ECR_REGISTRY"
+        run: docker logout asia-northeast3-docker.pkg.dev
 
   production:
     needs: staging
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && vars.CD_ENABLE_PRODUCTION == 'true'
     runs-on: ubuntu-latest
-    # Configure required reviewers and branch restrictions in this GitHub Environment.
     environment: production
     permissions:
       contents: read
       id-token: write
     env:
       CD_SHA: ${{ github.sha }}
+      CD_INITIAL_DEPLOYMENT: 'false'
       CD_BUILD_CONCURRENCY: ${{ vars.CD_BUILD_CONCURRENCY || '2' }}
       CD_DEPLOY_CONCURRENCY: ${{ vars.CD_DEPLOY_CONCURRENCY || '4' }}
-      CD_FORCE_SERVICES: ${{ secrets.CD_FORCE_SERVICES }}
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-      ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-      ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-      CD_IMAGE_PLATFORM: ${{ secrets.CD_IMAGE_PLATFORM }}
-      CD_STATE_PREFIX: ${{ secrets.CD_STATE_PREFIX }}
-      CD_SERVICES_JSON: ${{ secrets.CD_SERVICES_JSON }}
-      CD_RUNTIME_SECRETS_JSON: ${{ secrets.CD_RUNTIME_SECRETS_JSON }}
+      CD_FORCE_SERVICES: ${{ vars.CD_FORCE_SERVICES }}
+      CD_IMAGE_PLATFORM: linux/amd64
+      GCP_ENV_FILE: /tmp/wgo-gcp-environment.json
+      GCP_ENV_JSON: ${{ vars.GCP_ENV_JSON }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -132,13 +139,33 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Validate non-secret environment configuration
+        id: config
+        run: |
+          node --input-type=module <<'JS'
+          import { writeFileSync, appendFileSync } from 'node:fs';
+          import { validateEnvironment, clusterLocation } from './scripts/gke-lib.mjs';
+          const config = validateEnvironment(JSON.parse(process.env.GCP_ENV_JSON));
+          writeFileSync(process.env.GCP_ENV_FILE, JSON.stringify(config), { mode: 0o600 });
+          appendFileSync(process.env.GITHUB_OUTPUT, `project=${config.project}\ncluster=${config.cluster}\nlocation=${clusterLocation(config)}\n`);
+          JS
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          project_id: ${{ steps.config.outputs.project }}
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          install_components: gke-gcloud-auth-plugin
+      - uses: google-github-actions/get-gke-credentials@v3
+        with:
+          cluster_name: ${{ steps.config.outputs.cluster }}
+          location: ${{ steps.config.outputs.location }}
+          project_id: ${{ steps.config.outputs.project }}
+          use_dns_based_endpoint: true
+          use_auth_provider: true
       - uses: actions/download-artifact@v4
         with:
           name: release-${{ github.sha }}
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-          mask-aws-account-id: true
-      - name: Promote changed staging digests in parallel and verify production
+      - name: Promote the staging digests without rebuilding
         run: node scripts/cd.mjs production

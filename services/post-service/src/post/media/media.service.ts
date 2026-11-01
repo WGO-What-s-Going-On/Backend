@@ -7,7 +7,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import { randomUUID } from 'node:crypto';
-import { S3MediaStorage } from './s3-media.storage.js';
+import { GcsMediaStorage } from './gcs-media.storage.js';
 import {
   MEDIA_ID,
   MEDIA_TYPES,
@@ -23,7 +23,7 @@ export function mediaId(value: string) {
 export class MediaService {
   constructor(
     @InjectModel('Media') readonly records: Model<MediaRecord>,
-    readonly storage: S3MediaStorage,
+    readonly storage: GcsMediaStorage,
   ) {}
   async initiate(ownerId: number, input: unknown) {
     this.storage.requireEnabled();

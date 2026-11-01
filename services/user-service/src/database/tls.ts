@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { X509Certificate } from 'node:crypto';
+import { databaseConnectionMode } from './connection-mode.js';
 
 // 앱과 migration이 같은 검증 정책을 사용해야 배포 중 연결 정책이 달라지지 않는다.
 export function databaseTls(
   env = process.env,
 ): false | { ca?: string; rejectUnauthorized: true } {
+  if (databaseConnectionMode(env) === 'cloud-sql-proxy') return false;
   const mode = env.DB_TLS_MODE ?? 'disable';
   const source = env.DB_TLS_CA_SOURCE ?? 'file';
   if (!['file', 'system'].includes(source))
@@ -18,7 +20,7 @@ export function databaseTls(
       throw new Error('DB_TLS_CA_PATH requires DB_TLS_MODE=verify-full');
     return false;
   }
-  // Aurora Express uses public AWS roots, while VPC RDS uses the supplied RDS CA bundle.
+  // Public CA roots and private CA bundles both retain hostname verification.
   if (source === 'system') {
     if (env.DB_TLS_CA_PATH)
       throw new Error(

@@ -4,19 +4,14 @@
 Post→Map 전환을 운영에 적용하고, 이후 HS256을 제거하기 위한 작업 목록이다.
 현재 저장소의 코드와 테스트에는 Map의 HS256·ES256 동시 검증과 Post의 ES256 서명이
 구현되어 있다. **운영 배포, 운영 키 주입, 내부 gRPC TLS 확인은 완료된 것으로
-간주하지 않는다.** 이 저장소에는 ECS 배포 정의가 없으므로 실제 배포 설정과
-관측 결과는 운영 작업 기록에 남긴다.
+간주하지 않는다.** GKE 배포 설정과 관측 결과는 운영 작업 기록에 남긴다.
 
 ## 1. 운영 배포 전 준비
 
-- [ ] ECS [task definition의 `secrets`](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html)로
-      개인키를 Secrets Manager에서 Post에 주입한다. Map 공개 JWKS도 배포 설정으로
-      주입한다. Secrets Manager 값 변경은 실행 중인 task에 자동 반영되지 않으므로
-      키 교체 때 새 task를 배포한다.
-- [ ] Map task의 보안 그룹은 [Post task의 보안 그룹에서 오는 gRPC 트래픽만](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/security-network.html)
-      허용하도록 설계한다. 모든 서비스가 같은 보안 그룹을 공유하거나 Map 앱 포트에
-      우회 경로가 있으면 이 제한을 보장할 수 없으므로 실제 ECS service의 네트워크
-      설정과 연결 경로를 확인한다.
+- [ ] Secret Manager에서 Post 개인키와 Map 공개 JWKS를 서비스별 Secret으로 주입한다.
+      환경변수에 주입한 값은 실행 중인 Pod에서 자동 갱신되지 않으므로 키 버전 변경 후 rollout한다.
+- [ ] Map gRPC Service는 ClusterIP로 두고 NetworkPolicy로 Post Pod에서 오는 연결만 허용한다.
+      허용되지 않은 Pod와 외부 클라이언트의 연결 실패를 확인한다.
 - [ ] Post 전용 P-256 키 쌍을 운영 비밀 관리 체계에서 생성한다. 개인 JWK는
       `POST_SERVICE_SIGNING_JWK`로 Post 런타임에만 주입하고, 공개 JWK는
       `MAP_SERVICE_TRUSTED_JWKS`의 `keys` 배열에 등록한다. 두 설정의 `kid`를
@@ -25,26 +20,18 @@ Post→Map 전환을 운영에 적용하고, 이후 HS256을 제거하기 위한
 - [ ] 기존 Post 버전으로 되돌릴 수 있도록 Map과 이전 Post 버전의
       `MAP_SERVICE_JWT_SECRET` 주입을 유지한다. 새 Post 버전은 이 값을 서명에
       사용하지 않는다.
-- [ ] Post↔Map 실제 운영 네트워크 구간에 TLS가 적용되는지 배포 설정과 연결
-      시험으로 확인한다. [ECS Service Connect TLS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-connect-tls.html)를
-      쓰면 ECS service 설정과 Private CA로 프록시 간 구간을 암호화할 수 있다.
-      이 경우 앱의 `createInsecure()`는 앱과 같은 task의 프록시 사이 연결에
-      사용되며, [AWS의 검증 절차](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/verify-tls-enabled.html)로
-      실제 Post→Map 연결이 프록시를 통과하는지 확인한다. Service Connect를
-      사용하지 않거나 앱 포트로 직접 우회할 수 있으면 별도 TLS 구성이 필요하다.
-      적용 계층, 인증서 갱신 방법, 확인 결과를 운영 작업 기록에 남긴다.
+- [ ] 현재 개발·데모의 Post→Map gRPC는 사설 네트워크의 평문 HTTP/2다.
+      NetworkPolicy와 서비스 JWT 검증을 적용하고 전송 암호화를 적용했다고 주장하지 않는다.
+      TLS를 도입하면 실제 트래픽 경로와 인증서 갱신을 별도 검증한다.
 - [ ] `CheckPostCreation`과 `CheckPostParticipation`의 호출 수·성공률·
       gRPC `UNAUTHENTICATED`/`PERMISSION_DENIED`/`UNAVAILABLE`/
       `DEADLINE_EXCEEDED`를 확인할 수 있는 관측 경로를 준비한다. Post의 생성·참여
       403·503 비율도 전환 전 기준값과 비교할 수 있어야 한다. 필요한 계측이 없다면
       먼저 추가한다. 토큰과 키 값은 계측·로그에 포함하지 않는다.
 
-보안 그룹은 연결 가능한 네트워크 범위를 제한하고 Service Connect TLS는 프록시 간
-트래픽을 암호화한다. ECS task role은 컨테이너의 AWS API 권한이다. 현재 계약에서
-Map이 호출 서비스를 식별하고 RPC 권한을 확인하는 수단은 서비스 JWT다. 따라서
-ECS 설정을 적용해도 JWT 검증을 제거하지 않는다. 네트워크 신뢰만으로 운영하는
-정책으로 변경하려면 [인증 계약](../../docs/contracts/service-authentication.md)의
-신뢰 경계와 권한표를 먼저 재설계해야 한다.
+NetworkPolicy는 연결 가능한 범위를 제한한다. Workload Identity는 Google Cloud API 접근 권한이다.
+Map이 호출 서비스를 식별하고 RPC 권한을 확인하는 수단은 서비스 JWT다.
+GKE 설정을 적용해도 JWT 검증을 제거하지 않는다.
 
 ## 2. 순차 배포와 확인
 

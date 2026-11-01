@@ -15,12 +15,33 @@ void consumer.run().catch((error) => {
   process.exitCode = 1;
 });
 await listenGrpc(grpc, Number(process.env.GRPC_PORT ?? 50051));
-const http = createHttpServer(store, index);
+let stopping = false;
+const http = createHttpServer(store, index, async () => {
+  if (stopping || !store.cache.isReady || !index.redis.isReady) return false;
+  await store.db.execute('SELECT release_version FROM system.local', [], {
+    readTimeout: 2000,
+  });
+  return true;
+});
 http.listen(Number(process.env.HTTP_PORT ?? 3003));
 const close = async () => {
+  if (stopping) return;
+  stopping = true;
   consumer.stop();
-  http.close();
-  grpc.forceShutdown();
+  const httpClosed = new Promise<void>((resolve) =>
+    http.close(() => resolve()),
+  );
+  const grpcClosed = new Promise<void>((resolve) => {
+    const deadline = setTimeout(() => {
+      grpc.forceShutdown();
+      resolve();
+    }, 10000);
+    grpc.tryShutdown(() => {
+      clearTimeout(deadline);
+      resolve();
+    });
+  });
+  await Promise.all([httpClosed, grpcClosed]);
   await index.close();
   await store.close();
 };

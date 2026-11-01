@@ -1,3 +1,4 @@
+import { postgresConfig } from '../persistence/postgres.config.js';
 function positiveInteger(
   value: string | undefined,
   fallback: number,
@@ -13,31 +14,13 @@ function positiveInteger(
 }
 
 export function configuration() {
-  if (process.env.NODE_ENV === 'production') {
-    for (const name of [
-      'DYNAMODB_ENDPOINT',
-      'AWS_ENDPOINT_URL',
-      'AWS_ENDPOINT_URL_DYNAMODB',
-      'AWS_ACCESS_KEY_ID',
-      'AWS_SECRET_ACCESS_KEY',
-      'AWS_SESSION_TOKEN',
-      'AWS_PROFILE',
-    ]) {
-      if (process.env[name])
-        throw new Error(
-          `${name} must be unset in production; use the ECS Task Role`,
-        );
-    }
-    for (const name of [
-      'AWS_REGION',
-      'DYNAMODB_NOTIFICATIONS_TABLE',
-      'DYNAMODB_PUSH_SUBSCRIPTIONS_TABLE',
-      'DYNAMODB_EVENT_STATE_TABLE',
-    ]) {
-      if (!process.env[name]?.trim())
-        throw new Error(`${name} is required in production`);
-    }
-  }
+  if (
+    Boolean(process.env.FIREBASE_CLIENT_EMAIL?.trim()) !==
+    Boolean(process.env.FIREBASE_PRIVATE_KEY?.trim())
+  )
+    throw new Error(
+      'Firebase explicit credentials require both FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY',
+    );
   return {
     app: {
       port: positiveInteger(process.env.PORT, 3004, 'PORT'),
@@ -45,13 +28,7 @@ export function configuration() {
     redis: {
       url: process.env.REDIS_URL,
     },
-    dynamodb: {
-      region: process.env.AWS_REGION,
-      endpoint: process.env.DYNAMODB_ENDPOINT,
-      notificationsTable: process.env.DYNAMODB_NOTIFICATIONS_TABLE,
-      pushSubscriptionsTable: process.env.DYNAMODB_PUSH_SUBSCRIPTIONS_TABLE,
-      eventStateTable: process.env.DYNAMODB_EVENT_STATE_TABLE,
-    },
+    database: postgresConfig(),
     firebase: {
       projectId: process.env.FIREBASE_PROJECT_ID,
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL,

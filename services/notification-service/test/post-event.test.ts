@@ -6,7 +6,7 @@ import {
 } from '../src/event-consumer/post-event.js';
 import { PostEventConsumer } from '../src/event-consumer/post-event.consumer.js';
 import { PostEventHandler } from '../src/event-consumer/post-event.handler.js';
-import { BusyDeliveryError } from '../src/persistence/dynamodb-event.store.js';
+import { BusyDeliveryError } from '../src/persistence/postgres-event.store.js';
 import { wire } from './helpers/post-events.js';
 const types: SupportedPostEventType[] = [
   'PostCreated',

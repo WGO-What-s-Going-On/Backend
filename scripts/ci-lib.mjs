@@ -7,6 +7,8 @@ export const manifest = JSON.parse(
 export const services = manifest.services;
 const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const sharedRuntime = /^(?:shared|packages)\//;
+const deploymentConfiguration =
+  /^(?:deploy\/gke\/|scripts\/(?:gke|gcp|cd)[^/]*\.(?:mjs|cjs|sh)$|\.github\/workflows\/cd\.ya?ml$)/;
 const globalValidation =
   /^(?:\.github\/workflows\/ci\.ya?ml$|scripts\/ci[^/]*\.(?:mjs|json|ya?ml)$|package(?:-lock)?\.json$|pnpm-(?:lock|workspace)\.yaml$|\.npmrc$|\.prettier(?:rc\.json|ignore)$)/;
 const documentation =
@@ -32,7 +34,10 @@ export function selectChanges(files, { all = false } = {}) {
   const validateAll =
     all ||
     files.some(
-      (file) => globalValidation.test(file) || sharedRuntime.test(file),
+      (file) =>
+        globalValidation.test(file) ||
+        sharedRuntime.test(file) ||
+        deploymentConfiguration.test(file),
     );
   if (validateAll) services.forEach((service) => selected.add(service.name));
   if (all || files.some((file) => sharedRuntime.test(file)))
@@ -72,9 +77,15 @@ export function selectChanges(files, { all = false } = {}) {
     },
     has_services: selected.size > 0,
     deploy_matrix: {
-      include: services.filter((service) => deploy.has(service.name)),
+      include: services.filter(
+        (service) =>
+          deploy.has(service.name) ||
+          files.some((file) => deploymentConfiguration.test(file)),
+      ),
     },
-    has_deploy: deploy.size > 0,
+    has_deploy:
+      deploy.size > 0 ||
+      files.some((file) => deploymentConfiguration.test(file)),
     integration_user_gateway: integrations.has('user-gateway'),
     integration_ws_post: integrations.has('ws-post'),
   };

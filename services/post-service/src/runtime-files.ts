@@ -17,11 +17,17 @@ export async function validateRuntimeFiles(env = process.env) {
     if (
       !['mongodb:', 'mongodb+srv:'].includes(uri.protocol) ||
       uri.searchParams.get('tls') !== 'true' ||
-      !uri.searchParams.get('tlsCAFile')
+      !uri.searchParams.get('replicaSet')
     )
       throw new Error(
-        'MONGODB_URI requires tls=true and tlsCAFile in production',
+        'MONGODB_URI requires tls=true and replicaSet in production',
       );
+    validateTrustSource(
+      env.MONGODB_TLS_CA_SOURCE,
+      uri.searchParams.get('tlsCAFile'),
+      'MONGODB_TLS_CA_SOURCE',
+      'MONGODB_URI tlsCAFile',
+    );
     for (const [key, value] of uri.searchParams)
       if (
         [
@@ -41,9 +47,14 @@ export async function validateRuntimeFiles(env = process.env) {
       }
       if (url.protocol !== 'https:' || url.username || url.password)
         throw new Error('ELASTICSEARCH_URL must be HTTPS without credentials');
-      for (const name of ['ELASTICSEARCH_API_KEY', 'NODE_EXTRA_CA_CERTS'])
-        if (!env[name]?.trim())
-          throw new Error(`${name} is required in production`);
+      if (!env.ELASTICSEARCH_API_KEY?.trim())
+        throw new Error('ELASTICSEARCH_API_KEY is required in production');
+      validateTrustSource(
+        env.ELASTICSEARCH_TLS_CA_SOURCE,
+        env.NODE_EXTRA_CA_CERTS,
+        'ELASTICSEARCH_TLS_CA_SOURCE',
+        'NODE_EXTRA_CA_CERTS',
+      );
     }
   }
   // Node는 잘못된 extra CA를 경고만 하고 무시하므로 앱 시작 전에 다시 검사한다.
@@ -79,4 +90,19 @@ export async function validateRuntimeFiles(env = process.env) {
     env.SEMANTIC_MODEL_ENABLED !== 'false'
   )
     await verifyModel(env.SEMANTIC_MODEL_PATH ?? modelPath());
+}
+
+function validateTrustSource(
+  source: string | undefined,
+  path: string | null | undefined,
+  name: string,
+  pathName: string,
+) {
+  const trust = source ?? 'file';
+  if (trust !== 'file' && trust !== 'system')
+    throw new Error(`${name} must be file or system`);
+  if (trust === 'file' && !path?.trim())
+    throw new Error(`${pathName} is required for file trust in production`);
+  if (trust === 'system' && path)
+    throw new Error(`${pathName} must be omitted for system trust`);
 }

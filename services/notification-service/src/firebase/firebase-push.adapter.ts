@@ -1,6 +1,11 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { cert, getApps, initializeApp } from 'firebase-admin/app';
+import {
+  applicationDefault,
+  cert,
+  getApps,
+  initializeApp,
+} from 'firebase-admin/app';
 import {
   getMessaging,
   type BatchResponse,
@@ -105,12 +110,19 @@ export class FirebasePushAdapter implements PushSender {
     const privateKey = this.config
       .get<string>('firebase.privateKey')
       ?.replace(/\\n/g, '\n');
-    if (!projectId || !clientEmail || !privateKey)
-      throw new Error('Firebase credentials are not configured');
+    if (!projectId) throw new Error('FIREBASE_PROJECT_ID is required');
+    if (Boolean(clientEmail) !== Boolean(privateKey))
+      throw new Error(
+        'Firebase explicit credentials require both client email and private key',
+      );
     const app =
       getApps()[0] ??
       initializeApp({
-        credential: cert({ projectId, clientEmail, privateKey }),
+        projectId,
+        credential:
+          clientEmail && privateKey
+            ? cert({ projectId, clientEmail, privateKey })
+            : applicationDefault(),
       });
     this.messaging = getMessaging(app);
     return this.messaging;

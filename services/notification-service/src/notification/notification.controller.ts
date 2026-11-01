@@ -1,5 +1,5 @@
 import { Optional } from '@nestjs/common';
-import { DynamoDbEventStore } from '../persistence/dynamodb-event.store.js';
+import { PostgresEventStore } from '../persistence/postgres-event.store.js';
 import { HttpCode } from '@nestjs/common';
 import { ApiOperation, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { UseGuards } from '@nestjs/common';
@@ -29,7 +29,7 @@ export class NotificationController {
   constructor(
     private readonly notifications: NotificationService,
     private readonly subscriptions: PushSubscriptionService,
-    @Optional() private readonly settings?: DynamoDbEventStore,
+    @Optional() private readonly settings?: PostgresEventStore,
   ) {}
 
   @Get('settings')
