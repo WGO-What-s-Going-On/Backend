@@ -252,11 +252,23 @@ export async function deploy({
             '-e',
             `fetch('http://127.0.0.1:${port}/health/ready',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))`,
           );
+          // Ingress backends can converge after Pod readiness; retry transient failures before rollback.
           if (name === 'http-gateway' || name === 'ws-gateway')
             await run('curl', [
               '--fail',
               '--silent',
               '--show-error',
+              '--retry',
+              '24',
+              '--retry-delay',
+              '5',
+              '--retry-max-time',
+              '120',
+              '--retry-connrefused',
+              '--connect-timeout',
+              '5',
+              '--output',
+              '/dev/null',
               '--max-time',
               '15',
               `https://${name === 'http-gateway' ? config.domain : config.wsDomain}/health/ready`,
