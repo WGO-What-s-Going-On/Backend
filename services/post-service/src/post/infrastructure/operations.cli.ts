@@ -34,10 +34,13 @@ async function main() {
   if (
     !command ||
     arity[command] === undefined ||
-    arity[command] !== args.length
+    !(
+      arity[command] === args.length ||
+      (command === 'moderate-comment' && args.length === 4)
+    )
   )
     throw new Error(
-      'Usage: post:operations outbox-failed | reaction-conflicts | outbox-retry <eventId> <reason> | schedule-expiration <postId> <ISO-date> | expire <postId> | moderate-post <postId> <decisionId> | moderate-comment <postId> <commentId> <decisionId>',
+      'Usage: post:operations outbox-failed | reaction-conflicts | outbox-retry <eventId> <reason> | schedule-expiration <postId> <ISO-date> | expire <postId> | moderate-post <postId> <decisionId> | moderate-comment <postId> <commentId> <decisionId> [reviewedActivityVersion]',
     );
   if (
     !command.startsWith('outbox') &&
@@ -132,7 +135,12 @@ async function main() {
     if (command === 'expire') await lifecycle.expire(id!);
     if (command === 'moderate-post') await lifecycle.moderatePost(id!, value!);
     if (command === 'moderate-comment')
-      await lifecycle.moderateComment(id!, value!, extra!);
+      await lifecycle.moderateComment(
+        id!,
+        value!,
+        extra!,
+        rest[0] === undefined ? 1 : Number(rest[0]),
+      );
     console.info({ command, postId: id, completed: true });
   } finally {
     await db.close();

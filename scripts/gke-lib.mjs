@@ -41,6 +41,30 @@ export function validateEnvironment(config) {
     throw new Error(
       'Explicit HTTPS webOrigins required (HTTP localhost allowed for Standard demo)',
     );
+  if (
+    config.websocketOrigins !== undefined &&
+    (!Array.isArray(config.websocketOrigins) ||
+      !config.websocketOrigins.length ||
+      config.websocketOrigins.some((origin) => {
+        if (typeof origin !== 'string' || origin.includes('*')) return true;
+        if (origin === 'capacitor://localhost') return false;
+        try {
+          const url = new URL(origin);
+          const localDemo =
+            config.deploymentProfile === 'standard-demo' &&
+            url.protocol === 'http:' &&
+            url.hostname === 'localhost';
+          return (
+            (url.protocol !== 'https:' && !localDemo) || url.origin !== origin
+          );
+        } catch {
+          return true;
+        }
+      }))
+  )
+    throw new Error(
+      'Explicit HTTPS or capacitor://localhost websocketOrigins required (HTTP localhost allowed for Standard demo)',
+    );
   for (const [name, version] of Object.entries(config.secretVersions ?? {})) {
     if (
       !applications.some(([app]) => app === name) ||
@@ -137,7 +161,9 @@ export function appResources(config, name, image) {
     HTTP_PORT: String(port),
     LOG_PRETTY: 'false',
     CORS_ORIGINS: config.webOrigins.join(','),
-    WS_ALLOWED_ORIGINS: config.webOrigins.join(','),
+    WS_ALLOWED_ORIGINS: (config.websocketOrigins ?? config.webOrigins).join(
+      ',',
+    ),
     NODE_EXTRA_CA_CERTS: '/app/certs/redis-ca.pem',
     DEPLOYMENT_ENV: 'staging',
     USER_GRPC_HOST: '0.0.0.0',

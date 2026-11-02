@@ -1,5 +1,8 @@
 import { closeVote } from './vote.js';
 import {
+  CommentEditConflictError,
+  PostInactiveError,
+  validateCommentContent,
   InvalidPostError,
   PostNotFoundError,
   PostOwnershipError,
@@ -196,6 +199,61 @@ export class PostLifecycle {
     });
   }
 
+  async updateComment(
+    postId: string,
+    commentId: string,
+    userId: number,
+    content: string,
+  ): Promise<void> {
+    validateCommentContent(content);
+    await this.unitOfWork.execute(async (tx) => {
+      const post = await existingPost(tx, postId);
+      const comment = await tx.queries.findComment(postId, commentId);
+      if (!comment) throw new PostNotFoundError('Comment not found');
+      if (comment.authorId !== userId)
+        throw new PostOwnershipError('Only the comment author can edit it');
+      requireActive(post);
+      if (comment.status !== 'ACTIVE')
+        throw new PostInactiveError('Comment is not active');
+      if (post.voteCandidateIds?.includes(commentId))
+        throw new CommentEditConflictError(
+          'Vote candidate content cannot be edited',
+        );
+      if (comment.content === content) return;
+      const now = new Date();
+      const activityVersion = (comment.activityVersion ?? 1) + 1;
+      if (
+        !(await tx.commands.updateComment(
+          postId,
+          commentId,
+          content,
+          now,
+          activityVersion,
+        ))
+      )
+        throw new PostInactiveError('Comment is not active');
+      await tx.commands.appendEvent(
+        event(
+          postId,
+          'PostCommentUpdated',
+          {
+            comment: {
+              commentId,
+              postId,
+              authorId: comment.authorId,
+              content,
+              status: 'ACTIVE',
+              createdAt: comment.createdAt,
+              updatedAt: now,
+            },
+            activityVersion,
+          },
+          now,
+        ),
+      );
+    });
+  }
+
   async deleteComment(
     postId: string,
     commentId: string,
@@ -211,19 +269,31 @@ export class PostLifecycle {
     postId: string,
     commentId: string,
     moderationDecisionId: string,
+    expectedActivityVersion = 1,
   ): Promise<void> {
     this.validateDecision(moderationDecisionId);
-    await this.deleteCommentWithReason(postId, commentId, {
-      actor: { type: 'MODERATION', userId: null },
-      reason: 'MODERATION_VIOLATION',
-      moderationDecisionId,
-    });
+    if (
+      !Number.isSafeInteger(expectedActivityVersion) ||
+      expectedActivityVersion < 1
+    )
+      throw new InvalidPostError('Positive reviewed comment version required');
+    await this.deleteCommentWithReason(
+      postId,
+      commentId,
+      {
+        actor: { type: 'MODERATION', userId: null },
+        reason: 'MODERATION_VIOLATION',
+        moderationDecisionId,
+      },
+      expectedActivityVersion,
+    );
   }
 
   private async deleteCommentWithReason(
     postId: string,
     commentId: string,
     deletion: Deletion,
+    expectedActivityVersion?: number,
   ): Promise<void> {
     await this.unitOfWork.execute(async (tx) => {
       const post = await existingPost(tx, postId);
@@ -235,6 +305,12 @@ export class PostLifecycle {
       )
         throw new PostOwnershipError('Only the comment author can delete it');
       if (comment.status === 'DELETED') return;
+      // A decision about an older body must not delete a later edit.
+      if (
+        deletion.actor.type === 'MODERATION' &&
+        (comment.activityVersion ?? 1) !== expectedActivityVersion
+      )
+        throw new CommentEditConflictError('Reviewed comment version is stale');
       const now = new Date();
       const activityVersion = (comment.activityVersion ?? 1) + 1;
       await tx.commands.deleteComment(postId, commentId, now, activityVersion);

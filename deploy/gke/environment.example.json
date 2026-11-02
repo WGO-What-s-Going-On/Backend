@@ -10,5 +10,6 @@
   "staticIp": "wgo-demo-ingress",
   "secretVersion": "1",
   "replicas": 1,
-  "webOrigins": ["https://demo.example.com"]
+  "webOrigins": ["https://demo.example.com"],
+  "websocketOrigins": ["https://demo.example.com", "capacitor://localhost"]
 }

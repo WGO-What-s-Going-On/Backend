@@ -22,6 +22,7 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
         await this.lifecycle.initialize(event.aggregateId, event.occurredAt);
         return;
       case 'PostCommentCreated':
+      case 'PostCommentUpdated':
         if (!event.comment?.content)
           throw new Error('Invalid PostCommentCreated payload');
         if (

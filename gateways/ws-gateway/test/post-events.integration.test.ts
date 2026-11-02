@@ -181,6 +181,7 @@ suite('distributed post events', () => {
       for (const [eventType, expected] of [
         ['PostCreated', 'post.created'],
         ['PostCommentCreated', 'comment.created'],
+        ['PostCommentUpdated', 'comment.updated'],
         ['PostReactionCreated', 'post.reaction.created'],
         ['PostParticipantJoined', 'post.participant.joined'],
       ] as const) {
@@ -192,13 +193,15 @@ suite('distributed post events', () => {
           producer: 'post-service',
           schemaVersion: 1,
           occurredAt: new Date().toISOString(),
-          ...(eventType === 'PostCommentCreated'
+          ...(['PostCommentCreated', 'PostCommentUpdated'].includes(eventType)
             ? {
+                activityVersion: 2,
                 comment: {
                   commentId: randomUUID(),
                   postId: 'post-1',
                   content: 'hello',
                   createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
                 },
               }
             : {}),

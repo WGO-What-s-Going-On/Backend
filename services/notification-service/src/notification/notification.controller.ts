@@ -151,6 +151,13 @@ export class NotificationController {
   }
 
   @Get('unread-count')
+  @ApiOkResponse({
+    schema: {
+      type: 'object',
+      required: ['count'],
+      properties: { count: { type: 'integer', minimum: 0, example: 3 } },
+    },
+  })
   async unread(@Headers('x-user-id') header: unknown) {
     return { count: await this.notifications.unread(requireUserId(header)) };
   }

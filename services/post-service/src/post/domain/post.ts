@@ -2,6 +2,7 @@ import { mediaIds as validateMediaIds } from '../media/media.policy.js';
 export type PostStatus = 'ACTIVE' | 'EXPIRED' | 'DELETED';
 
 export interface PostState {
+  voteCandidateIds?: string[];
   closedAt?: Date | null;
   postId: string;
   status: PostStatus;
@@ -110,6 +111,7 @@ export interface ReactionRecord {
 }
 
 export class ReactionConflictError extends Error {}
+export class CommentEditConflictError extends Error {}
 
 // 이미 고른 종류를 다시 누르는 것은 재시도이고, 다른 종류는 취소 후에만 선택할 수 있다.
 export function requireReactionSlot<T extends { type: string }>(
@@ -205,6 +207,11 @@ export function createPost(
   };
 }
 
+export function validateCommentContent(content: string): void {
+  requireText(content, 'content', 2000);
+  if (!content.trim()) throw new InvalidPostError('content must not be blank');
+}
+
 export function createComment(
   postId: string,
   authorId: number,
@@ -214,7 +221,7 @@ export function createComment(
   attachments: string[] = [],
 ): CommentRecord {
   const ids = validateMediaIds(attachments);
-  requireText(content, 'content', 2000);
+  validateCommentContent(content);
   return {
     commentId,
     postId,

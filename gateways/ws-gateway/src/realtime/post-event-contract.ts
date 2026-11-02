@@ -2,6 +2,7 @@ export interface PostRealtimeMessage {
   version: 1;
   type:
     | 'comment.created'
+    | 'comment.updated'
     | 'comment.deleted'
     | 'post.updated'
     | 'post.created'
@@ -27,6 +28,7 @@ const types: Record<string, PostRealtimeMessage['type']> = {
   PostDeleted: 'post.deleted',
   PostExpired: 'post.expired',
   PostCommentCreated: 'comment.created',
+  PostCommentUpdated: 'comment.updated',
   PostCommentDeleted: 'comment.deleted',
   PostReactionCreated: 'post.reaction.created',
   PostParticipantJoined: 'post.participant.joined',
@@ -75,6 +77,7 @@ export function realtimePostEvent(
     };
     if (
       message.type === 'comment.created' ||
+      message.type === 'comment.updated' ||
       message.type === 'comment.deleted'
     ) {
       const comment = value.comment;
@@ -82,6 +85,11 @@ export function realtimePostEvent(
         !object(comment) ||
         comment.postId !== message.postId ||
         !text(comment.commentId)
+      )
+        throw new Error();
+      if (
+        message.type === 'comment.updated' &&
+        (value.activityVersion === undefined || !date(comment.updatedAt))
       )
         throw new Error();
       message.activityVersion = version(value.activityVersion);

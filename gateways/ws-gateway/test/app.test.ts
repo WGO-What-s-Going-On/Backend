@@ -65,6 +65,74 @@ async function connect(allowed: boolean): Promise<WebSocket> {
 }
 
 describe('realtime gateway', () => {
+  it.each(['http://localhost:5173', 'capacitor://localhost'])(
+    'accepts an explicitly allowed %s origin through the WebSocket handshake',
+    async (origin) => {
+      const config = testConfig();
+      config.websocket.allowedOrigins = [
+        'http://localhost:5173',
+        'capacitor://localhost',
+      ];
+      const app = await buildApp({
+        config,
+        logger: false,
+        authenticator,
+        boardAccessAuthorizer: boardAccess(true),
+      });
+      apps.push(app);
+      await app.ready();
+      const socket = await app.injectWS('/ws/v1', { headers: { origin } });
+      sockets.push(socket);
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          type: 'board.join',
+          requestId: 'origin-test',
+          payload: { boardId: 'post-1' },
+        }),
+      );
+      await expect(nextMessage(socket)).resolves.toMatchObject({
+        type: 'command.ack',
+        requestId: 'origin-test',
+      });
+    },
+  );
+
+  it.each([
+    'http://localhost:5174',
+    'capacitor://localhost.evil.example',
+    'https://unlisted.example',
+  ])('rejects unlisted origin %s before authenticating', async (origin) => {
+    const config = testConfig();
+    config.websocket.allowedOrigins = [
+      'http://localhost:5173',
+      'capacitor://localhost',
+    ];
+    const authenticate = vi.fn(authenticator.authenticate);
+    const app = await buildApp({
+      config,
+      logger: false,
+      authenticator: { authenticate },
+      boardAccessAuthorizer: boardAccess(true),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/ws/v1',
+      headers: {
+        origin,
+        connection: 'Upgrade',
+        upgrade: 'websocket',
+        'sec-websocket-version': '13',
+        'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+      },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ code: 'WS_ORIGIN_FORBIDDEN' });
+    expect(authenticate).not.toHaveBeenCalled();
+  });
+
   it('requires room membership and returns post and comment results', async () => {
     const calls: unknown[] = [];
     const postClient: PostClient = {

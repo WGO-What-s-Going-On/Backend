@@ -155,6 +155,9 @@ Swagger에 목록 응답 스키마가 포함된다.
 - 필수 약관은 기존 `pnpm seed:terms` 사용. code는 SERVICE, PRIVACY_COLLECTION_USE, LOCATION.
   `TERMS_SERVICE_DOCUMENT_URL`, `TERMS_PRIVACY_DOCUMENT_URL`, `TERMS_LOCATION_DOCUMENT_URL`에
   실제 게시된 승인 본문 URL을 넣는다. 프론트 저장소에는 제목만 있어 임의의 본문·가짜 URL을 등록하지 않았다.
+  본문이 준비되면 프론트의 공개 페이지나 정적 파일로 게시하고 URL·버전·시행일을 등록한다.
+  초기화 명령과 재실행 규칙은 [User Service 약관 초기 데이터](../../services/user-service/README.md#terms)를 따른다.
+  승인 본문이 없는 환경의 빈 목록은 초기화 코드 변경만으로 해소되지 않는다.
 - iOS 앱 복귀는 요청대로 웹 연동 이후 항목이다. 앱 Bundle ID·URL scheme/Universal Link와
   카카오 Native SDK 또는 별도 허용 redirect 계약 확정이 필요하다. 웹 localhost URI를 앱에 사용하지 않는다.
 

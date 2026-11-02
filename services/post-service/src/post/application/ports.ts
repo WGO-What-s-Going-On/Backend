@@ -18,6 +18,7 @@ export type EventType =
   | 'PostUpdated'
   | 'PostCreated'
   | 'PostCommentCreated'
+  | 'PostCommentUpdated'
   | 'PostReactionCreated'
   | 'PostParticipantJoined'
   | 'PostReactionRemoved'
@@ -129,6 +130,13 @@ export interface PostReadQueries {
 }
 
 export interface PostCommands {
+  updateComment(
+    postId: string,
+    commentId: string,
+    content: string,
+    now: Date,
+    activityVersion: number,
+  ): Promise<boolean>;
   fenceParentComment(postId: string, commentId: string): Promise<boolean>;
   updateDetails(
     postId: string,
