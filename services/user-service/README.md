@@ -57,20 +57,20 @@ migration과 seed를 다시 실행해야 한다. 보존 데이터용 UUID→BIGI
 ## Terms
 
 약관은 User PostgreSQL의 `terms` 테이블이 소유한다. 빈 DB에는 자동 생성하지 않는다.
-승인된 약관 문서를 먼저 게시하고 서비스의 `.env`에 다음 값을 지정한다.
-세 URL은 인증 정보가 없는 HTTPS 주소여야 한다. 예시 URL을 실제 약관으로 등록하지 않는다.
+서비스의 `.env` 또는 일회성 초기화 작업에 다음 값을 지정한다.
+세 URL은 프론트에서 게시한 공개 HTTPS 약관 페이지이며 `.env.example`에도 포함한다.
 
 ```dotenv
-TERMS_SERVICE_DOCUMENT_URL=<승인된 서비스 이용약관 HTTPS URL>
-TERMS_PRIVACY_DOCUMENT_URL=<승인된 개인정보 수집 이용약관 HTTPS URL>
-TERMS_LOCATION_DOCUMENT_URL=<승인된 위치정보 약관 HTTPS URL>
+TERMS_SERVICE_DOCUMENT_URL=https://wgo-what-s-going-on.github.io/Frontend/terms/service.html
+TERMS_PRIVACY_DOCUMENT_URL=https://wgo-what-s-going-on.github.io/Frontend/terms/privacy.html
+TERMS_LOCATION_DOCUMENT_URL=https://wgo-what-s-going-on.github.io/Frontend/terms/location.html
 TERMS_VERSION=1.0
 TERMS_EFFECTIVE_AT=2026-09-01T00:00:00.000Z
 ```
 
 `TERMS_VERSION`과 `TERMS_EFFECTIVE_AT`의 기본값은 각각 `1.0`과 위 시각이다.
 초기 등록 후 바로 조회할 수 있도록 시행 시각은 현재 이하의 UTC ISO 문자열만 허용한다.
-위 시각을 그대로 사용하지 말고 승인된 실제 시행 시각과 일치시키면 된다.
+게시된 세 문서는 버전 `1.0`, 시행일 `2026-09-01`을 표시한다. 새 버전을 등록할 때는 문서의 시행 시각과 일치시킨다.
 
 서비스 디렉터리에서 대상 DB 설정을 확인한 다음 실행한다.
 
@@ -91,6 +91,7 @@ node dist/database/seeds/seed-terms.js
 같은 버전과 값의 재실행은 기존 약관 ID를 유지한다. 같은 버전에 다른 URL이나 시행 시각을
 넣으면 전체 트랜잭션을 취소한다. 기존 동의 이력을 유지하려면 수정된 문서는 새 버전으로 등록한다.
 URL의 형식은 검사하지만 실제 게시 여부와 승인 여부는 등록 담당자가 확인해야 한다.
+동의 이력을 보존하려면 등록된 URL의 본문을 덮어쓰지 않고 새 버전은 별도 URL로 게시한다.
 
 등록 후 공개 HTTP Gateway에서 `GET /api/v1/terms`를 호출한다.
 `SERVICE`, `PRIVACY_COLLECTION_USE`, `LOCATION`의 세 약관과 실제 문서 URL을 확인한다.
