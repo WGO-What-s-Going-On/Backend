@@ -51,6 +51,7 @@ export function serializePostEvent(row: Record<string, any>): string {
       PostDeleted: 'post',
       PostExpired: 'post',
       PostCommentCreated: 'comment',
+      PostCommentUpdated: 'comment',
       PostCommentDeleted: 'comment',
       PostReactionCreated: 'reaction',
       PostReactionRemoved: 'reaction',
@@ -109,6 +110,7 @@ export function serializePostEvent(row: Record<string, any>): string {
       PostDeleted: ['deletedAt'],
       PostExpired: ['expiresAt', 'expiredAt'],
       PostCommentCreated: ['createdAt'],
+      PostCommentUpdated: ['createdAt', 'updatedAt'],
       PostCommentDeleted: ['deletedAt'],
       PostReactionCreated: ['createdAt'],
       PostReactionRemoved: ['createdAt', 'removedAt'],
@@ -132,12 +134,14 @@ export function serializePostEvent(row: Record<string, any>): string {
     )
       throw new Error('Invalid post location or expiry');
     if (
-      value.eventType === 'PostCommentCreated' &&
+      ['PostCommentCreated', 'PostCommentUpdated'].includes(value.eventType) &&
       (typeof target.content !== 'string' ||
         !target.content ||
         target.content.length > 2000 ||
         target.status !== 'ACTIVE' ||
-        target.updatedAt !== null)
+        (value.eventType === 'PostCommentCreated'
+          ? target.updatedAt !== null
+          : !user(value.activityVersion)))
     )
       throw new Error('Invalid comment content or state');
     if (

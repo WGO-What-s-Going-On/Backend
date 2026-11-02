@@ -11,6 +11,7 @@ import { USER_SERVICE_ENTITIES } from '../src/database/entities/index.js';
 import { TermEntity } from '../src/database/entities/term.entity.js';
 import { InitialUserServiceSchema1789990707351 } from '../src/database/migrations/1789990707351-InitialUserServiceSchema.js';
 import { AddTermsCodeEffectiveAtIndex1789993249262 } from '../src/database/migrations/1789993249262-AddTermsCodeEffectiveAtIndex.js';
+import { provisionTerms } from '../src/database/seeds/terms-seed.js';
 import { TermsController } from '../src/terms/terms.controller.js';
 import { TermsService } from '../src/terms/terms.service.js';
 
@@ -96,6 +97,104 @@ describe('GET /api/v1/terms', () => {
       .get('/api/v1/terms')
       .expect(200)
       .expect({ terms: [] });
+  });
+
+  const seedEnvironment = {
+    TERMS_SERVICE_DOCUMENT_URL: 'https://example.test/service',
+    TERMS_PRIVACY_DOCUMENT_URL: 'https://example.test/privacy',
+    TERMS_LOCATION_DOCUMENT_URL: 'https://example.test/location',
+    TERMS_VERSION: '1.0',
+    TERMS_EFFECTIVE_AT: '2020-01-01T00:00:00.000Z',
+  };
+
+  it('provisions three effective terms and preserves IDs on repeated execution', async () => {
+    await provisionTerms(testDataSource, seedEnvironment);
+    const first = await request(app.getHttpServer())
+      .get('/api/v1/terms')
+      .expect(200);
+    expect(first.body.terms).toHaveLength(3);
+    expect(first.body.terms).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'SERVICE',
+          required: true,
+          documentUrl: seedEnvironment.TERMS_SERVICE_DOCUMENT_URL,
+        }),
+        expect.objectContaining({
+          code: 'PRIVACY_COLLECTION_USE',
+          required: true,
+          documentUrl: seedEnvironment.TERMS_PRIVACY_DOCUMENT_URL,
+        }),
+        expect.objectContaining({
+          code: 'LOCATION',
+          required: true,
+          documentUrl: seedEnvironment.TERMS_LOCATION_DOCUMENT_URL,
+        }),
+      ]),
+    );
+    await Promise.all([
+      provisionTerms(testDataSource, seedEnvironment),
+      provisionTerms(testDataSource, seedEnvironment),
+    ]);
+    const second = await request(app.getHttpServer())
+      .get('/api/v1/terms')
+      .expect(200);
+    expect(second.body).toEqual(first.body);
+    expect(await termsRepository.count()).toBe(3);
+  });
+
+  it('rolls back partial provisioning when an existing version has different content', async () => {
+    await termsRepository.insert({
+      code: 'SERVICE',
+      version: '1.0',
+      required: true,
+      documentUrl: 'https://example.test/original',
+      effectiveAt: new Date(seedEnvironment.TERMS_EFFECTIVE_AT),
+      createdAt: new Date(),
+    });
+    await expect(
+      provisionTerms(testDataSource, seedEnvironment),
+    ).rejects.toThrow('already exists with different values');
+    expect(await termsRepository.count()).toBe(1);
+    expect(
+      (await termsRepository.findOneByOrFail({ code: 'SERVICE' })).documentUrl,
+    ).toBe('https://example.test/original');
+  });
+
+  it('publishes a new version while preserving earlier consent references', async () => {
+    await provisionTerms(testDataSource, seedEnvironment);
+    const original = await termsRepository.findOneByOrFail({
+      code: 'SERVICE',
+      version: '1.0',
+    });
+    await provisionTerms(testDataSource, {
+      ...seedEnvironment,
+      TERMS_VERSION: '2.0',
+      TERMS_EFFECTIVE_AT: '2021-01-01T00:00:00.000Z',
+      TERMS_SERVICE_DOCUMENT_URL: 'https://example.test/service-v2',
+    });
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/terms')
+      .expect(200);
+    expect(response.body.terms).toHaveLength(3);
+    expect(
+      response.body.terms.every(
+        (term: { version: string }) => term.version === '2.0',
+      ),
+    ).toBe(true);
+    expect(await termsRepository.findOneByOrFail({ id: original.id })).toEqual(
+      original,
+    );
+  });
+
+  it('does not insert any terms when a document URL is missing', async () => {
+    await expect(
+      provisionTerms(testDataSource, {
+        ...seedEnvironment,
+        TERMS_LOCATION_DOCUMENT_URL: '',
+      }),
+    ).rejects.toThrow('TERMS_LOCATION_DOCUMENT_URL is required');
+    expect(await termsRepository.count()).toBe(0);
   });
 
   it('returns a currently effective term', async () => {

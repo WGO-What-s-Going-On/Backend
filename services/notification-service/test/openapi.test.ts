@@ -56,6 +56,14 @@ describe('Notification OpenAPI contract', () => {
         .schema.properties.service.enum,
     ).toEqual(['notification-service']);
     expect(doc.components.securitySchemes ?? {}).toEqual({});
+    expect(
+      doc.paths['/api/v1/notifications/unread-count'].get.responses['200']
+        .content['application/json'].schema,
+    ).toEqual({
+      type: 'object',
+      required: ['count'],
+      properties: { count: { type: 'integer', minimum: 0, example: 3 } },
+    });
     await request(app.getHttpServer())
       .get('/health/live')
       .expect(200)

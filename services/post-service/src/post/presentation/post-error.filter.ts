@@ -15,6 +15,7 @@ import {
   ParticipationUnavailableError,
 } from '../application/errors.js';
 import {
+  CommentEditConflictError,
   InvalidPostError,
   PostInactiveError,
   PostNotFoundError,
@@ -23,6 +24,7 @@ import {
 } from '../domain/post.js';
 
 @Catch(
+  CommentEditConflictError,
   InvalidMediaError,
   SimilarityUnavailableError,
   PostNotFoundError,
@@ -43,6 +45,14 @@ export class PostErrorFilter implements ExceptionFilter {
       response
         .status(503)
         .json({ statusCode: 503, code: error.message, message: error.message });
+      return;
+    }
+    if (error instanceof CommentEditConflictError) {
+      response.status(409).json({
+        statusCode: 409,
+        code: 'COMMENT_EDIT_CONFLICT',
+        message: error.message,
+      });
       return;
     }
     if (error instanceof ReactionConflictError) {

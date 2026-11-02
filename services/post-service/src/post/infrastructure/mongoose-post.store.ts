@@ -47,6 +47,9 @@ class MongoQueries implements PostStateQueries {
       .lean();
     return post
       ? {
+          voteCandidateIds: (post.vote?.candidates ?? []).map(
+            (candidate: { commentId: string }) => candidate.commentId,
+          ),
           postId: post.postId,
           status: post.status,
           closedAt: post.closedAt ?? null,
@@ -409,6 +412,27 @@ class MongoCommands implements PostCommands {
       { $set: { removedAt: now, activityVersion } },
       { session: this.session },
     );
+  }
+
+  async updateComment(
+    postId: string,
+    commentId: string,
+    content: string,
+    now: Date,
+    activityVersion: number,
+  ): Promise<boolean> {
+    // Serialize edits with candidate selection and post closure in the same transaction.
+    await this.posts.updateOne(
+      { postId },
+      { $inc: { voteRevision: 1 } },
+      { session: this.session },
+    );
+    const result = await this.comments.updateOne(
+      { postId, commentId, status: 'ACTIVE' },
+      { $set: { content, updatedAt: now, activityVersion } },
+      { session: this.session },
+    );
+    return result.matchedCount === 1;
   }
 
   async deleteComment(

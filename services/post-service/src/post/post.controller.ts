@@ -62,6 +62,7 @@ import { ReadPosts } from './application/queries.js';
 import { PostErrorFilter } from './presentation/post-error.filter.js';
 import {
   commentInput,
+  commentEditInput,
   commentMediaInput,
   parentCommentInput,
   commentReactionInput,
@@ -288,6 +289,45 @@ export class PostController {
     @Headers('x-user-id') header: string | undefined,
   ): Promise<void> {
     await this.lifecycle.deletePost(postId(id), userId(header));
+  }
+
+  @Patch(':postId/comments/:commentId')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: '작성자 본인의 활성 댓글 본문 수정',
+    description:
+      '활성 게시물에서만 허용합니다. 투표 후보는 수정할 수 없습니다. 성공 후 댓글 목록을 다시 조회합니다.',
+  })
+  @ApiParam({ name: 'postId' })
+  @ApiParam({ name: 'commentId' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['content'],
+      properties: {
+        content: { type: 'string', minLength: 1, maxLength: 2000 },
+      },
+    },
+  })
+  @ApiNoContentResponse({ description: '수정 완료 또는 동일한 본문' })
+  @ApiForbiddenResponse({
+    description: '작성자 불일치 또는 게시물·댓글 비활성',
+  })
+  @ApiNotFoundResponse({ description: '게시물 또는 해당 게시물의 댓글이 없음' })
+  @ApiConflictResponse({ description: 'COMMENT_EDIT_CONFLICT: 투표 후보 댓글' })
+  async editComment(
+    @Param('postId') id: string,
+    @Param('commentId') cid: string,
+    @Headers('x-user-id') header: string | undefined,
+    @Body() body: unknown,
+  ): Promise<void> {
+    await this.lifecycle.updateComment(
+      postId(id),
+      commentId(cid),
+      userId(header),
+      commentEditInput(body),
+    );
   }
 
   @Delete(':postId/comments/:commentId')

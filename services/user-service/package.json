@@ -17,7 +17,8 @@
     "migration:run": "nest build && typeorm migration:run -d dist/database/data-source.js",
     "migration:revert": "nest build && typeorm migration:revert -d dist/database/data-source.js",
     "migration:show": "nest build && typeorm migration:show -d dist/database/data-source.js",
-    "seed:terms": "nest build && node dist/database/seeds/seed-terms.js"
+    "seed:terms": "nest build && node dist/database/seeds/seed-terms.js",
+    "seed:terms:run": "node dist/database/seeds/seed-terms.js"
   },
   "dependencies": {
     "@grpc/grpc-js": "1.14.5",

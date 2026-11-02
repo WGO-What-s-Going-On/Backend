@@ -178,3 +178,13 @@ HTTP/WS의 도메인, `JWT_COOKIE_NAME`, 허용 Origin과 사용자 JWT 설정�
 `PostUpdated` 이벤트는 `post.updated` 메시지의 postId, postVersion, closedAt으로 전달한다.
 종료 시 Room을 정리하고 재개 후 클라이언트가 다시 구독한다.
 세부 설정과 종료·재개 정책은 [프론트엔드 연동 계약](../../docs/contracts/frontend-integration.md)을 따른다.
+
+### 댓글 수정 수신
+
+`PostCommentUpdated` v1은 보드 구독자에게 `comment.updated` 메시지로 전달된다.
+`comment`에는 `postId`, `commentId`, `authorId`, `content`, `status`, `createdAt`,
+`updatedAt`이 있고 최상위 `activityVersion`은 필수다. 생성·수정·삭제는 같은 댓글
+버전 순서를 사용한다. Redis에서 이전 버전과 삭제 뒤의 수정을 차단하며 여러
+Gateway 인스턴스에도 같은 규칙을 적용한다. 클라이언트는 새 버전으로 캐시를
+갱신하거나 댓글 목록을 재조회한다. 재검열용 Moderation 소비자와 이 Gateway를
+Post 수정 API보다 먼저 배포한다.

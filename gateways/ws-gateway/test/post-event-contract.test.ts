@@ -80,3 +80,21 @@ it('accepts versioned author closure updates without exposing author identity', 
   });
   expect(parsed).not.toHaveProperty('authorId');
 });
+
+it('requires a version and edit timestamp for comment updates', () => {
+  const envelope = fields('PostCommentUpdated');
+  const value = JSON.parse(envelope.data);
+  value.comment.createdAt = value.occurredAt;
+  value.comment.updatedAt = value.occurredAt;
+  const updated = () => ({ ...envelope, data: JSON.stringify(value) });
+  expect(realtimePostEvent(updated())).toMatchObject({
+    type: 'comment.updated',
+    activityVersion: 2,
+    comment: { content: 'private removed body' },
+  });
+  delete value.comment.updatedAt;
+  expect(() => realtimePostEvent(updated())).toThrow();
+  value.comment.updatedAt = value.occurredAt;
+  delete value.activityVersion;
+  expect(() => realtimePostEvent(updated())).toThrow();
+});

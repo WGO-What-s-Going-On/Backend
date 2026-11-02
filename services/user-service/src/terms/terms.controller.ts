@@ -15,7 +15,7 @@ export class TermsController {
   @ApiOperation({
     summary: 'List current effective terms',
     description:
-      'Latest effective version per code; ties use descending ID. Service-only route: the current HTTP Gateway does not route /api/v1/terms.',
+      'Latest effective version per code; ties use descending ID. Available through the HTTP Gateway without user authentication.',
   })
   @ApiResponse({ status: 200, type: TermsResult })
   getCurrentTerms(): Promise<TermsResponse> {

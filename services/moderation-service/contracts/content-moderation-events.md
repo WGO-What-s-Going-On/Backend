@@ -3,7 +3,7 @@
 ## Responsibility and input
 
 Moderation evaluates content; it does not determine or execute sanctions. Input is
-Post's `post:events` `PostCommentCreated` v1 flat envelope, transmitted as Redis
+Post's `post:events` `PostCommentCreated` or `PostCommentUpdated` v1 flat envelope, transmitted as Redis
 fields `eventId`, `eventType`, `data`. Existing schema/producer/identifier/time,
 comment author/content and activity-version validation applies. No Post DB access,
 automatic deletion, credit deduction, account suspension or direct push occurs.
@@ -11,8 +11,16 @@ automatic deletion, credit deduction, account suspension or direct push occurs.
 `PostCreated` currently contains no body. The authorized internal Post detail API
 admits ws-gateway, not moderation-service. Post-body evaluation is **unimplemented**
 pending a content/reference/version and authorized access contract. No fake content
-or contentVersion is constructed. activityVersion is a relationship/deletion fence,
-not an editable content version. It must not authorize applying a sanction.
+or contentVersion is constructed. For comments, activityVersion increases on content edits and deletion. It identifies
+the evaluated body as well as fencing deleted activity. It does not itself authorize
+a sanction. Edited input requires the version and comment.updatedAt; legacy create
+input still defaults to version 1. Deploy this consumer before enabling Post edits.
+
+Late evaluations retain their original source version. Lifecycle CAS ignores older
+versions, and a deletion tombstone prevents reactivation. Evaluation facts may still
+arrive out of order. Post has no automatic evaluation-to-deletion consumer. Its
+manual moderation command checks the reviewed activityVersion against the current
+comment in the deletion transaction and rejects stale decisions.
 
 ## Output
 
