@@ -56,16 +56,47 @@ migration과 seed를 다시 실행해야 한다. 보존 데이터용 UUID→BIGI
 
 ## Terms
 
-Set the three document URLs in `.env`, seed the initial terms, and query the public endpoint.
+약관은 User PostgreSQL의 `terms` 테이블이 소유한다. 빈 DB에는 자동 생성하지 않는다.
+서비스의 `.env` 또는 일회성 초기화 작업에 다음 값을 지정한다.
+세 URL은 프론트에서 게시한 공개 HTTPS 약관 페이지이며 `.env.example`에도 포함한다.
+
+```dotenv
+TERMS_SERVICE_DOCUMENT_URL=https://wgo-what-s-going-on.github.io/Frontend/terms/service.html
+TERMS_PRIVACY_DOCUMENT_URL=https://wgo-what-s-going-on.github.io/Frontend/terms/privacy.html
+TERMS_LOCATION_DOCUMENT_URL=https://wgo-what-s-going-on.github.io/Frontend/terms/location.html
+TERMS_VERSION=1.0
+TERMS_EFFECTIVE_AT=2026-09-01T00:00:00.000Z
+```
+
+`TERMS_VERSION`과 `TERMS_EFFECTIVE_AT`의 기본값은 각각 `1.0`과 위 시각이다.
+초기 등록 후 바로 조회할 수 있도록 시행 시각은 현재 이하의 UTC ISO 문자열만 허용한다.
+게시된 세 문서는 버전 `1.0`, 시행일 `2026-09-01`을 표시한다. 새 버전을 등록할 때는 문서의 시행 시각과 일치시킨다.
+
+서비스 디렉터리에서 대상 DB 설정을 확인한 다음 실행한다.
 
 ```bash
-TERMS_SERVICE_DOCUMENT_URL=https://...
-TERMS_PRIVACY_DOCUMENT_URL=https://...
-TERMS_LOCATION_DOCUMENT_URL=https://...
-
+pnpm migration:run
 pnpm seed:terms
-curl http://localhost:3001/api/v1/terms
 ```
+
+배포 이미지에는 빌드 도구가 없다. 마이그레이션이 끝난 환경에서 DB 접속 설정과 위 약관
+환경변수를 주입한 일회성 작업으로 다음 명령을 실행한다. Cloud SQL에서는 migration Job과
+동일하게 Proxy 및 IAM DB 사용자 구성이 필요하다. 이 명령은 자동 배포나 Pod 시작에 연결하지 않는다.
+
+```bash
+node dist/database/seeds/seed-terms.js
+```
+
+빌드된 로컬 작업에는 `pnpm seed:terms:run`도 사용할 수 있다.
+같은 버전과 값의 재실행은 기존 약관 ID를 유지한다. 같은 버전에 다른 URL이나 시행 시각을
+넣으면 전체 트랜잭션을 취소한다. 기존 동의 이력을 유지하려면 수정된 문서는 새 버전으로 등록한다.
+URL의 형식은 검사하지만 실제 게시 여부와 승인 여부는 등록 담당자가 확인해야 한다.
+동의 이력을 보존하려면 등록된 URL의 본문을 덮어쓰지 않고 새 버전은 별도 URL로 게시한다.
+
+등록 후 공개 HTTP Gateway에서 `GET /api/v1/terms`를 호출한다.
+`SERVICE`, `PRIVACY_COLLECTION_USE`, `LOCATION`의 세 약관과 실제 문서 URL을 확인한다.
+User Service에 직접 요청하면 기존 Gateway 서비스 JWT가 필요하다.
+운영 DB에 이 작업을 실행하기 전에는 빈 약관 문제가 해결됐다고 판단하지 않는다.
 
 ## Kakao login
 
@@ -393,8 +424,8 @@ Post와 같은 Nest Swagger 방식으로 첫 문서 요청 때 생성한다.
 문서 모델은 `src/http.openapi.ts`에 있으며 응답 인터페이스를 구현해 필드 누락을 검사한다.
 
 HTTP Gateway의 `pnpm docs:generate`가 `USER_SERVICE_URL`에서 이 문서를 수집한다.
-Gateway의 `/docs`에는 기존 auth/users prefix의 공개 operation 9개만 포함한다.
-`GET /api/v1/terms`는 현재 Gateway에 라우팅되어 있지 않아 서비스 문서에만 남는다.
+Gateway의 `/docs`에는 공개 auth/users API와 `GET /api/v1/terms`도 포함한다.
+약관 조회는 사용자 로그인 없이 Gateway를 통해 호출할 수 있다.
 Gateway 문서를 갱신하려면 User·Post·Map·Notification 문서 endpoint를 모두 실행해야 한다.
 User 앱의 실제 실행에는 기존 PostgreSQL·Redis·Kakao·JWT 설정이 필요하다.
 `pnpm test test/openapi.test.ts`는 외부 저장소 없이 컨트롤러와 문서 계약을 검증한다.

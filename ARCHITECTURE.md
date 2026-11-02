@@ -476,11 +476,14 @@ Cloud Logging·Monitoring 수집을 활성화한다. 설정과 초기화는 [GCP
 ## Moderation 검사 결과 전달 및 운영 스케줄 (2026-10-27)
 
 현재 Moderation 구현은 Redis 결과·projection과 Streams를 사용하며 이 작업에서
-PostgreSQL로 저장소를 변경하지 않는다. PostCommentCreated의 AI 검사 사실은
+PostgreSQL로 저장소를 변경하지 않는다. PostCommentCreated와 PostCommentUpdated의 AI 검사 사실은
 `moderation:content-events`의 CONTENT_MODERATION_EVALUATED v1로 분리한다.
 결과·준비된 이벤트와 발행 receipt를 Lua로 처리하고 XADD 실패는 동일 결과/ID로
 복구한다. flagged는 제재 확정이 아니며 소유 서비스의 원본 DB를 수정하지 않는다.
 기존 `moderation:events` BOARD 이벤트와 Post의 CLOSED → EXPIRED 소비는 유지한다.
+댓글 수정은 Post 트랜잭션에서 본문과 Outbox를 함께 저장하고 `activityVersion`을 증가시킨다.
+Realtime Gateway는 `comment.updated`를 전달하며, 오래된 버전과 삭제 이후의 수정을 차단한다.
+수동 댓글 제재는 검토한 버전이 현재 댓글과 일치할 때만 적용한다. AI 평가를 자동 제재로 연결하지 않는다.
 
 Lifecycle은 다음 평가 시각의 Redis sorted set에서 최대 100개 ID를 선점한다.
 전체 projection 조회를 Scheduler에서 제거하며 CAS가 최종 전이/발행을 보호한다.

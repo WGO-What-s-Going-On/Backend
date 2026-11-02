@@ -108,13 +108,19 @@ it.each(['PATCH', 'DELETE'])(
   'allows %s preflight only for configured frontend origins',
   async (method) => {
     const app = await buildApp({
-      config: testConfig({ corsOrigins: ['http://localhost:5173'] }),
+      config: testConfig({
+        corsOrigins: ['http://localhost:5173', 'capacitor://localhost'],
+      }),
       logger: false,
     });
     apps.push(app);
     for (const origin of [
       'http://localhost:5173',
+      'capacitor://localhost',
       'https://untrusted.example',
+      'capacitor://localhost.evil.example',
+      'capacitor://localhost:1234',
+      'capacitor://localhost/path',
     ]) {
       const response = await app.inject({
         method: 'OPTIONS',
@@ -125,7 +131,10 @@ it.each(['PATCH', 'DELETE'])(
           'access-control-request-headers': 'authorization,content-type',
         },
       });
-      if (origin === 'http://localhost:5173') {
+      if (
+        origin === 'http://localhost:5173' ||
+        origin === 'capacitor://localhost'
+      ) {
         expect(response.statusCode).toBe(204);
         expect(response.headers['access-control-allow-origin']).toBe(origin);
         expect(response.headers['access-control-allow-methods']).toContain(

@@ -1,6 +1,11 @@
 import { MediaController } from '../src/post/media/media.controller.js';
 import { MediaService } from '../src/post/media/media.service.js';
 import { POST_STATE_QUERIES } from '../src/post/application/ports.js';
+import { LOCATION_AUTHORIZATION } from '../src/post/application/ports.js';
+import {
+  Activities,
+  ActivityController,
+} from '../src/post/activity.controller.js';
 import { PostLifecycle } from '../src/post/application/lifecycle.js';
 import { MongooseVote } from '../src/post/infrastructure/mongoose-vote.js';
 import { FindSimilarPosts } from '../src/post/semantic/search.js';
@@ -34,6 +39,7 @@ describe('OpenAPI document', () => {
         HealthController,
         PostController,
         InternalPostController,
+        ActivityController,
       ],
       providers: [
         MediaService,
@@ -47,6 +53,8 @@ describe('OpenAPI document', () => {
         JoinPost,
         ReadPosts,
         FindSimilarPosts,
+        Activities,
+        LOCATION_AUTHORIZATION,
       ].map((provide) => ({ provide, useValue: {} })),
     }).compile();
     app = module.createNestApplication();
@@ -67,6 +75,21 @@ describe('OpenAPI document', () => {
       .get('/docs/openapi.json')
       .expect(200);
     const document = response.body;
+    for (const path of Object.keys(document.paths)) {
+      for (const method of ['get', 'post', 'patch', 'put', 'delete']) {
+        const operation = document.paths[path][method];
+        if (!operation) continue;
+        for (const requirement of operation.security ?? []) {
+          for (const name of Object.keys(requirement)) {
+            expect(document.components.securitySchemes).toHaveProperty(name);
+          }
+        }
+      }
+    }
+    expect(
+      document.paths['/api/v1/posts/{postId}/comments/{commentId}'].patch
+        .responses['204'],
+    ).toBeDefined();
     expect(
       document.paths['/api/v1/posts/similar'].post.requestBody.content[
         'application/json'
@@ -88,6 +111,10 @@ describe('OpenAPI document', () => {
     expect(Object.keys(document.paths).sort()).toEqual(
       [
         '/api/v1/posts',
+        '/api/v1/posts/me/level',
+        '/api/v1/posts/me/ranking',
+        '/api/v1/posts/me/activity',
+        '/api/v1/posts/me/region',
         '/api/v1/posts/{postId}/closed',
         '/api/v1/posts/similar',
         '/api/v1/posts/media/uploads',
@@ -146,5 +173,63 @@ describe('OpenAPI document', () => {
       document.paths['/api/v1/posts/{postId}/comments/{commentId}/reactions']
         .post.responses['409'],
     ).toBeDefined();
+  });
+
+  it('documents activity response fields, nested items and nullable values', async () => {
+    const { body: document } = await request(app.getHttpServer())
+      .get('/docs/openapi.json')
+      .expect(200);
+    for (const [route, name] of Object.entries({
+      level: 'ActivityLevelResponse',
+      ranking: 'RankingResponse',
+      activity: 'ActivityPageResponse',
+    })) {
+      expect(
+        document.paths[`/api/v1/posts/me/${route}`].get.responses['200']
+          .content['application/json'].schema,
+      ).toEqual({ $ref: `#/components/schemas/${name}` });
+    }
+    const schemas = document.components.schemas;
+    expect(schemas.ActivityLevelResponse.required).toEqual(
+      expect.arrayContaining([
+        'participation',
+        'agreeReceived',
+        'picks',
+        'score',
+        'level',
+        'title',
+      ]),
+    );
+    expect(schemas.ActivityLevelResponse.properties.level.enum).toEqual([
+      1, 2, 3, 4,
+    ]);
+    expect(schemas.RankingResponse.properties.items.items).toEqual({
+      $ref: '#/components/schemas/RankingItemResponse',
+    });
+    expect(schemas.RankingResponse.properties.myRank.nullable).toBe(true);
+    expect(schemas.RankingItemResponse.properties.authorNickname.nullable).toBe(
+      true,
+    );
+    expect(schemas.ActivityPageResponse.properties.items).toMatchObject({
+      maxItems: 20,
+      items: { $ref: '#/components/schemas/ActivityItemResponse' },
+    });
+    expect(schemas.ActivityPageResponse.properties.nextCursor.nullable).toBe(
+      true,
+    );
+    expect(schemas.ActivityItemResponse.properties.kind.enum).toEqual([
+      'POST',
+      'COMMENT',
+      'REACTION',
+      'COMMENT_REACTION',
+      'VOTE',
+    ]);
+    expect(schemas.ActivityItemResponse.properties.closedAt).toMatchObject({
+      format: 'date-time',
+      nullable: true,
+    });
+    expect(schemas.ActivityItemResponse.properties.commentId.nullable).toBe(
+      true,
+    );
   });
 });

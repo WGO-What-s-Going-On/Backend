@@ -27,7 +27,7 @@ if ending then
 elseif m.type=='post.updated' then
   local prior=tonumber(redis.call('HGET',KEYS[1],'updateVersion') or '0')
   if prior>=tonumber(m.postVersion) then return 0 end
-elseif m.type=='comment.created' or m.type=='comment.deleted' then
+elseif m.type=='comment.created' or m.type=='comment.updated' or m.type=='comment.deleted' then
   local field='comment:'..m.comment.commentId
   local deleted=redis.call('HGET',KEYS[1],'deleted:'..m.comment.commentId)
   if deleted then return 0 end
@@ -41,7 +41,7 @@ if ending then
   redis.call('HSET',KEYS[1],'status',m.type,'postVersion',tostring(m.postVersion))
 elseif m.type=='post.updated' then
   redis.call('HSET',KEYS[1],'updateVersion',tostring(m.postVersion))
-elseif m.type=='comment.created' or m.type=='comment.deleted' then
+elseif m.type=='comment.created' or m.type=='comment.updated' or m.type=='comment.deleted' then
   redis.call('HSET',KEYS[1],'comment:'..m.comment.commentId,tostring(m.activityVersion))
   if m.type=='comment.deleted' then redis.call('HSET',KEYS[1],'deleted:'..m.comment.commentId,'1') end
 end

@@ -14,7 +14,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ActivityLevelResponse,
+  ActivityPageResponse,
+  RankingResponse,
+} from './presentation/activity.openapi.js';
 import { Types, type Model } from 'mongoose';
 import { GatewayAuthGuard } from '../gateway-auth.js';
 import { userId } from './presentation/post.input.js';
@@ -315,6 +320,7 @@ export class ActivityController {
     private readonly location: LocationAuthorization,
   ) {}
   @Get('ranking')
+  @ApiOkResponse({ type: RankingResponse })
   @ApiOperation({
     summary: 'Administrative dong ranking',
     description:
@@ -345,6 +351,7 @@ export class ActivityController {
     return this.location.resolveRegion(Number(lat), Number(lon));
   }
   @Get('activity')
+  @ApiOkResponse({ type: ActivityPageResponse })
   @ApiOperation({
     summary: 'Recent own activity',
     description: '20 items per page; cursor from nextCursor.',
@@ -353,6 +360,7 @@ export class ActivityController {
     return this.activities.list(userId(header), cursor);
   }
   @Get('level')
+  @ApiOkResponse({ type: ActivityLevelResponse })
   @ApiOperation({
     summary: 'Activity points and title',
     description:

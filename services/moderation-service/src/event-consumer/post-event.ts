@@ -3,6 +3,7 @@
 export type PostEventType =
   | 'PostCreated'
   | 'PostCommentCreated'
+  | 'PostCommentUpdated'
   | 'PostReactionCreated'
   | 'PostParticipantJoined'
   | 'PostReactionRemoved'
@@ -39,6 +40,7 @@ export interface PostEvent {
 const eventTypes = new Set<PostEventType>([
   'PostCreated',
   'PostCommentCreated',
+  'PostCommentUpdated',
   'PostReactionCreated',
   'PostParticipantJoined',
   'PostReactionRemoved',
@@ -131,8 +133,10 @@ export function parsePostEvent(
     type.startsWith('PostComment') &&
     (!text(payload.commentId) ||
       !version(payload.authorId) ||
-      (type === 'PostCommentCreated' &&
+      (['PostCommentCreated', 'PostCommentUpdated'].includes(type) &&
         (!text(payload.content) || payload.content.length > 2000)) ||
+      (type === 'PostCommentUpdated' &&
+        (!version(value.activityVersion) || !date(payload.updatedAt))) ||
       (type === 'PostCommentDeleted' && !date(payload.deletedAt)))
   )
     throw new Error(`Invalid ${type} payload`);

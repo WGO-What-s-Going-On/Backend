@@ -255,6 +255,52 @@ suite('Post lifecycle realtime delivery', () => {
     });
   });
 
+  it('delivers only newer edits and never publishes an edit after deletion', async () => {
+    await fixture(async (f) => {
+      await f.command(0, 'board.join', 'post-edits');
+      const now = new Date().toISOString();
+      const edit = (activityVersion: number) =>
+        wire('post-edits', 'PostCommentUpdated', {
+          activityVersion,
+          comment: {
+            postId: 'post-edits',
+            commentId: 'comment-edit',
+            content: `body ${activityVersion}`,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+      await f.send(edit(3));
+      await vi.waitFor(() =>
+        expect(
+          f.inboxes[0]!.filter((message) => message.type === 'comment.updated'),
+        ).toHaveLength(1),
+      );
+      await f.send(edit(2));
+      await f.send(edit(3));
+      await f.send(
+        wire('post-edits', 'PostCommentDeleted', {
+          activityVersion: 4,
+          comment: {
+            postId: 'post-edits',
+            commentId: 'comment-edit',
+            deletedAt: now,
+          },
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(
+          f.inboxes[0]!.some((message) => message.type === 'comment.deleted'),
+        ).toBe(true),
+      );
+      await f.send(edit(5));
+      await f.drain();
+      expect(
+        f.inboxes[0]!.filter((message) => message.type === 'comment.updated'),
+      ).toEqual([expect.objectContaining({ activityVersion: 3 })]);
+    });
+  });
+
   it('rejects a join whose authorization completes after the board expires', async () => {
     await fixture(async (f) => {
       let finish!: (allowed: boolean) => void;

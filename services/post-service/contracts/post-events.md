@@ -658,3 +658,23 @@ Post 조회가 원본 공개 상태를 다시 검증한다. WS는 postVersion으
 이번 변경은 Post 생산자만 구현한다. User의 실제 파서 연결·정책 설정·필요한 마이그레이션은
 User 담당자가 기존 보상 브랜치에서 진행한다.
 Post `/me/level` 조회 계산과 User 정책 기반 영속 배지는 이번 연결로 통합되지 않는다.
+
+## 댓글 수정 이벤트
+
+`PostCommentUpdated` v1은 `comment` 객체에 `postId`, `commentId`, `authorId`,
+`content`, `status: "ACTIVE"`, `createdAt`, `updatedAt`을 포함한다.
+최상위 `activityVersion`은 필수 양의 정수이며 수정마다 증가한다.
+기존 생성 이벤트와 구별하므로 알림·참여 수·보상 생성 소비를 다시 실행하지 않는다.
+Moderation은 수정 본문을 다시 평가한다. 이 이벤트를 모르는 기존 소비자는 무시한다.
+Moderation 새 소비자를 먼저 배포한 뒤 Post 수정 API를 배포해야 재검열 누락을 피한다.
+
+검사 결과의 `activityVersion`은 평가한 댓글 버전을 식별한다. 결과 도착 순서만으로
+최신 본문을 판단해서는 안 된다. `flagged`는 제재 결정이 아니며 자동 삭제하지 않는다.
+운영자가 검토한 댓글 제재를 적용할 때는 아래처럼 검토 버전을 전달한다.
+
+```sh
+pnpm post:operations moderate-comment post_<UUID> comment_<UUID> decision-456 2
+```
+
+버전을 생략한 기존 명령은 버전 1만 대상으로 한다. 원본의 현재 버전과 다르면
+삭제하지 않고 실패한다. 버전 확인·삭제·Outbox 저장은 같은 트랜잭션에서 수행한다.

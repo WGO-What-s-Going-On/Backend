@@ -230,7 +230,11 @@ test('both workflow jobs use resolved location and production requires opt-in', 
 });
 
 test('Standard demo renders an explicit localhost HTTP origin for local frontend testing', () => {
-  const local = { ...standard, webOrigins: ['http://localhost:5173'] };
+  const local = {
+    ...standard,
+    webOrigins: ['http://localhost:5173'],
+    websocketOrigins: undefined,
+  };
   for (const name of ['http-gateway', 'ws-gateway']) {
     const settings = appResources(local, name, image(name)).find(
       (resource) => resource.kind === 'ConfigMap',
@@ -271,6 +275,43 @@ test('HTTP origins are limited to canonical localhost origins in Standard demo',
   );
 });
 
+test('HTTP CORS renders the exact Capacitor origin in every deployment profile', () => {
+  const webOrigins = ['https://demo.example.com', 'capacitor://localhost'];
+  for (const environment of [config, standard]) {
+    const native = { ...environment, webOrigins };
+    assert.doesNotThrow(() => validateEnvironment(native));
+    const settings = appResources(
+      native,
+      'http-gateway',
+      image('http-gateway'),
+    ).find((resource) => resource.kind === 'ConfigMap').data;
+    assert.equal(settings.CORS_ORIGINS, webOrigins.join(','));
+  }
+});
+
+test('HTTP CORS rejects native lookalikes, paths, ports and wildcards', () => {
+  for (const origin of [
+    'capacitor://evil.example',
+    'capacitor://localhost.evil.example',
+    'capacitor://localhost/',
+    'capacitor://localhost/path',
+    'capacitor://localhost:1234',
+    'capacitor://user:pass@localhost',
+    'capacitor://localhost?x=1',
+    'capacitor://localhost#fragment',
+    'capacitor://*',
+    'https://*.example.com',
+    '*',
+  ]) {
+    for (const environment of [config, standard]) {
+      assert.throws(
+        () => validateEnvironment({ ...environment, webOrigins: [origin] }),
+        /webOrigins/,
+      );
+    }
+  }
+});
+
 test('explicit Autopilot rejects localhost HTTP origins', () => {
   assert.throws(
     () =>
@@ -280,5 +321,71 @@ test('explicit Autopilot rejects localhost HTTP origins', () => {
         webOrigins: ['http://localhost:5173'],
       }),
     /webOrigins/,
+  );
+});
+
+test('WebSocket origins remain independent of HTTP CORS origins', () => {
+  const websocketOrigins = [
+    'https://demo.example.com',
+    'capacitor://localhost',
+    'http://localhost:5173',
+  ];
+  const settings = appResources(
+    { ...standard, websocketOrigins },
+    'ws-gateway',
+    image('ws-gateway'),
+  ).find((resource) => resource.kind === 'ConfigMap').data;
+  assert.equal(settings.CORS_ORIGINS, standard.webOrigins.join(','));
+  assert.equal(settings.WS_ALLOWED_ORIGINS, websocketOrigins.join(','));
+});
+
+test('older environments retain their web origin allowlist for WebSocket', () => {
+  const legacy = { ...config, websocketOrigins: undefined };
+  const settings = appResources(legacy, 'ws-gateway', image('ws-gateway')).find(
+    (resource) => resource.kind === 'ConfigMap',
+  ).data;
+  assert.equal(settings.WS_ALLOWED_ORIGINS, legacy.webOrigins.join(','));
+});
+
+test('WebSocket origins reject wildcards, paths, credentials and lookalike native hosts', () => {
+  for (const origin of [
+    '*',
+    'https://*.example.com',
+    'null',
+    'capacitor://evil.example',
+    'capacitor://localhost/',
+    'capacitor://localhost:1234',
+    'capacitor://localhost.evil.example',
+    'http://localhost.evil.example:5173',
+    'https://user:pass@example.com',
+    'https://example.com/path',
+    'https://example.com?x=1',
+    'https://example.com#fragment',
+    123,
+  ]) {
+    assert.throws(
+      () => validateEnvironment({ ...standard, websocketOrigins: [origin] }),
+      /websocketOrigins/,
+    );
+  }
+  for (const websocketOrigins of [[], null, 'capacitor://localhost']) {
+    assert.throws(
+      () => validateEnvironment({ ...standard, websocketOrigins }),
+      /websocketOrigins/,
+    );
+  }
+  assert.throws(
+    () =>
+      validateEnvironment({
+        ...config,
+        websocketOrigins: ['http://localhost:5173'],
+      }),
+    /websocketOrigins/,
+  );
+  assert.doesNotThrow(() =>
+    validateEnvironment({
+      ...config,
+      websocketOrigins: ['capacitor://localhost'],
+    }),
   );
 });

@@ -73,6 +73,12 @@ export function postInput(raw: unknown): PostInput {
   };
 }
 
+export function commentEditInput(raw: unknown): string {
+  const body = object(raw);
+  fields(body, ['content']);
+  return string(body.content, 'content');
+}
+
 export function commentInput(raw: unknown): string {
   const body = object(raw);
   fields(body, ['content', 'mediaIds', 'parentCommentId']);
