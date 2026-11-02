@@ -61,6 +61,7 @@ function object(bytes = png) {
   return { read, copy, reads, copies };
 }
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -104,6 +105,9 @@ describe('media policy and configuration', () => {
 
 describe('GCS signing and verification', () => {
   it('signs exact length and create-only header, and reads only the final key', async () => {
+    // Keep expiry calculation and SDK signing within the same second.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-02T00:00:00.999Z'));
     const s = storage();
     vi.spyOn(s.client.authClient, 'getCredentials').mockImplementation(
       async () => ({ client_email: 'post@test.iam.gserviceaccount.com' }),
