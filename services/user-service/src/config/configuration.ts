@@ -1,3 +1,4 @@
+import { profileImageConfig } from '../users/profile-image/profile-image.config.js';
 import { databaseTls } from '../database/tls.js';
 import { databasePassword } from '../database/auth.js';
 
@@ -22,6 +23,7 @@ export function configuration() {
     username: process.env.DB_USER ?? 'wgo',
   };
   return {
+    profileImage: profileImageConfig(),
     app: {
       port: positiveInteger(process.env.PORT, 3001, 'PORT'),
     },

@@ -335,13 +335,13 @@ describe('Users API integration', () => {
     const id = await insertUser('Temporary');
     const response = await patch(id, {
       nickname: '  FinalName  ',
-      profileImageKey: 'profiles/image',
+      profileImageKey: null,
     })
       .set('x-request-id', 'onboarding-request')
       .expect(200);
     expect(response.body).toMatchObject({
       nickname: 'FinalName',
-      profileImageKey: 'profiles/image',
+      profileImageKey: null,
       onboardingRequired: false,
     });
     const user = await usersRepository.findOneByOrFail({ id });
@@ -367,16 +367,14 @@ describe('Users API integration', () => {
       payload: {
         userId: id,
         nickname: 'FinalName',
-        profileImageKey: 'profiles/image',
+        profileImageKey: null,
       },
     });
   });
 
   it('keeps image-only updates in onboarding without events', async () => {
     const id = await insertUser('Temporary');
-    const response = await patch(id, {
-      profileImageKey: 'profiles/image',
-    }).expect(200);
+    const response = await patch(id, { profileImageKey: null }).expect(200);
     expect(response.body.onboardingRequired).toBe(true);
     expect(
       (await usersRepository.findOneByOrFail({ id })).onboardingCompletedAt,
@@ -386,11 +384,14 @@ describe('Users API integration', () => {
 
   it.each([
     { nickname: 'Changed' },
-    { profileImageKey: 'profiles/image' },
-    { nickname: 'Changed', profileImageKey: 'profiles/image' },
+    { profileImageKey: null },
+    { nickname: 'Changed', profileImageKey: null },
   ])('creates one profile update for %j', async (input) => {
     const id = await insertUser('Original');
-    await usersRepository.update(id, { onboardingCompletedAt: new Date() });
+    await usersRepository.update(id, {
+      onboardingCompletedAt: new Date(),
+      profileImageKey: 'profiles/legacy',
+    });
     await patch(id, input).expect(200);
     const events = await outbox();
     expect(events).toHaveLength(1);
@@ -415,7 +416,9 @@ describe('Users API integration', () => {
       payload: {
         userId: id,
         nickname: input.nickname ?? 'Original',
-        profileImageKey: input.profileImageKey ?? null,
+        profileImageKey: Object.hasOwn(input, 'profileImageKey')
+          ? null
+          : 'profiles/legacy',
       },
     });
     expect(event.payload.occurredAt).toEqual(expect.any(String));
@@ -436,9 +439,9 @@ describe('Users API integration', () => {
       200,
     );
     expect(await outbox()).toHaveLength(1);
-    await patch(id, { nickname: 'DAEJUN', profileImageKey: 'image' }).expect(
-      200,
-    );
+    await patch(id, { profileImageKey: 'image' }).expect(400);
+    await usersRepository.update(id, { profileImageKey: 'profiles/legacy' });
+    await patch(id, { nickname: 'DAEJUN' }).expect(200);
     await patch(id, { profileImageKey: null }).expect(200);
     expect(
       (await usersRepository.findOneByOrFail({ id })).profileImageKey,

@@ -127,12 +127,14 @@ Access JWT 문자열은 같을 수 있다. 이번 작업에서는 JWT claim 구�
 
 `GET /api/v1/users/me`와 `PATCH /api/v1/users/me`는 Gateway가 검증한 내부
 `x-user-id`를 사용한다. 위 logout과 동일한 Gateway 신뢰 경계가 적용된다.
-응답에는 userId, nickname, profileImageKey, status, onboardingRequired, createdAt만 포함한다.
+응답에는 userId, nickname, realName, profileImageKey, status, onboardingRequired, createdAt을 포함한다.
 
-PATCH는 nickname 및 profileImageKey의 부분 수정을 지원한다. 빈 요청과 알 수 없는 필드는
+PATCH는 nickname, realName 및 profileImageKey: null(이미지 제거)의 부분 수정을 지원한다. 빈 요청과 알 수 없는 필드는
 400이다. nickname은 availability API와 같은 trim/최대 30자 검증을 적용하며 다른 사용자와의
-대소문자 무시 중복은 409다. profileImageKey는 최대 500자의 문자열 또는 null(삭제)을 받으며
-별도 trim, 파일 존재 확인은 하지 않는다.
+대소문자 무시 중복은 409다. profileImageKey의 문자열 입력은 400이다. 이미지 설정은
+GCS 직접 업로드와 서버 검증 완료 API를 통해서만 가능하다. 기존 DB 키는 유지한다.
+API 예제, 프론트 연동, 마이그레이션, 버킷/IAM 및 복구 절차는
+[프로필 이미지 구현·운영 인계 문서](PROFILE_IMAGE_GCS_IMPLEMENTATION_REPORT.md)를 따른다.
 
 온보딩 미완료 사용자가 유효한 nickname을 직접 제출하면 최초 완료로 처리한다.
 이미 저장된 임시 닉네임과 동일한 값을 제출해도 명시적인 설정으로 인정한다.

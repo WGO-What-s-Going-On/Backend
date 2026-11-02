@@ -150,6 +150,11 @@ export function appResources(config, name, image) {
     USER_GRPC_ADDRESS: 'user-service:50052',
   };
   const sql = ['user-service', 'notification-service'].includes(name);
+  if (name === 'user-service')
+    Object.assign(settings, {
+      GCS_PROFILE_ENABLED: 'true',
+      GCS_PROFILE_BUCKET: `${config.project}-${config.namespace}-profiles`,
+    });
   if (sql)
     Object.assign(settings, {
       DB_CONNECTION_MODE: 'cloud-sql-proxy',

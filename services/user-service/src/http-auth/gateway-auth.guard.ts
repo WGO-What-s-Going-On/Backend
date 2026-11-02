@@ -20,6 +20,8 @@ const operations: Record<string, 'public' | 'user'> = {
   'DELETE /api/v1/users/me/blocks': 'user',
   'GET /api/v1/users/me': 'user',
   'PATCH /api/v1/users/me': 'user',
+  'POST /api/v1/users/me/profile-image/uploads': 'user',
+  'GET /api/v1/users/me/profile-image/url': 'user',
   'POST /api/v1/users/me/term-consents': 'user',
   'GET /api/v1/users/me/badges': 'user',
   'POST /api/v1/users/me/withdrawal': 'user',
@@ -106,7 +108,17 @@ export class GatewayAuthGuard implements CanActivate {
         payload.exp! - payload.iat! > 60
       )
         throw new Error();
+      const imageOperation =
+        (request.method === 'POST' &&
+          /^\/api\/v1\/users\/me\/profile-image\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/complete$/.test(
+            request.path,
+          )) ||
+        (request.method === 'GET' &&
+          /^\/api\/v1\/users\/[1-9][0-9]{0,15}\/profile-image\/url$/.test(
+            request.path,
+          ));
       const policy =
+        (imageOperation ? 'user' : undefined) ??
         operations[`${request.method} ${request.path}`] ??
         (request.method === 'DELETE' &&
         /^\/api\/v1\/users\/me\/blocks\/[1-9][0-9]{0,15}$/.test(request.path)

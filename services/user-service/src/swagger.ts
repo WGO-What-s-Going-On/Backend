@@ -41,6 +41,9 @@ export function configureSwagger(app: INestApplication): void {
           }
         }
       }
+      const uploadBody = document.components?.schemas?.ProfileImageUploadBody;
+      if (uploadBody && 'properties' in uploadBody)
+        uploadBody.additionalProperties = false;
       const blockRequest = document.components?.schemas?.CreateBlockRequest;
       if (blockRequest && 'properties' in blockRequest)
         blockRequest.additionalProperties = false;

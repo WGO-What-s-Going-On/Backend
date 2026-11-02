@@ -1,5 +1,8 @@
 # 프론트엔드 연동 계약
 
+프로필 이미지 업로드·검증·Signed GET·재시도는 [User 프로필 이미지 계약](../../services/user-service/PROFILE_IMAGE_GCS_IMPLEMENTATION_REPORT.md#4-api프론트엔드-연동-계약)을 따른다.
+`PATCH /api/v1/users/me`의 `profileImageKey`는 이제 제거용 `null`만 받으며 문자열 설정은 400이다.
+
 대상 브랜치: `dev`. 이 문서는 구현 계약이며 실제 운영 배포·카카오 콘솔 등록 완료를 뜻하지 않는다.
 화면 기준: Frontend `67186831ee5a11854c7b48166bbb3f9a5a563ce9`.
 

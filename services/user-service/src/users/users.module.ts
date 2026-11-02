@@ -1,3 +1,7 @@
+import { ProfileImageController } from './profile-image/profile-image.controller.js';
+import { ProfileImageService } from './profile-image/profile-image.service.js';
+import { GcsProfileImageStorage } from './profile-image/gcs-profile-image.storage.js';
+import { ProfileImageCleanupWorker } from './profile-image/profile-image.worker.js';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
@@ -8,7 +12,12 @@ import { UsersService } from './users.service.js';
 
 @Module({
   imports: [TypeOrmModule.forFeature([UserEntity]), AuthModule],
-  controllers: [UsersController],
-  providers: [UsersService],
+  controllers: [UsersController, ProfileImageController],
+  providers: [
+    UsersService,
+    ProfileImageService,
+    GcsProfileImageStorage,
+    ProfileImageCleanupWorker,
+  ],
 })
 export class UsersModule {}

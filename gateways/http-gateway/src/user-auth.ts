@@ -22,6 +22,10 @@ export const userOperations: Record<string, 'public' | 'user'> = {
   'DELETE /api/v1/users/me/blocks': 'user',
   'GET /api/v1/users/me': 'user',
   'PATCH /api/v1/users/me': 'user',
+  'POST /api/v1/users/me/profile-image/uploads': 'user',
+  'GET /api/v1/users/me/profile-image/url': 'user',
+  'POST /api/v1/users/me/profile-image/uploads/{uploadId}/complete': 'user',
+  'GET /api/v1/users/{userId}/profile-image/url': 'user',
   'POST /api/v1/users/me/term-consents': 'user',
   'GET /api/v1/users/me/badges': 'user',
   'POST /api/v1/users/me/withdrawal': 'user',
@@ -30,6 +34,19 @@ export const userOperations: Record<string, 'public' | 'user'> = {
 function userOperation(method: string, path: string) {
   // OpenAPI templates are documentation keys; only concrete IDs can reach User.
   if (path.includes('{') || path.includes('}')) return undefined;
+  if (
+    method === 'POST' &&
+    /^\/api\/v1\/users\/me\/profile-image\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/complete$/.test(
+      path,
+    )
+  )
+    return 'user';
+  const profileId =
+    /^\/api\/v1\/users\/([1-9][0-9]{0,15})\/profile-image\/url$/.exec(
+      path,
+    )?.[1];
+  if (method === 'GET' && profileId && BigInt(profileId) <= 9007199254740991n)
+    return 'user';
   const blockedId = /^\/api\/v1\/users\/me\/blocks\/([1-9][0-9]{0,15})$/.exec(
     path,
   )?.[1];
