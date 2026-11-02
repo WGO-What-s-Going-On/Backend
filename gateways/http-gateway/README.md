@@ -191,5 +191,7 @@ CD는 staging의 기존 CORS·WebSocket Origin 목록에 localhost:3000과 local
 추가한다. 보안그룹에 프런트 개발 서버 포트를 여는 설정은 필요 없다.
 HTTP CORS는 GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS를 허용하고
 인증 정보를 포함하는 요청에도 정확한 Origin 허용 목록을 유지한다.
+Capacitor 앱은 `CORS_ORIGINS`에 `capacitor://localhost`를 명시한다. `.env.example`에도 이 값을 포함한다.
+GKE에서는 `webOrigins`에 등록한다. WebSocket 연결에는 별도 `websocketOrigins` 등록이 필요하다.
 5173이 사용 중이면 Vite가 다음 포트를 선택할 수 있으므로 프런트는
 `npm run dev -- --port 5173 --strictPort`로 실행하는 것을 권장한다.

@@ -24,6 +24,8 @@ export function validateEnvironment(config) {
     !Array.isArray(config.webOrigins) ||
     !config.webOrigins.length ||
     config.webOrigins.some((origin) => {
+      if (typeof origin !== 'string' || origin.includes('*')) return true;
+      if (origin === 'capacitor://localhost') return false;
       try {
         const url = new URL(origin);
         const localDemo =
@@ -39,7 +41,7 @@ export function validateEnvironment(config) {
     })
   )
     throw new Error(
-      'Explicit HTTPS webOrigins required (HTTP localhost allowed for Standard demo)',
+      'Explicit HTTPS or capacitor://localhost webOrigins required (HTTP localhost allowed for Standard demo)',
     );
   if (
     config.websocketOrigins !== undefined &&

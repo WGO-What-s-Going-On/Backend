@@ -275,6 +275,43 @@ test('HTTP origins are limited to canonical localhost origins in Standard demo',
   );
 });
 
+test('HTTP CORS renders the exact Capacitor origin in every deployment profile', () => {
+  const webOrigins = ['https://demo.example.com', 'capacitor://localhost'];
+  for (const environment of [config, standard]) {
+    const native = { ...environment, webOrigins };
+    assert.doesNotThrow(() => validateEnvironment(native));
+    const settings = appResources(
+      native,
+      'http-gateway',
+      image('http-gateway'),
+    ).find((resource) => resource.kind === 'ConfigMap').data;
+    assert.equal(settings.CORS_ORIGINS, webOrigins.join(','));
+  }
+});
+
+test('HTTP CORS rejects native lookalikes, paths, ports and wildcards', () => {
+  for (const origin of [
+    'capacitor://evil.example',
+    'capacitor://localhost.evil.example',
+    'capacitor://localhost/',
+    'capacitor://localhost/path',
+    'capacitor://localhost:1234',
+    'capacitor://user:pass@localhost',
+    'capacitor://localhost?x=1',
+    'capacitor://localhost#fragment',
+    'capacitor://*',
+    'https://*.example.com',
+    '*',
+  ]) {
+    for (const environment of [config, standard]) {
+      assert.throws(
+        () => validateEnvironment({ ...environment, webOrigins: [origin] }),
+        /webOrigins/,
+      );
+    }
+  }
+});
+
 test('explicit Autopilot rejects localhost HTTP origins', () => {
   assert.throws(
     () =>

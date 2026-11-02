@@ -67,14 +67,17 @@ node scripts/gcp-bootstrap.mjs --apply
 기존 리소스의 발견 오류를 미존재로 취급하지 않는다. 이미 있는 리소스의 모든 drift를 자동 교정하는 도구는 아니다.
 클러스터는 private node와 IAM으로 접근하는 DNS control-plane endpoint를 사용한다.
 Secret Manager CSI의 KSA principal 권한과 SDK용 GSA 권한을 각각 설정한다.
-`webOrigins`에는 실제 프런트엔드 HTTPS origin을 넣는다. HTTP Gateway와 GCS 버킷 CORS에 적용된다.
+`webOrigins`에는 실제 프런트엔드 HTTPS origin과 앱의 `capacitor://localhost`를 넣는다.
+HTTP Gateway와 GCS 버킷 CORS에 적용된다. Capacitor origin은 정확히 `capacitor://localhost`만 허용한다.
 `websocketOrigins`에는 WebSocket에 접속할 웹과 앱의 정확한 origin을 모두 넣는다.
 예를 들어 `["https://demo.example.com", "capacitor://localhost"]`를 지정한다.
 이 필드를 생략한 기존 환경은 `webOrigins`를 그대로 사용한다.
 `standard-demo` 환경에서는 `http://localhost:5173`처럼 명시한 localhost HTTP origin도 허용한다.
 포트가 다르면 별도 origin이므로 실제 프런트엔드의 `Origin` 헤더에 맞춰 등록한다.
 와일드카드, 경로, 자격 증명이 포함된 URL은 허용하지 않는다.
-설정을 변경한 뒤 WS Gateway를 배포해야 실행 중인 Pod에 반영된다.
+환경 파일에 HTTP와 WebSocket 허용 목록을 각각 등록한다. 한쪽 목록만 바꾸면 다른 쪽에는 반영되지 않는다.
+설정을 변경한 뒤 해당 HTTP Gateway와 WS Gateway를 배포해야 실행 중인 Pod에 반영된다.
+기존 GCS 버킷에도 앱 업로드를 허용하려면 버킷 CORS를 별도로 갱신한다. Gateway 배포만으로 기존 버킷 설정은 바뀌지 않는다.
 허용 origin으로 인증 후 연결과 재연결을 확인하고, 미등록 origin이 `403 WS_ORIGIN_FORBIDDEN`인지 확인한다.
 
 클러스터 인증을 얻은 뒤 foundation을 적용한다. 프로젝트와 클러스터 이름은 환경 파일과 일치시킨다.
