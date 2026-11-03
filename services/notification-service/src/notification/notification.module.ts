@@ -21,9 +21,16 @@ import { NotificationEventWriter } from '../persistence/notification-event.write
 import { UserEventHandler } from '../event-consumer/user-event.handler.js';
 import { NotificationStreamWorkers } from '../event-consumer/notification-stream.workers.js';
 import { ModerationEventHandler } from '../event-consumer/moderation-event.handler.js';
+import { NearbyController } from './nearby.controller.js';
+import { NearbySubscriptionService } from './nearby-subscription.service.js';
+import { NearbyWorker } from './nearby.worker.js';
 
 @Module({
-  controllers: [NotificationController, NotificationReadinessController],
+  controllers: [
+    NotificationController,
+    NotificationReadinessController,
+    NearbyController,
+  ],
   providers: [
     PostgresDatabase,
     {
@@ -51,6 +58,8 @@ import { ModerationEventHandler } from '../event-consumer/moderation-event.handl
     NotificationEventWriter,
     UserEventHandler,
     ModerationEventHandler,
+    NearbySubscriptionService,
+    NearbyWorker,
     NotificationStreamWorkers,
     PostEventHandler,
     PostEventConsumer,

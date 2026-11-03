@@ -172,3 +172,12 @@ MongoDB 통합 테스트는 프론트 응답·답글·반응·종료/재개·권
 닉네임 RPC와 Map 후보는 테스트 대역이며, Map 행정동 응답과 좌표 순서는 HTTP 대역으로 별도 검증한다.
 Notification은 실제 로컬 PostgreSQL/Redis에서 설정·삭제·전체 읽음을 검증한다.
 실제 카카오 OAuth/행정구역, 운영 MongoDB replica set 호환성·성능, 실제 FCM 전송은 로컬 테스트 통과로 대체하지 않는다.
+# Notification 위치 구독과 알림 설정 확장
+
+기존 `/api/v1/notifications` 목록·읽음·삭제·FCM 토큰·게시글 mute를 유지한다. settings PATCH는 기존 네 boolean에 rewards/votes/moderation을 추가한다. 각 false는 해당 종류의 **새 알림함과 Push 모두** 억제한다. 기존 알림 이력은 유지하며 Push 직전에도 설정을 재검증한다.
+
+`GET|PUT|DELETE /api/v1/notifications/nearby-subscription`은 기존 Access JWT→HTTP Gateway ES256 인증을 사용하며 서명된 본인만 접근한다. PUT `{enabled:true,locationConsent:true,latitude,longitude,capturedAt:"UTC ISO",expiresInSeconds?:60..900}`은 별도 주변 알림 opt-in과 위치 이용 동의다. 사용자 버튼/브라우저 위치 권한과 위치 이용 목적 동의 UI가 필요하며 기존 약관·게시글 참여·거주 지역으로 대신하지 않는다. 위치는 최대15분, 갱신에는 새 측정값이 필요하다. enabled=false만 보내거나 DELETE(204)하면 철회와 대기 Push 취소다. GET/PUT 응답은 `{featureEnabled,enabled,locationConsent,expiresAt,radiusM:150}`이며 좌표를 반환하지 않는다.
+
+NEARBY_NOTIFICATIONS_ENABLED 기본false이며 OFF에서 새 위치 저장 요청은503이다. User 차단 조회 전용 키·URL과 프런트 동의 UI를 배포 검증한 후 true로 전환한다. 반경150m 포함, 작성자 제외, 양방향 차단/종류 설정/게시글 mute 적용, 사용자당 기본10분에 최대1회 예약한다. 위치 철회·갱신·만료 및 게시글 종료·삭제는 이전 미전송 작업을 취소한다. 다수 수신자는 영속 cursor/lease와 최대50명/페이지, 최대5개 권위 조회 동시 실행으로 처리한다.
+
+FCM data.notificationId로 중복 표시를 막고 알림함을 원본으로 동기화한다. /posts/{id}와 commentId는 실제 원본 대상이 있는 경우만 사용한다. 칭호·신고·삭제 안내는 /notifications이며 payload.metadata에는 검증된 칭호/지역/레벨 등만 있다. regionName=null을 행정동 이름으로 추정하지 않는다. WS Notification 전용 인증 채널은 현재 없으며 REST/FCM으로 연결한다. 토큰 등록 성공과 실제 PWA 수신 성공은 별도 검증한다.

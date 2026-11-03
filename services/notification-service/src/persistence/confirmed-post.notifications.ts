@@ -15,6 +15,11 @@ export async function confirmedPostNotifications(
     event.eventType === 'PostUpdated' &&
     (event.postVersion ?? 0) > previous.post_version &&
     !previous.closed;
+  if (terminal || (update && event.closedAt !== null))
+    await client.query(
+      `UPDATE notification_nearby_jobs SET status='CANCELED',lease_id=NULL,lease_until=NULL WHERE post_id=$1 AND status IN ('PENDING','RUNNING')`,
+      [event.aggregateId],
+    );
   if (terminal || update)
     await client.query(
       `UPDATE notification_deliveries SET status='CANCELED',lease_id=NULL,lease_until=NULL

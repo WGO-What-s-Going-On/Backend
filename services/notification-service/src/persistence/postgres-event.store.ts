@@ -3,6 +3,10 @@ import { NotificationBlockChecker } from '../notification/block-checker.js';
 import { NotificationEventWriter } from './notification-event.writer.js';
 import { projectExtendedPost } from './extended-post.notifications.js';
 import { confirmedPostNotifications } from './confirmed-post.notifications.js';
+import {
+  scheduleNearby,
+  nearbyEnabled,
+} from '../notification/nearby.policy.js';
 import type { Pool, PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import type { PostEvent } from '../event-consumer/post-event.js';
@@ -277,6 +281,8 @@ export class PostgresEventStore {
       ).rows[0];
       if (processed) return processed.recipient ?? undefined;
       const recipient = event.postAuthorId ?? meta.author_id ?? undefined;
+      if (event.eventType === 'PostCreated')
+        await scheduleNearby(client, event);
       const previousPost = { ...meta };
       const terminal =
         event.eventType === 'PostDeleted' || event.eventType === 'PostExpired';
@@ -556,6 +562,15 @@ export class PostgresEventStore {
       )
         throw new BusyDeliveryError();
       const notificationId = current.message.data?.notificationId;
+      const nearby = current.message.data?.type === 'NEARBY_POST_CREATED';
+      const subscription = nearby
+        ? (
+            await client.query(
+              'SELECT revision FROM notification_nearby_subscriptions WHERE user_id=$1 AND expires_at>now()',
+              [current.message.userId],
+            )
+          ).rows[0]
+        : undefined;
       const notification = notificationId
         ? (
             await client.query<NotificationRow>(
@@ -565,6 +580,10 @@ export class PostgresEventStore {
           ).rows[0]
         : undefined;
       const cancel =
+        (nearby &&
+          (!nearbyEnabled() ||
+            subscription?.revision !==
+              current.message.data?.subscriptionRevision)) ||
         (current.message.data?.type === 'BOARD_STALE' &&
           Date.parse(current.message.data.scheduledCloseAt ?? '') <=
             now.getTime()) ||

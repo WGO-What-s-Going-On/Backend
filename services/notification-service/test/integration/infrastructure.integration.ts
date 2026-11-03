@@ -14,7 +14,7 @@ it('connects to isolated PostgreSQL schema and Redis and repeats migration safel
           'SELECT version FROM notification_schema_versions',
         )
       ).rows,
-    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
     const tables = (
       await h.database.pool.query<{ tablename: string }>(
         'SELECT tablename FROM pg_tables WHERE schemaname=$1',

@@ -23,3 +23,6 @@
 모든 category 설정 false는 새 알림함과 Push를 모두 억제한다. 실제 Post가 있는 알림에는 게시글 mute도 적용한다. 설정은 Push 직전 다시 확인한다. User/신고처럼 Post가 없는 사건은 delivery.post_id=NULL이며 가짜 게시글을 만들지 않는다. 링크는 실제 post가 있으면 /posts/{id}, User·신고·삭제 안내는 /notifications다. 프런트에서 notificationId로 표시를 중복 제거한다. 외부 FCM 전송의 물리적 exactly-once는 보장하지 않는다.
 
 새 User/Moderation group은 최초 배포 시 last-generated-id를 DB에 저장하고 그 이후부터 읽는다. 과거 재생은 명시적 startId로 별도 실행하며 원본 eventId를 유지한다. 이미 존재하는 group과 receipt는 보존한다. 자세한 운영 재처리·배포 순서는 운영 문서를 따른다.
+# 주변 알림
+
+Notification이 소유한 명시적 위치 구독은 기존 User 약관이나 Map의 게시글 GEO 후보와 별개다. Map에는 알림 동의를 포함한 사용자 위치 구독 계약이 없어 이를 조회/추정하지 않는다. 공개 API와 수신 정책은 [프런트 계약](../../docs/contracts/frontend-integration.md)을 따른다. 영속 fanout은 50명 페이지, 동시 User 조회5개, 60초 lease, 실패5초 후 재시도, cursor/게시글·사용자 business key로 복구한다. API 위치는 최대15분, PostCreated fanout도 발생 후15분 내로 제한한다. 만료 후 조회/발송이 차단되며 좌표 포함 행은 1분 주기/1000행 batch로 삭제한다. backlog가 있으면 다음 주기까지 남을 수 있어 만료 행 수를 감시한다. 완료·취소된 job 좌표도 정리하며 이벤트 receipt·알림에는 좌표를 저장하지 않는다.

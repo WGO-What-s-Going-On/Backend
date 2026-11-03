@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import { migrateCrossService } from './cross-service.schema.js';
 import { migratePostNotifications } from './post-notifications.schema.js';
+import { migrateNearby } from './nearby.schema.js';
 
 export async function migrate(pool: Pool): Promise<void> {
   const client = await pool.connect();
@@ -96,6 +97,7 @@ export async function migrate(pool: Pool): Promise<void> {
     `);
     await migrateCrossService(client);
     await migratePostNotifications(client);
+    await migrateNearby(client);
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
