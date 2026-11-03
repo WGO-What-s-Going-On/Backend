@@ -291,11 +291,11 @@ snake_case proto 필드 방식을 사용한다. JS에서는 기본 camelCase 변
 canonical 10진수 문자열로 처리한다. DB의 안전 정수 상한 덕분에 현재 Map/Post의 int64 및
 JavaScript number 경로에서도 정밀도 손실 없이 표현할 수 있다.
 
-| RPC | 동작 |
-| --- | --- |
-| GetUserProfile | user_id, nickname, optional profile_image_key, status 반환. 없는 사용자·WITHDRAWN은 NOT_FOUND, 온보딩 미완료는 FAILED_PRECONDITION |
+| RPC                  | 동작                                                                                                                                                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GetUserProfile       | user_id, nickname, optional profile_image_key, status 반환. 없는 사용자·WITHDRAWN은 NOT_FOUND, 온보딩 미완료는 FAILED_PRECONDITION                                                                                    |
 | BatchGetUserProfiles | user_ids 1~100개(중복 제거 전). 유효한 정수 ID를 canonical 10진수 문자열로 검증하고 중복 제거. profiles와 unavailable_user_ids를 각각 최초 요청 순서로 반환. 없는 사용자·온보딩 미완료·WITHDRAWN은 unavailable로 분류 |
-| GetUserStatus | PostgreSQL에서 user_id, UserStatus enum, optional google.protobuf.Timestamp suspended_until 조회. 온보딩 여부와 무관하게 모든 상태 제공. 없는 사용자는 NOT_FOUND |
+| GetUserStatus        | PostgreSQL에서 user_id, UserStatus enum, optional google.protobuf.Timestamp suspended_until 조회. 온보딩 여부와 무관하게 모든 상태 제공. 없는 사용자는 NOT_FOUND                                                      |
 
 profile은 온보딩 완료된 ACTIVE/SUSPENDED/WITHDRAWAL_PENDING만 제공하며, 임시 닉네임과
 최종 탈퇴 사용자의 기존 표시 정보를 내부 소비자에게 노출하지 않는다. 이 조회 정책은 DB 삭제를 의미하지 않는다.
@@ -333,7 +333,7 @@ ws-gateway는 GetUserStatus만 호출할 수 있으며 인증된 비허용 호�
 
 ### Implementation status and remaining integration
 
-REST 10개(auth kakao/refresh/logout, users/me GET/PATCH, nickname availability, terms,
+기존 REST(auth kakao/refresh/logout, users/me GET/PATCH, nickname availability, terms,
 term-consents, badges, withdrawal), 인증·세션 rotation/복구, Outbox Worker, 최종 탈퇴 Scheduler,
 내부 RPC 3개가 구현되어 있다. SUSPENDED는 상태 조회·기존 로그인/refresh 거부만 지원하며
 제재 부여/해제·Moderation 처리는 구현하지 않았다.
@@ -398,11 +398,38 @@ eventId로 재발행된다. **At-least-once** 방식이므로 소비자는 event
 Redis timeout으로 결과가 불명확한 경우에도 중복은 가능하다.
 
 Redis가 수락한 이벤트의 장애 후 보존은 Redis persistence/replication 설정에 달려 있다.
-이번 구현에는 trim/보존 기간, Outbox 정리, retry 상한, DLQ, Consumer를 추가하지 않았다.
+Outbox 발행 경로에는 trim/보존 기간, Outbox 정리, retry 상한, DLQ를 추가하지 않았다.
 운영에서는 미발행 건수·최장 대기 시간·반복 실패·DB lock 대기를 감시하고, 잘못된 envelope를
 수동 점검해야 한다. PENDING 조회 인덱스 및 claim lease는 규모가 커질 때 별도 검토한다.
 
-## Verification
+## Activity rewards
+
+현재 Post의 댓글 공감·투표 후보 선정·승리를 포함한 활동 이벤트를 `post-user-rewards` group으로 소비한다.
+PostUpdated는 검증 후 명시적으로 무시·ACK한다. 원장·점수·칭호·User Outbox는 같은 PostgreSQL 트랜잭션에 저장한다.
+`USER_REWARD_POLICY_JSON`이 없으면 크레딧 지급은 OFF다. 확정 칭호 자동 평가는 별도로 기본 ON이며 개발 점수 임계값을 공식 칭호에 사용하지 않는다.
+
+기존 보상/칭호 migration에 이어 StoreVoteActivitySnapshots 및 ApplyRegionalTitlePolicyV2를 적용한다.
+`wgo-titles-v2`는 후보 +1(게시물·사용자당 최대1), 승리 +2를 사건별 지역과 selectedAt/closedAt으로 계산한다.
+특파원 조건은 지역 무관 유효 승리5건 그대로다. 천리안은 KST 최근30일 양의 점수 실적이 있는 현재 특파원 N>=10 중 floor(N/10)이다.
+`USER_TITLE_REGION_CONTRACT=vote-region-v1`이 기본이며 실제 candidate.regionCode/vote.regionCode를 수신한다.
+지역 null/누락은 별도 보존하고 점수에서 제외하며, 게시물 백필로 과거 실적을 재귀속하지 않는다.
+`pnpm seed:badges`는 네 칭호를 insert-if-absent하며 기존 이름/설정/지급 이력을 보존한다.
+기존 `/badges`, `/credits`, `/growth`, `/credits/history`를 유지하고 `/badges/history`를 추가했다.
+모두 `/api/v1/users/me` 하위이며 현재 Gateway ES256 인증 경계를 따른다.
+
+- [확정 4단계 칭호·행정동 랭킹과 외부 계약 준비 상태](WGO_TITLE_POLICY.md)
+- [정책·이벤트·DB·API·Notification 계약 및 재처리 절차](REWARDS_CONTRACT.md)
+- [이번 로컬 구현과 실제 검증 결과·외부 의존성](USER_SERVICE_COMPLETION_REPORT.md)
+
+```sh
+pnpm migration:run
+pnpm seed:badges
+pnpm rewards:reconcile --user 123
+# 실제 재평가: 승인된 정책·대상 범위를 확인한 후 명시적으로 실행
+pnpm rewards:reconcile --user 123 --apply --operation-id approved-replay-001
+```
+
+## Verification commands
 
 ```bash
 pnpm typecheck
@@ -420,10 +447,11 @@ docker build -t wgo-user-service .
 ## HTTP OpenAPI / Swagger
 
 서비스 실행 후 `http://localhost:3001/docs`에서 Swagger UI,
-`http://localhost:3001/docs/openapi.json`에서 OpenAPI 3.0 문서를 제공한다.
+`http://localhost:3001/docs/openapi.json`에서 현재 REST 계약의 OpenAPI 3.0 문서를 제공한다.
 Post와 같은 Nest Swagger 방식으로 첫 문서 요청 때 생성한다.
-실제 컨트롤러의 REST 10개와 health만 기록하며 내부 gRPC는 포함하지 않는다.
-문서 모델은 `src/http.openapi.ts`에 있으며 응답 인터페이스를 구현해 필드 누락을 검사한다.
+실제 컨트롤러의 REST API와 health를 기록하며 내부 gRPC는 포함하지 않는다.
+문서 모델은 `src/http.openapi.ts`와 `src/rewards/rewards.openapi.ts`에 있으며
+응답 인터페이스를 구현해 필드 누락을 검사한다.
 
 HTTP Gateway의 `pnpm docs:generate`가 `USER_SERVICE_URL`에서 이 문서를 수집한다.
 Gateway의 `/docs`에는 공개 auth/users API와 `GET /api/v1/terms`도 포함한다.
@@ -432,12 +460,12 @@ Gateway 문서를 갱신하려면 User·Post·Map·Notification 문서 endpoint�
 User 앱의 실제 실행에는 기존 PostgreSQL·Redis·Kakao·JWT 설정이 필요하다.
 `pnpm test test/openapi.test.ts`는 외부 저장소 없이 컨트롤러와 문서 계약을 검증한다.
 
-현재 Gateway와 User REST에는 사용자 Bearer JWT 검증이 연결되어 있지 않다.
-프로필·동의·배지·탈퇴는 `X-User-Id`를 직접 읽고, 로그아웃은 `X-Session-Id`도 읽는다.
-로컬 테스트에서는 양의 canonical 10진수 사용자 ID(최대 9007199254740991)를 전달한다.
-로그아웃 session ID는 발급된 refreshToken의 점 앞 UUID이며 해당 사용자 세션이어야 한다.
-이를 구현된 Bearer 인증이나 내부 서비스 JWT 입력으로 표시하지 않는다.
+내부 문서는 ES256 Gateway service JWT와 검증된 identity 문맥을 설명한다.
+공개 클라이언트는 Gateway에 Access JWT를 보내며 임의 `X-User-Id`는 사용자 인증으로 인정되지 않는다.
+Gateway의 문서 수집·병합은 내부 헤더를 숨기고 사용자 Bearer 인증을 표시한다.
+로그아웃의 내부 `X-Session-Id`는 발급된 refreshToken의 점 앞 UUID이며 해당 사용자 세션이어야 한다.
 로그인은 201, refresh는 200, 로그아웃은 본문 없는 204이며 기존 응답·오류 동작을 유지한다.
+보상 응답/이력 schema와 양쪽 인증 허용 목록은 계약 테스트로 검증한다.
 
 ### REST 인증 전환 운영 메모
 
