@@ -517,6 +517,41 @@ describe('public OpenAPI merge', () => {
     expect(responses['503']['x-gateway-response'].content).toBeDefined();
     expect(responses['413'].description).toContain('1048576');
   });
+  it('preserves Notification feature-disabled errors alongside Gateway unavailable errors', async () => {
+    const source = fixture('/api/v1/notifications/nearby-subscription');
+    const item = source.paths['/api/v1/notifications/nearby-subscription'];
+    item.put = item.get;
+    delete item.get;
+    const content = {
+      'application/json': {
+        schema: {
+          type: 'object',
+          properties: {
+            statusCode: { type: 'integer' },
+            message: { type: 'string' },
+          },
+        },
+      },
+    };
+    item.put.responses['503'] = {
+      description: 'Nearby notifications are disabled',
+      content,
+    };
+    const merged = await mergeDocuments(
+      [{ service: 'notification', document: source }],
+      config(),
+    );
+    const response =
+      merged.paths['/api/v1/notifications/nearby-subscription'].put.responses[
+        '503'
+      ];
+    expect(response.content).toEqual(content);
+    expect(response.description).toContain('Nearby notifications are disabled');
+    expect(
+      response['x-gateway-response'].content['application/json'].schema
+        .properties.code.enum,
+    ).toEqual(['GATEWAY_UPSTREAM_UNAVAILABLE']);
+  });
 });
 
 describe('collection and docs routes', () => {
