@@ -6,6 +6,8 @@ export interface PushMessage {
   targetId?: string | null;
   actionPath?: string | null;
   tokens?: string[];
+  // Server-only authorization context; the FCM adapter never serializes this identity.
+  authorizationActorId?: string;
 }
 
 export interface PushResult {

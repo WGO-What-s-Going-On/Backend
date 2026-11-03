@@ -108,6 +108,8 @@ describe('explicit 150m nearby subscriptions and bounded durable fanout', () => 
     await create();
     await worker.runOnce();
     expect(await items('2')).toHaveLength(1);
+    expect((await items('2'))[0]?.actorId).toBeNull();
+    expect((await items('2'))[0]?.metadata).toBeUndefined();
     expect(await items('1')).toHaveLength(0);
     expect(await items('3')).toHaveLength(0);
     expect(await items('4')).toHaveLength(0);

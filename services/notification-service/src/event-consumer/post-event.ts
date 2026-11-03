@@ -89,11 +89,7 @@ export function parsePostEvent(
     throw new Error('Invalid post event JSON');
   }
   require(record(value), 'post event envelope');
-  if (
-    !text(value.eventType) ||
-    !supported.has(value.eventType as SupportedPostEventType)
-  )
-    return null;
+  require(text(value.eventType), 'post event type');
   require(text(value.eventId) &&
     value.schemaVersion === 1 &&
     value.producer === 'post-service' &&
@@ -106,6 +102,7 @@ export function parsePostEvent(
   for (const key of ['activityVersion', 'postVersion'])
     if (value[key] !== undefined)
       require(positive(value[key]), 'post event version');
+  if (!supported.has(value.eventType as SupportedPostEventType)) return null;
   if (value.postAuthorId !== undefined)
     require(positive(value.postAuthorId), 'post author ID');
   const event: PostEvent = {

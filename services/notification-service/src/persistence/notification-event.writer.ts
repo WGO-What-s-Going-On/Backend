@@ -22,6 +22,8 @@ export interface EventNotification {
   actionPath?: string;
   allowTerminal?: boolean;
   bundleKey?: string;
+  authorizationActorId?: string;
+  deliveryData?: Record<string, string>;
 }
 @Injectable()
 export class NotificationEventWriter {
@@ -159,13 +161,13 @@ export class NotificationEventWriter {
       );
     if (input.push) {
       const data: Record<string, string> = {
+        ...input.deliveryData,
         notificationId,
         type: input.type,
         category: input.category,
       };
       if (input.commentId) data.commentId = input.commentId;
       if (input.parentCommentId) data.parentCommentId = input.parentCommentId;
-      if (input.actorId) data.actorId = input.actorId;
       if (input.allowTerminal) data.allowTerminal = 'true';
       for (const [key, value] of Object.entries(input.metadata ?? {}))
         if (typeof value === 'string' || typeof value === 'number')
@@ -178,6 +180,7 @@ export class NotificationEventWriter {
           `delivery#${notificationId}`,
           {
             userId: input.userId,
+            authorizationActorId: input.authorizationActorId ?? input.actorId,
             title: input.title,
             body: input.body,
             targetId: notification.targetId,

@@ -16,6 +16,7 @@ export async function postgresHarness() {
     throw new Error('Integration tests require a loopback PostgreSQL endpoint');
   const schema = `notification_test_${randomUUID().replaceAll('-', '')}`;
   const admin = new Pool({ connectionString, connectionTimeoutMillis: 2000 });
+  admin.on('error', () => undefined);
   await admin.query(`CREATE SCHEMA ${schema}`);
   const database = new PostgresDatabase(
     new ConfigService({

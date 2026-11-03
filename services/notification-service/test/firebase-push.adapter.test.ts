@@ -29,6 +29,44 @@ class MemorySubscriptions implements PushSubscriptionRepository {
 }
 
 describe('FirebasePushAdapter', () => {
+  it('keeps authorization identities and consent revisions out of client FCM data', async () => {
+    const subscriptions = new PushSubscriptionService(
+      new MemorySubscriptions(),
+    );
+    await subscriptions.upsert('1', 'test-token', 'web');
+    const sendEachForMulticast = vi
+      .fn()
+      .mockResolvedValue({
+        successCount: 1,
+        failureCount: 0,
+        responses: [{ success: true }],
+      });
+    const adapter = new FirebasePushAdapter(
+      new ConfigService(),
+      subscriptions,
+      { sendEachForMulticast } as unknown as Messaging,
+    );
+    await adapter.send({
+      userId: '1',
+      title: 'nearby',
+      body: 'new post',
+      authorizationActorId: '999',
+      data: {
+        notificationId: 'n',
+        type: 'NEARBY_POST_CREATED',
+        actorId: '999',
+        allowTerminal: 'true',
+        subscriptionRevision: 'private-consent-revision',
+      },
+    });
+    expect(sendEachForMulticast.mock.calls[0]?.[0].data).toEqual({
+      notificationId: 'n',
+      type: 'NEARBY_POST_CREATED',
+    });
+    expect(sendEachForMulticast.mock.calls[0]?.[0]).not.toHaveProperty(
+      'authorizationActorId',
+    );
+  });
   it('chunks more than 500 tokens and retries only transient failures from known responses', async () => {
     const repository = new MemorySubscriptions();
     const subscriptions = new PushSubscriptionService(repository);

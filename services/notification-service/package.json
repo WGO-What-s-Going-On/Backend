@@ -16,7 +16,9 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "db:migrate": "node --env-file-if-exists=.env dist/persistence/migrate.js",
-    "db:cleanup": "node --env-file-if-exists=.env dist/persistence/cleanup.js"
+    "db:cleanup": "node --env-file-if-exists=.env dist/persistence/cleanup.js",
+    "events:replay": "node --env-file-if-exists=.env dist/event-consumer/replay.cli.js",
+    "events:prepare": "node --env-file-if-exists=.env dist/event-consumer/prepare.cli.js"
   },
   "dependencies": {
     "@nestjs/common": "12.0.4",

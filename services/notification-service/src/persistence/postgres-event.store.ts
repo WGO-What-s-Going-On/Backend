@@ -125,6 +125,14 @@ export class PostgresEventStore {
     ).rows[0];
     return row ? deliveryFromRow(row) : undefined;
   }
+  async recordIgnored(fields: Record<string, string>) {
+    await new NotificationEventWriter(this.database).record(
+      'post:events',
+      fields.eventId!,
+      { eventType: fields.eventType, ignored: true },
+      async () => [],
+    );
+  }
   async preferences(
     userId: string,
     client: Pool | PoolClient = this.database.pool,
@@ -225,6 +233,24 @@ export class PostgresEventStore {
   }
 
   async apply(event: PostEvent, now = new Date()): Promise<string | undefined> {
+    const known = (
+      await this.database.pool.query(
+        'SELECT details FROM notification_event_inbox WHERE source_stream=$1 AND event_id=$2',
+        ['post:events', event.eventId],
+      )
+    ).rows[0];
+    if (known) {
+      if (
+        known.details.eventType !== event.eventType ||
+        (known.details.aggregateId &&
+          known.details.aggregateId !== event.aggregateId)
+      )
+        throw new Error('Invalid Post event identity conflict');
+      return (
+        (await this.processedEvent(event.aggregateId, event.eventId))
+          ?.recipient ?? undefined
+      );
+    }
     let allowedRecipients: Set<string> | undefined;
     if (
       event.eventType === 'PostCommentCreated' &&
@@ -271,6 +297,23 @@ export class PostgresEventStore {
     }
     return this.database.transaction(async (client) => {
       const postId = event.aggregateId;
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+        [`post:events:${event.eventId}`],
+      );
+      const receipt = (
+        await client.query(
+          'SELECT details FROM notification_event_inbox WHERE source_stream=$1 AND event_id=$2',
+          ['post:events', event.eventId],
+        )
+      ).rows[0];
+      if (
+        receipt &&
+        (receipt.details.eventType !== event.eventType ||
+          (receipt.details.aggregateId &&
+            receipt.details.aggregateId !== postId))
+      )
+        throw new Error('Invalid Post event identity conflict');
       // 동일 post의 중복 처리와 묶음 갱신은 이 행 잠금과 같은 transaction 안에서 직렬화한다.
       const meta = await this.lockPost(client, postId);
       const processed = (
@@ -279,7 +322,15 @@ export class PostgresEventStore {
           [postId, event.eventId],
         )
       ).rows[0];
-      if (processed) return processed.recipient ?? undefined;
+      if (processed) {
+        // Upgrade old receipts without recreating their already-committed alerts.
+        await client.query(
+          `INSERT INTO notification_event_inbox VALUES('post:events',$1,$2,now()) ON CONFLICT DO NOTHING`,
+          [event.eventId, { eventType: event.eventType, aggregateId: postId }],
+        );
+        return processed.recipient ?? undefined;
+      }
+      if (receipt) return undefined;
       const recipient = event.postAuthorId ?? meta.author_id ?? undefined;
       if (event.eventType === 'PostCreated')
         await scheduleNearby(client, event);
@@ -421,6 +472,9 @@ export class PostgresEventStore {
               );
               const message: PushMessage = {
                 userId: recipient,
+                ...(event.actorId
+                  ? { authorizationActorId: event.actorId }
+                  : {}),
                 title: notification.title,
                 body: notification.body,
                 targetId: postId,
@@ -428,7 +482,6 @@ export class PostgresEventStore {
                 data: {
                   notificationId,
                   type,
-                  ...(event.actorId ? { actorId: event.actorId } : {}),
                   ...(event.commentId ? { commentId: event.commentId } : {}),
                 },
               };
@@ -516,7 +569,7 @@ export class PostgresEventStore {
       await client.query(
         `INSERT INTO notification_event_inbox(source_stream,event_id,details) VALUES('post:events',$1,$2)
         ON CONFLICT DO NOTHING`,
-        [event.eventId, { eventType: event.eventType }],
+        [event.eventId, { eventType: event.eventType, aggregateId: postId }],
       );
       return recipient;
     });

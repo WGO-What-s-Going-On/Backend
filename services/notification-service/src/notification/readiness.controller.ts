@@ -40,7 +40,7 @@ export class NotificationReadinessController {
       );
     try {
       const result = await this.database.pool.query(
-        'SELECT version FROM notification_schema_versions WHERE version=1',
+        'SELECT version FROM notification_schema_versions WHERE version=4',
       );
       if (result.rowCount !== 1) throw new Error('Schema not initialized');
     } catch {

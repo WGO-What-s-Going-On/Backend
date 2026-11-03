@@ -42,7 +42,7 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
     });
     connection.on('error', () => undefined);
     await connection.connect();
-    consumer = new PostEventConsumer(h.config, handler, connection);
+    consumer = new PostEventConsumer(h.config, handler, connection, h.database);
   });
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -158,7 +158,12 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
       'ALTER TABLE notification_processed_events DROP CONSTRAINT fail_commit',
     );
     await consumer.onModuleDestroy();
-    const recovered = new PostEventConsumer(h.config, handler);
+    const recovered = new PostEventConsumer(
+      h.config,
+      handler,
+      undefined,
+      h.database,
+    );
     await recovered.onModuleInit();
     try {
       await expect.poll(() => pending(), { timeout: 5000 }).toBe(0);
@@ -373,13 +378,11 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
     expect(await pending()).toBe(0);
     expect(
       (await h.redis.xRange(DEAD, '-', '+')).every(
-        (row) =>
-          row.message.eventId &&
-          row.message.error?.startsWith('Error: Invalid'),
+        (row) => row.message.eventId && row.message.reason === 'INVALID_EVENT',
       ),
     ).toBe(true);
     const spy = vi
-      .spyOn(connection, 'xAdd')
+      .spyOn(connection, 'eval')
       .mockRejectedValueOnce(new Error('DLQ offline'));
     const id = await h.redis.xAdd(STREAM, '*', { ...base, data: '{' });
     await expect(consumer.pollOnce()).rejects.toThrow('DLQ offline');
@@ -430,7 +433,7 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
     const ack = vi
       .spyOn(connection, 'xAck')
       .mockRejectedValueOnce(new Error('ACK offline'));
-    await consumer.pollOnce();
+    await expect(consumer.pollOnce()).rejects.toThrow('ACK offline');
     expect(await pending()).toBe(1);
     ack.mockRestore();
     await consumer.pollOnce();

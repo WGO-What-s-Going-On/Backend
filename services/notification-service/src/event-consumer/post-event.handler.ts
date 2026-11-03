@@ -51,7 +51,12 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
   async handle(event: PostEvent): Promise<void> {
     // Redis lock/window는 정확성의 근거가 아니다. PostgreSQL transaction의 post 행 잠금이 처리권을 결정한다.
     const recipient = await this.store.apply(event);
-    if (recipient) await this.state.invalidateUnread(recipient);
+    for (const id of new Set([
+      recipient,
+      event.commentAuthorId,
+      event.parentCommentAuthorId,
+    ]))
+      if (id) await this.state.invalidateUnread(id);
     await this.dispatch(event.aggregateId);
   }
   async dispatch(postId?: string): Promise<void> {
@@ -75,7 +80,9 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
         }
         let result;
         try {
-          const actorId = delivery.message.data?.actorId;
+          const actorId =
+            delivery.message.authorizationActorId ??
+            delivery.message.data?.actorId;
           if (
             actorId &&
             this.blocks &&
@@ -110,6 +117,9 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
       }
     }
     if (failure) throw failure;
+  }
+  async ignore(fields: Record<string, string>) {
+    await this.store.recordIgnored(fields);
   }
   async drain(): Promise<void> {
     if (this.running) return this.draining;

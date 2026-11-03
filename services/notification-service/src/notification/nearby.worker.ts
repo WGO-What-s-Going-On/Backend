@@ -198,8 +198,8 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
             title: '주변 새 게시물',
             body: '주변에 새로운 게시물이 등록되었습니다.',
             push: true,
-            actorId: job.author_id,
-            metadata: { subscriptionRevision: location.revision },
+            authorizationActorId: job.author_id,
+            deliveryData: { subscriptionRevision: location.revision },
           });
           created = !!n?.created;
           if (created)

@@ -43,7 +43,17 @@ export class FirebasePushAdapter implements PushSender {
       return { attempted: 0, succeeded: 0, failed: 0, invalidTokens: [] };
 
     const data = {
-      ...(message.data ?? {}),
+      ...Object.fromEntries(
+        Object.entries(message.data ?? {}).filter(
+          ([key]) =>
+            ![
+              'actorId',
+              'authorizationActorId',
+              'allowTerminal',
+              'subscriptionRevision',
+            ].includes(key),
+        ),
+      ),
       ...(message.targetId ? { targetId: message.targetId } : {}),
       ...(message.actionPath ? { actionPath: message.actionPath } : {}),
     };

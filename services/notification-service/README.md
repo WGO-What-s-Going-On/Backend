@@ -1,6 +1,6 @@
 # WGO Notification Service
 
-Post Redis Streams 이벤트를 사용자 알림으로 변환하고 PostgreSQL 원본, 읽음 상태, FCM 구독 및 전달 상태를 관리합니다. Node.js 24 / pnpm 10을 사용합니다.
+Post·User·Moderation Redis Streams 이벤트를 사용자 알림으로 변환하고 PostgreSQL 원본, 읽음 상태, FCM 구독 및 전달 상태를 관리합니다. Node.js 24 / pnpm 10을 사용합니다. 전체 정책은 [이벤트 계약](EVENT_CONTRACTS.md), [기능 매트릭스](NOTIFICATION_MATRIX.md), [운영 절차](OPERATIONS.md)를 참조합니다.
 
 ## 로컬 실행
 
@@ -126,14 +126,11 @@ Event marker와 activity tombstone은 자동 만료시키지 않습니다. Strea
 
 | 기능 | 실제 코드 확인 결과 / 필요한 계약 |
 | --- | --- |
-| F02 답글 | parentCommentId/부모 작성자 및 reply 이벤트 없음 |
-| F03 댓글 공감 | 댓글 공감 HTTP/저장은 있지만 생성·취소 이벤트를 발행하지 않음 |
-| F05 주변 150m | Map은 주변 게시물 ID 조회만 제공. 사용자 ID·알림 동의 범위를 반환하는 인가된 계약 필요 |
-| F07 종료 예정 | 확정된 예정 시각·Lifecycle 상태 버전과 작성자/동의한 수신자 계약 필요 |
-| F08 종료 | Post가 상태를 실제 적용한 뒤의 확정 종료 이벤트 필요. PostExpired와 동일시하지 않음 |
+| 신고 검토 결과 | REVIEWED 상태만 있고 실제 관리자 검토·결정/조치 완료 생산자는 없음 |
+| 주변 150m 활성화 | 구현/로컬 검증, 기본 OFF. 별도 위치 동의 UI·User 차단 조회 서비스 키 설정과 실제 배포 검증 필요 |
 | 실시간 인앱 | Realtime Gateway의 사용자별 Notification 전달·인증 계약 없음 |
 
-이번 GCP 전환은 PostgreSQL을 알림 원본으로 사용합니다. 참여를 수신 동의로 보거나 ENDED 공감을 게시물 종료로 해석하지 않습니다. 위 표의 미구현 기능을 인프라 이전 완료와 혼동하지 않습니다.
+답글·댓글 공감·후보/승리·칭호/레벨·버전 있는 STALE/재활성화·Post 실제 종료·신고 접수/취소·확정 삭제 제재를 구현했습니다. PostgreSQL을 알림 원본으로 사용하며 참여를 수신 동의로 보거나 ENDED/AI flagged를 확정 종료/제재로 해석하지 않습니다. 운영 GCP 검증과 로컬 검증을 구분합니다.
 
 ## 환경변수
 

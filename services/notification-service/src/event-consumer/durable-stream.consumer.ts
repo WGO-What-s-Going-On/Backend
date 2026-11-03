@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { createClient } from 'redis';
 import { PostgresDatabase } from '../persistence/postgres.database.js';
+import { BusyDeliveryError } from '../persistence/postgres-event.store.js';
 
 export interface StreamEntry {
   id: string;
@@ -26,18 +27,22 @@ export class DurableStreamConsumer {
       blockMs?: number;
     },
     readonly handle: (fields: Record<string, string>) => Promise<void>,
+    redis?: ReturnType<typeof createClient>,
   ) {
-    this.redis = createClient({
-      url: options.url,
-      disableOfflineQueue: true,
-      socket: { reconnectStrategy: false, connectTimeout: 2000 },
-    });
+    this.redis =
+      redis ??
+      createClient({
+        url: options.url,
+        disableOfflineQueue: true,
+        socket: { reconnectStrategy: false, connectTimeout: 2000 },
+      });
     this.redis.on('error', () => undefined);
   }
   isReady() {
     return !this.stopped && this.redis.isReady && this.running !== undefined;
   }
   async initialize() {
+    if (this.redis.isOpen && !this.redis.isReady) await this.redis.disconnect();
     if (!this.redis.isOpen) await this.redis.connect();
     let last = '0-0';
     if (this.options.startId !== undefined) {
@@ -46,9 +51,14 @@ export class DurableStreamConsumer {
       last = this.options.startId;
     } else {
       try {
-        last = (await this.redis.xInfoStream(this.options.stream))[
-          'last-generated-id'
-        ];
+        const groups = await this.redis.xInfoGroups(this.options.stream);
+        // Existing groups may have old PEL entries. Recreated groups replay
+        // against durable receipts instead of skipping unfinished work.
+        last = groups.some((group) => group.name === this.options.group)
+          ? '0-0'
+          : (await this.redis.xInfoStream(this.options.stream))[
+              'last-generated-id'
+            ];
       } catch (e) {
         if (!String(e).includes('no such key')) throw e;
       }
@@ -86,8 +96,8 @@ export class DurableStreamConsumer {
   async process(entry: StreamEntry) {
     try {
       await this.handle(entry.message);
-      await this.redis.xAck(this.options.stream, this.options.group, entry.id);
     } catch (e) {
+      if (e instanceof BusyDeliveryError) return;
       const pending = await this.redis.xPendingRange(
         this.options.stream,
         this.options.group,
@@ -113,7 +123,10 @@ export class DurableStreamConsumer {
           ],
         },
       );
+      return;
     }
+    // Repeated ACK outages must not quarantine a committed event.
+    await this.redis.xAck(this.options.stream, this.options.group, entry.id);
   }
   async pollOnce() {
     if (!this.redis.isReady) await this.initialize();
@@ -142,8 +155,10 @@ export class DurableStreamConsumer {
     while (!this.stopped) {
       try {
         await this.pollOnce();
-      } catch {
+      } catch (error) {
         if (!this.stopped) {
+          if (String(error).includes('NOGROUP'))
+            await this.initialize().catch(() => undefined);
           this.logger.warn(`Input pending for ${this.options.stream}`);
           await new Promise((r) => setTimeout(r, 500));
         }
