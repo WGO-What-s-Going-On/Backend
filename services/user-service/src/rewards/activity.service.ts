@@ -2,7 +2,11 @@ import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { TitleService } from './title.service.js';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { ConflictingRewardEvent, type ActivityInput } from './post-event.js';
+import {
+  ConflictingRewardEvent,
+  InvalidRewardEvent,
+  type ActivityInput,
+} from './post-event.js';
 import { RewardEngine, type ActivityRow } from './reward-engine.js';
 import { levelFor } from './reward-policy.js';
 import type {
@@ -23,6 +27,30 @@ export class ActivityService {
   }
 
   async record(input: ActivityInput): Promise<void> {
+    const voteFact =
+      input.kind === 'VOTE_CANDIDATE' || input.kind === 'VOTE_WIN';
+    if (
+      voteFact &&
+      input.regionCode !== undefined &&
+      input.regionCode !== null &&
+      !/^[0-9]{10}$/.test(input.regionCode)
+    )
+      throw new InvalidRewardEvent('Invalid vote region');
+    if (
+      input.kind === 'VOTE_CANDIDATE' &&
+      (!Number.isSafeInteger(input.scoreAtSelection) ||
+        input.scoreAtSelection! < 0 ||
+        !input.occurredAt ||
+        !Number.isFinite(Date.parse(input.occurredAt)))
+    )
+      throw new InvalidRewardEvent('Invalid candidate selection snapshot');
+    const regionState = !voteFact
+      ? 'LEGACY'
+      : input.regionCode === undefined
+        ? 'MISSING'
+        : input.regionCode === null
+          ? 'NULL'
+          : 'KNOWN';
     await this.db.transaction(async (m) => {
       const receipt = await m.query(
         'INSERT INTO reward_inbox(event_id) VALUES($1) ON CONFLICT DO NOTHING RETURNING event_id',
@@ -78,6 +106,24 @@ export class ActivityService {
         );
       }
       if (previous) input = { ...input, key: previous.activity_key };
+      if (previous && voteFact) {
+        if (
+          (previous.source_time_verified &&
+            input.occurredAt !== undefined &&
+            new Date(previous.occurred_at).getTime() !==
+              Date.parse(input.occurredAt)) ||
+          (previous.source_region_state !== 'LEGACY' &&
+            (previous.source_region_state !== regionState ||
+              previous.source_region_code !== (input.regionCode ?? null))) ||
+          (input.kind === 'VOTE_CANDIDATE' &&
+            previous.score_at_selection !== null &&
+            BigInt(previous.score_at_selection) !==
+              BigInt(input.scoreAtSelection!))
+        )
+          throw new ConflictingRewardEvent(
+            'Conflicting immutable vote snapshot',
+          );
+      }
       if (input.postStatus)
         await m.query(
           `INSERT INTO reward_posts(post_id,version,status) VALUES($1,$2,$3)
@@ -86,20 +132,25 @@ export class ActivityService {
           [input.postId, input.version, input.postStatus],
         );
       const changedActivities = await m.query(
-        `INSERT INTO user_activities(activity_key,post_id,kind,actor_id,beneficiary_id,reaction_type,version,active,event_id,correlation_id,comment_id,result_id,occurred_at,source_time_verified)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        `INSERT INTO user_activities(activity_key,post_id,kind,actor_id,beneficiary_id,reaction_type,version,active,event_id,correlation_id,comment_id,result_id,occurred_at,source_time_verified,source_region_code,source_region_state,source_region_event_id,score_at_selection)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
         ON CONFLICT(activity_key) DO UPDATE SET version=EXCLUDED.version,active=EXCLUDED.active,
           beneficiary_id=COALESCE(user_activities.beneficiary_id,EXCLUDED.beneficiary_id),
           comment_id=COALESCE(user_activities.comment_id,EXCLUDED.comment_id),
           result_id=COALESCE(user_activities.result_id,EXCLUDED.result_id),event_id=EXCLUDED.event_id,
           occurred_at=CASE WHEN NOT user_activities.source_time_verified AND EXCLUDED.source_time_verified THEN EXCLUDED.occurred_at ELSE user_activities.occurred_at END,
           source_time_verified=user_activities.source_time_verified OR EXCLUDED.source_time_verified,
+          source_region_code=CASE WHEN user_activities.source_region_state='LEGACY' THEN EXCLUDED.source_region_code ELSE user_activities.source_region_code END,
+          source_region_state=CASE WHEN user_activities.source_region_state='LEGACY' THEN EXCLUDED.source_region_state ELSE user_activities.source_region_state END,
+          source_region_event_id=COALESCE(user_activities.source_region_event_id,EXCLUDED.source_region_event_id),
+          score_at_selection=COALESCE(user_activities.score_at_selection,EXCLUDED.score_at_selection),
           correlation_id=EXCLUDED.correlation_id,updated_at=now()
         WHERE user_activities.version<EXCLUDED.version OR (user_activities.version=EXCLUDED.version AND (
           (user_activities.beneficiary_id IS NULL AND EXCLUDED.beneficiary_id IS NOT NULL) OR
           (user_activities.comment_id IS NULL AND EXCLUDED.comment_id IS NOT NULL) OR
           (user_activities.result_id IS NULL AND EXCLUDED.result_id IS NOT NULL) OR
-          (NOT user_activities.source_time_verified AND EXCLUDED.source_time_verified))) RETURNING activity_key`,
+          (NOT user_activities.source_time_verified AND EXCLUDED.source_time_verified) OR
+          (user_activities.source_region_state='LEGACY' AND EXCLUDED.source_region_state<>'LEGACY'))) RETURNING activity_key`,
         [
           input.key,
           input.postId,
@@ -114,10 +165,19 @@ export class ActivityService {
           input.commentId ?? null,
           input.resultId ?? null,
           input.occurredAt ?? new Date().toISOString(),
-          input.kind === 'VOTE_WIN' && input.occurredAt !== undefined,
+          voteFact && input.occurredAt !== undefined,
+          input.regionCode ?? null,
+          regionState,
+          voteFact ? input.eventId : null,
+          input.scoreAtSelection ?? null,
         ],
       );
-      if (changedActivities.length && input.kind === 'VOTE_WIN')
+      if (
+        changedActivities.length &&
+        (voteFact ||
+          input.postStatus === 'DELETED' ||
+          (input.kind === 'COMMENT' && !input.active))
+      )
         await this.titles.markRankingDirty(m);
       await this.evaluatePost(
         m,

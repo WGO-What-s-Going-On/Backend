@@ -1,3 +1,4 @@
+import { StoreVoteActivitySnapshots1793650000000 } from '../src/database/migrations/1793650000000-StoreVoteActivitySnapshots.js';
 import 'reflect-metadata';
 import { beforeAll, afterAll, beforeEach, describe, it, expect } from 'vitest';
 import { DataSource } from 'typeorm';
@@ -108,6 +109,7 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
         AddActivityRewards1792190000000,
         CompleteActivityRewards1793360000000,
         ActivateWgoTitles1793400000000,
+        StoreVoteActivitySnapshots1793650000000,
       ],
     });
     await db.initialize();

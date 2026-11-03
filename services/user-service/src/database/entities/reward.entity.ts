@@ -16,6 +16,19 @@ export class UserActivityEntity {
   @Column({ name: 'occurred_at', type: 'timestamptz' }) occurredAt!: Date;
   @Column({ name: 'source_time_verified', type: 'boolean' })
   sourceTimeVerified!: boolean;
+  @Column({
+    name: 'source_region_code',
+    type: 'varchar',
+    length: 10,
+    nullable: true,
+  })
+  sourceRegionCode!: string | null;
+  @Column({ name: 'source_region_state', type: 'text' })
+  sourceRegionState!: string;
+  @Column({ name: 'source_region_event_id', type: 'text', nullable: true })
+  sourceRegionEventId!: string | null;
+  @Column({ name: 'score_at_selection', type: 'bigint', nullable: true })
+  scoreAtSelection!: string | null;
   @Column({ name: 'actor_id', type: 'bigint' }) actorId!: string;
   @Column({ name: 'beneficiary_id', type: 'bigint', nullable: true })
   beneficiaryId!: string | null;

@@ -1,3 +1,4 @@
+import { StoreVoteActivitySnapshots1793650000000 } from '../src/database/migrations/1793650000000-StoreVoteActivitySnapshots.js';
 import { ActivateWgoTitles1793400000000 } from '../src/database/migrations/1793400000000-ActivateWgoTitles.js';
 import { APP_GUARD } from '@nestjs/core';
 import { GatewayAuthGuard } from '../src/http-auth/gateway-auth.guard.js';
@@ -142,6 +143,7 @@ describe('Rewards PostgreSQL / Redis integration', () => {
         AddActivityRewards1792190000000,
         CompleteActivityRewards1793360000000,
         ActivateWgoTitles1793400000000,
+        StoreVoteActivitySnapshots1793650000000,
       ],
     });
     await db.initialize();
@@ -924,7 +926,9 @@ describe('Rewards PostgreSQL / Redis integration', () => {
       v = JSON.parse(f.data);
     await send(f);
     await db.query('UPDATE user_activities SET comment_id=NULL');
-    await send(wire('PostVoteWon', v.aggregateId, v.vote.commentId));
+    await send(
+      wire('PostVoteWon', v.aggregateId, v.vote.commentId, { vote: v.vote }),
+    );
     expect(await count('credit_ledger')).toBe(1);
     expect(
       (await db.query('SELECT comment_id FROM user_activities'))[0].comment_id,
@@ -967,7 +971,9 @@ describe('Rewards PostgreSQL / Redis integration', () => {
     const f = wire('PostVoteWon'),
       v = JSON.parse(f.data);
     await send(f);
-    await send(wire('PostVoteWon', v.aggregateId, v.vote.commentId));
+    await send(
+      wire('PostVoteWon', v.aggregateId, v.vote.commentId, { vote: v.vote }),
+    );
     await send(
       wire('PostVoteWon', v.aggregateId, v.vote.commentId, {
         vote: { ...v.vote, winnerAuthorId: 3 },
