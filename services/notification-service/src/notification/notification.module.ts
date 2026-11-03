@@ -16,9 +16,21 @@ import { PostEventHandler } from '../event-consumer/post-event.handler.js';
 import { PostgresEventStore } from '../persistence/postgres-event.store.js';
 import { NOTIFICATION_REPOSITORY } from './notification.repository.js';
 import { NotificationService } from './notification.service.js';
+import { NotificationBlockChecker } from './block-checker.js';
+import { NotificationEventWriter } from '../persistence/notification-event.writer.js';
+import { UserEventHandler } from '../event-consumer/user-event.handler.js';
+import { NotificationStreamWorkers } from '../event-consumer/notification-stream.workers.js';
+import { ModerationEventHandler } from '../event-consumer/moderation-event.handler.js';
+import { NearbyController } from './nearby.controller.js';
+import { NearbySubscriptionService } from './nearby-subscription.service.js';
+import { NearbyWorker } from './nearby.worker.js';
 
 @Module({
-  controllers: [NotificationController, NotificationReadinessController],
+  controllers: [
+    NotificationController,
+    NotificationReadinessController,
+    NearbyController,
+  ],
   providers: [
     PostgresDatabase,
     {
@@ -42,6 +54,13 @@ import { NotificationService } from './notification.service.js';
         ),
     },
     PostgresEventStore,
+    NotificationBlockChecker,
+    NotificationEventWriter,
+    UserEventHandler,
+    ModerationEventHandler,
+    NearbySubscriptionService,
+    NearbyWorker,
+    NotificationStreamWorkers,
     PostEventHandler,
     PostEventConsumer,
   ],

@@ -13,6 +13,7 @@ export interface Notification {
   createdAt: string;
   expiresAt: number;
   commentId?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CreateNotificationInput {

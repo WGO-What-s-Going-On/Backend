@@ -290,6 +290,50 @@ for (const [name] of applications) {
   }
 }
 const bucket = `${project}-${config.namespace}-media`;
+const profileBucket = `${project}-${config.namespace}-profiles`;
+ensure(['storage', 'buckets', 'list'], profileBucket, [
+  'storage',
+  'buckets',
+  'create',
+  `gs://${profileBucket}`,
+  `--location=${config.region}`,
+  '--uniform-bucket-level-access',
+  '--public-access-prevention',
+]);
+// The User GSA can access only its own bucket. Signing grants signBlob alone,
+// rather than the broader token-minting permissions of TokenCreator.
+for (const [id, permissions] of [
+  [
+    'wgoProfileObjects',
+    'storage.objects.create,storage.objects.get,storage.objects.delete',
+  ],
+  ['wgoProfileSigner', 'iam.serviceAccounts.signBlob'],
+]) {
+  ensure(['iam', 'roles', 'list'], `projects/${project}/roles/${id}`, [
+    'iam',
+    'roles',
+    'create',
+    id,
+    `--permissions=${permissions}`,
+    '--stage=GA',
+  ]);
+}
+run([
+  'storage',
+  'buckets',
+  'add-iam-policy-binding',
+  `gs://${profileBucket}`,
+  `--member=serviceAccount:${serviceAccount(config, 'user-service')}`,
+  `--role=projects/${project}/roles/wgoProfileObjects`,
+]);
+run([
+  'iam',
+  'service-accounts',
+  'add-iam-policy-binding',
+  serviceAccount(config, 'user-service'),
+  `--member=serviceAccount:${serviceAccount(config, 'user-service')}`,
+  `--role=projects/${project}/roles/wgoProfileSigner`,
+]);
 ensure(['storage', 'buckets', 'list'], bucket, [
   'storage',
   'buckets',
@@ -350,6 +394,34 @@ try {
     'update',
     `gs://${bucket}`,
     `--cors-file=${path}`,
+  ]);
+  run([
+    'storage',
+    'buckets',
+    'update',
+    `gs://${profileBucket}`,
+    `--cors-file=${path}`,
+    '--public-access-prevention',
+  ]);
+  const lifecyclePath = join(corsDirectory, 'profile-lifecycle.json');
+  writeFileSync(
+    lifecyclePath,
+    JSON.stringify({
+      rule: [
+        {
+          action: { type: 'Delete' },
+          condition: { age: 1, matchesPrefix: ['user-profiles/pending/'] },
+        },
+      ],
+    }),
+  );
+  // Backstop for late PUTs. Final objects are reconciled against PostgreSQL references.
+  run([
+    'storage',
+    'buckets',
+    'update',
+    `gs://${profileBucket}`,
+    `--lifecycle-file=${lifecyclePath}`,
   ]);
 } finally {
   rmSync(corsDirectory, { recursive: true });

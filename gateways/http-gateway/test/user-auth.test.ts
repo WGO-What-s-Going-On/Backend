@@ -85,6 +85,18 @@ function access(overrides: Record<string, unknown> = {}, key = secret) {
 }
 describe('User route authentication', () => {
   it.each([
+    [
+      'POST',
+      '/api/v1/users/me/profile-image/uploads',
+      { contentType: 'image/png', sizeBytes: 10, checksum: 'digest' },
+    ],
+    [
+      'POST',
+      '/api/v1/users/me/profile-image/uploads/5e614031-b7fb-47bf-9d0d-23434eb18acd/complete',
+      undefined,
+    ],
+    ['GET', '/api/v1/users/me/profile-image/url', undefined],
+    ['GET', '/api/v1/users/123/profile-image/url', undefined],
     ['POST', '/api/v1/users/me/blocks', { blockedUserId: '123' }],
     ['GET', '/api/v1/users/me/blocks?limit=10&cursor=opaque', undefined],
     ['DELETE', '/api/v1/users/me/blocks/123', undefined],
@@ -188,6 +200,36 @@ describe('User route authentication', () => {
           await app.inject({
             method: 'GET',
             url: `/api/v1/${path}`,
+            headers: { 'x-user-id': '42' },
+          })
+        ).statusCode,
+      ).toBe(401);
+    },
+  );
+
+  it.each(['credits', 'growth', 'credits/history', 'badges/history'])(
+    'proxies rewards %s with verified identity',
+    async (path) => {
+      const app = await setup();
+      const url = `/api/v1/users/me/${path}`;
+      const response = await app.inject({
+        method: 'GET',
+        url,
+        headers: {
+          authorization: `Bearer ${await access()}`,
+          'x-user-id': '999',
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        userId: '42',
+        signedUserId: null,
+      });
+      expect(
+        (
+          await app.inject({
+            method: 'GET',
+            url,
             headers: { 'x-user-id': '42' },
           })
         ).statusCode,

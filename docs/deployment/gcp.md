@@ -4,7 +4,7 @@
 Elasticsearch는 ECK, MongoDB·Redis·Cassandra는 PVC를 사용하는 단일 노드 StatefulSet이다.
 MongoDB는 `rs0` replica set이다. Atlas와 Memorystore는 사용하지 않는다.
 Cloud SQL PostgreSQL 인스턴스 하나에 `wgo_user`와 `wgo_notification` DB 및 IAM 사용자를 분리한다.
-Cloud Storage 버킷은 비공개이며 Post만 객체와 서명 권한을 가진다.
+Cloud Storage 버킷은 비공개이다. Post는 기존 media 버킷을, User는 별도 profiles 버킷을 사용하며 서로의 버킷 권한을 부여하지 않는다.
 
 ## 설정과 권한을 준비한다
 
@@ -28,6 +28,8 @@ Pod 계정과 분리하고 GitHub OIDC provider의 repository 및 main ref 조�
 앱별 GSA에 필요한 자기 secret의 `secretAccessor`를 부여한다.
 User와 Notification에는 Cloud SQL Client 및 Instance User를 부여한다.
 Post에는 미디어 버킷 객체 권한과 서명용 GSA의 `iam.serviceAccounts.signBlob` 권한을 부여한다.
+User에는 profiles 버킷에 한정한 `storage.objects.create/get/delete` custom role과 자기 GSA의 `signBlob` 전용 custom role을 부여한다.
+User 설정·마이그레이션·프론트 연동·운영 확인은 [프로필 이미지 인계 문서](../../services/user-service/PROFILE_IMAGE_GCS_IMPLEMENTATION_REPORT.md)를 따른다.
 서비스 계정 JSON key를 생성하지 않는다.
 
 ## 구현과 검증 순서를 따른다

@@ -61,6 +61,12 @@ suite('post creation integration', () => {
   let map: Server;
   let mapUnavailable = false;
   let mapTimeout = false;
+  let regionFailure = false;
+  let regionResponse = {
+    code: '1159053000',
+    name: '서울특별시 동작구 상도1동',
+  };
+  let regionCoordinates: unknown;
   let locationDecision:
     | ((input: any) => { allowed: boolean; reason: string })
     | undefined;
@@ -134,6 +140,18 @@ suite('post creation integration', () => {
       });
     };
     map.addService(proto.wgo.map.v1.MapAuthorization.service, {
+      ResolveRegion: (
+        call: { request: unknown },
+        callback: (
+          error: { code: number; message: string } | null,
+          response?: { code: string; name: string },
+        ) => void,
+      ) => {
+        regionCoordinates = call.request;
+        if (regionFailure)
+          return callback({ code: 14, message: 'Region unavailable' });
+        callback(null, regionResponse);
+      },
       CheckPostCreation: check,
       CheckPostParticipation: check,
     });
@@ -200,6 +218,10 @@ suite('post creation integration', () => {
       .expect(201);
     id = response.body.postId;
     expect(response.body.expiresAt).toBeNull();
+    expect((await posts.findOne({ postId: id }).lean()).region).toMatchObject(
+      regionResponse,
+    );
+    expect(regionCoordinates).toEqual({ latitude: 37.5, longitude: 127 });
     expect(await posts.countDocuments({ postId: id, status: 'ACTIVE' })).toBe(
       1,
     );
@@ -210,6 +232,65 @@ suite('post creation integration', () => {
       }),
     ).toBe(1);
   });
+
+  it.each([undefined, 'false'])(
+    'always stores a region with old flag %s',
+    async (flag) => {
+      vi.stubEnv('POST_REGION_ENABLED', flag);
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/posts')
+        .set(header)
+        .send({
+          title: 'Region required',
+          content: 'Details',
+          category: 'INCIDENT',
+          latitude: 37.5,
+          longitude: 127,
+          radiusM: 250,
+        })
+        .expect(201);
+      expect(
+        (await posts.findOne({ postId: response.body.postId }).lean()).region,
+      ).toMatchObject(regionResponse);
+    },
+  );
+
+  it.each([
+    { code: '123', name: 'Dong' },
+    { code: 'abcdefghij', name: 'Dong' },
+    { code: '1159053000', name: ' ' },
+    null,
+  ])(
+    'does not persist a post or event when region lookup is invalid or unavailable: %j',
+    async (response) => {
+      const before = {
+        posts: await posts.countDocuments(),
+        events: await outbox.countDocuments(),
+      };
+      const valid = regionResponse;
+      regionFailure = response === null;
+      if (response) regionResponse = response;
+      try {
+        await request(app.getHttpServer())
+          .post('/api/v1/posts')
+          .set(header)
+          .send({
+            title: 'No region',
+            content: 'Details',
+            category: 'INCIDENT',
+            latitude: 37.5,
+            longitude: 127,
+            radiusM: 250,
+          })
+          .expect(503);
+        expect(await posts.countDocuments()).toBe(before.posts);
+        expect(await outbox.countDocuments()).toBe(before.events);
+      } finally {
+        regionFailure = false;
+        regionResponse = valid;
+      }
+    },
+  );
 
   it('keeps creation/read available while model-free similarity is 503 and worker is stopped', async () => {
     const before = {
@@ -1018,6 +1099,7 @@ suite('post creation integration', () => {
       { commentId: candidates[0] },
       { $set: { authorId: 789 } },
     );
+    await posts.updateOne({ postId }, { $unset: { region: 1 } });
     await posts.updateOne({ postId }, { $set: { voteAt: new Date(0) } });
     await app.get(VoteWorker).runOnce();
     await request(app.getHttpServer())
@@ -1051,6 +1133,7 @@ suite('post creation integration', () => {
       .lean();
     expect(wins).toHaveLength(1);
     expect(wins[0].payload.vote.winnerAuthorId).toBe(789);
+    expect(wins[0].payload.vote.regionCode).toBeNull();
   });
 
   it('freezes candidates, moves and cancels a vote, and keeps the winner after expiry', async () => {
@@ -1167,6 +1250,7 @@ suite('post creation integration', () => {
         commentId: first.body.commentId,
         winnerAuthorId: 123,
         votes: 1,
+        regionCode: '1159053000',
       },
     });
 

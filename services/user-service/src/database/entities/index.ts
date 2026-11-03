@@ -1,3 +1,4 @@
+import { ProfileImageUploadEntity } from './profile-image-upload.entity.js';
 import { BadgeEntity } from './badge.entity.js';
 import { OAuthAccountEntity } from './oauth-account.entity.js';
 import { OutboxEventEntity } from './outbox-event.entity.js';
@@ -6,8 +7,14 @@ import { UserBadgeEntity } from './user-badge.entity.js';
 import { UserBlockEntity } from './user-block.entity.js';
 import { UserTermConsentEntity } from './user-term-consent.entity.js';
 import { UserEntity } from './user.entity.js';
+import {
+  UserActivityEntity,
+  UserGrowthEntity,
+  CreditLedgerEntity,
+} from './reward.entity.js';
 
 export const USER_SERVICE_ENTITIES = [
+  ProfileImageUploadEntity,
   UserEntity,
   OAuthAccountEntity,
   TermEntity,
@@ -16,9 +23,15 @@ export const USER_SERVICE_ENTITIES = [
   UserBadgeEntity,
   UserBlockEntity,
   OutboxEventEntity,
+  UserActivityEntity,
+  UserGrowthEntity,
+  CreditLedgerEntity,
 ];
 
 export {
+  UserActivityEntity,
+  UserGrowthEntity,
+  CreditLedgerEntity,
   BadgeEntity,
   OAuthAccountEntity,
   OutboxEventEntity,

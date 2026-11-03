@@ -31,6 +31,7 @@ describe('Notification OpenAPI contract', () => {
       '/health/ready': ['get'],
       '/api/v1/notifications': ['get'],
       '/api/v1/notifications/settings': ['get', 'patch'],
+      '/api/v1/notifications/nearby-subscription': ['delete', 'get', 'put'],
       '/api/v1/notifications/boards/{postId}': ['get', 'put'],
       '/api/v1/notifications/read-all': ['patch'],
       '/api/v1/notifications/{notificationId}': ['delete'],
@@ -46,7 +47,10 @@ describe('Notification OpenAPI contract', () => {
       for (const method of methods) {
         expect(
           doc.paths[path][method].responses[
-            path === '/api/v1/notifications/{notificationId}' ? '204' : '200'
+            path === '/api/v1/notifications/{notificationId}' ||
+            (method === 'delete' && path.endsWith('nearby-subscription'))
+              ? '204'
+              : '200'
           ],
         ).toBeDefined();
       }

@@ -27,7 +27,9 @@ comment in the deletion transaction and rejects stale decisions.
 Stream: `moderation:content-events` (override MODERATION_CONTENT_EVENT_STREAM).
 Event type: `CONTENT_MODERATION_EVALUATED`. Schema: 1. This stream must differ
 from both input and lifecycle output. `moderation:events` remains exclusively the
-unchanged BOARD_STALE/BOARD_REACTIVATED/BOARD_CLOSED v1 wire consumed by Post.
+backward-compatible BOARD_STALE/BOARD_REACTIVATED/BOARD_CLOSED v1 wire consumed by Post.
+Lifecycle payload additionally carries optional version/postAuthorId/scheduledCloseAt
+for Notification; AI evaluations remain separate and never assert an applied sanction.
 
 Output Redis fields are `eventId`, `eventType`, `data`. data is a flat JSON object:
 

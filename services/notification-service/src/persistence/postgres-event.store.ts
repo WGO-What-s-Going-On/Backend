@@ -1,4 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { NotificationBlockChecker } from '../notification/block-checker.js';
+import { NotificationEventWriter } from './notification-event.writer.js';
+import { projectExtendedPost } from './extended-post.notifications.js';
+import { confirmedPostNotifications } from './confirmed-post.notifications.js';
+import {
+  scheduleNearby,
+  nearbyEnabled,
+} from '../notification/nearby.policy.js';
 import type { Pool, PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import type { PostEvent } from '../event-consumer/post-event.js';
@@ -15,6 +23,7 @@ interface PostState {
   revision: number;
   author_id: string | null;
   closed: boolean;
+  paused: boolean;
   post_version: number;
   terminal_type: string | null;
 }
@@ -30,6 +39,9 @@ interface Preferences {
   replies: boolean;
   reactions: boolean;
   lifecycle: boolean;
+  rewards: boolean;
+  votes: boolean;
+  moderation: boolean;
 }
 interface ProcessedEvent {
   recipient: string | null;
@@ -42,7 +54,8 @@ interface ProcessedEvent {
   };
 }
 export interface Delivery {
-  postId: string;
+  postId: string | null;
+  scopeId?: string;
   key: string;
   status: 'PENDING' | 'SENDING' | 'SENT' | 'CANCELED' | 'FAILED';
   message: PushMessage;
@@ -52,7 +65,8 @@ export interface Delivery {
   attempts: number;
 }
 interface DeliveryRow {
-  post_id: string;
+  post_id: string | null;
+  scope_id: string;
   key: string;
   status: Delivery['status'];
   message: PushMessage;
@@ -63,6 +77,7 @@ interface DeliveryRow {
 }
 const deliveryFromRow = (row: DeliveryRow): Delivery => ({
   postId: row.post_id,
+  scopeId: row.scope_id,
   key: row.key,
   status: row.status,
   message: row.message,
@@ -79,7 +94,10 @@ export class BusyDeliveryError extends Error {
 
 @Injectable()
 export class PostgresEventStore {
-  constructor(private readonly database: PostgresDatabase) {}
+  constructor(
+    private readonly database: PostgresDatabase,
+    @Optional() private readonly blocks?: NotificationBlockChecker,
+  ) {}
 
   async postState(postId: string): Promise<PostState | undefined> {
     return (
@@ -107,6 +125,14 @@ export class PostgresEventStore {
     ).rows[0];
     return row ? deliveryFromRow(row) : undefined;
   }
+  async recordIgnored(fields: Record<string, string>) {
+    await new NotificationEventWriter(this.database).record(
+      'post:events',
+      fields.eventId!,
+      { eventType: fields.eventType, ignored: true },
+      async () => [],
+    );
+  }
   async preferences(
     userId: string,
     client: Pool | PoolClient = this.database.pool,
@@ -122,6 +148,9 @@ export class PostgresEventStore {
       replies: true,
       reactions: true,
       lifecycle: true,
+      rewards: true,
+      votes: true,
+      moderation: true,
       ...row?.settings,
     };
   }
@@ -159,14 +188,25 @@ export class PostgresEventStore {
   }
   async allowed(
     userId: string,
-    postId: string,
+    postId: string | null,
     type: string,
     client: Pool | PoolClient = this.database.pool,
   ) {
     const preferences = await this.preferences(userId, client);
-    const board = await this.boardPreference(userId, postId, client);
-    const key =
-      type === 'PostCommentCreated' || type === 'POST_COMMENTED'
+    const board = postId
+      ? await this.boardPreference(userId, postId, client)
+      : { enabled: true };
+    const key: keyof Preferences = [
+      'nearby',
+      'replies',
+      'reactions',
+      'lifecycle',
+      'rewards',
+      'votes',
+      'moderation',
+    ].includes(type)
+      ? (type as keyof Preferences)
+      : type === 'PostCommentCreated' || type === 'POST_COMMENTED'
         ? 'replies'
         : type === 'PostReactionCreated' || type === 'POST_REACTED'
           ? 'reactions'
@@ -193,18 +233,115 @@ export class PostgresEventStore {
   }
 
   async apply(event: PostEvent, now = new Date()): Promise<string | undefined> {
+    const known = (
+      await this.database.pool.query(
+        'SELECT details FROM notification_event_inbox WHERE source_stream=$1 AND event_id=$2',
+        ['post:events', event.eventId],
+      )
+    ).rows[0];
+    if (known) {
+      if (
+        known.details.eventType !== event.eventType ||
+        (known.details.aggregateId &&
+          known.details.aggregateId !== event.aggregateId)
+      )
+        throw new Error('Invalid Post event identity conflict');
+      return (
+        (await this.processedEvent(event.aggregateId, event.eventId))
+          ?.recipient ?? undefined
+      );
+    }
+    let allowedRecipients: Set<string> | undefined;
+    if (
+      event.eventType === 'PostCommentCreated' &&
+      event.parentCommentId &&
+      !event.parentCommentAuthorId
+    ) {
+      const parent = (
+        await this.database.pool.query(
+          'SELECT author_id FROM notification_comment_states WHERE post_id=$1 AND comment_id=$2',
+          [event.aggregateId, event.parentCommentId],
+        )
+      ).rows[0];
+      if (!parent?.author_id)
+        throw new Error(
+          'Parent comment author unavailable; recipient reconciliation required',
+        );
+      event = { ...event, parentCommentAuthorId: parent.author_id };
+    }
+    if (
+      this.blocks &&
+      !event.suppressNotifications &&
+      [
+        'PostCommentCreated',
+        'PostReactionCreated',
+        'PostCommentReactionCreated',
+      ].includes(event.eventType)
+    ) {
+      const owner =
+        event.postAuthorId ??
+        (await this.postState(event.aggregateId))?.author_id;
+      const recipients =
+        event.eventType === 'PostCommentReactionCreated'
+          ? [event.commentAuthorId]
+          : [owner, event.parentCommentAuthorId];
+      allowedRecipients = new Set<string>();
+      // Network authorization is outside the transaction; delivery checks it again before sending.
+      for (const recipient of new Set(recipients))
+        if (
+          recipient &&
+          event.actorId &&
+          recipient !== event.actorId &&
+          (await this.blocks.allowed(recipient, event.actorId))
+        )
+          allowedRecipients.add(recipient);
+    }
     return this.database.transaction(async (client) => {
       const postId = event.aggregateId;
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+        [`post:events:${event.eventId}`],
+      );
+      const receipt = (
+        await client.query(
+          'SELECT details FROM notification_event_inbox WHERE source_stream=$1 AND event_id=$2',
+          ['post:events', event.eventId],
+        )
+      ).rows[0];
+      if (
+        receipt &&
+        (receipt.details.eventType !== event.eventType ||
+          (receipt.details.aggregateId &&
+            receipt.details.aggregateId !== postId))
+      )
+        throw new Error('Invalid Post event identity conflict');
       // 동일 post의 중복 처리와 묶음 갱신은 이 행 잠금과 같은 transaction 안에서 직렬화한다.
       const meta = await this.lockPost(client, postId);
+      if (
+        meta.author_id &&
+        event.postAuthorId &&
+        meta.author_id !== event.postAuthorId
+      )
+        throw new Error('Invalid immutable Post author conflict');
       const processed = (
         await client.query<{ recipient: string | null }>(
           'SELECT recipient FROM notification_processed_events WHERE post_id=$1 AND event_id=$2',
           [postId, event.eventId],
         )
       ).rows[0];
-      if (processed) return processed.recipient ?? undefined;
+      if (processed) {
+        // Upgrade old receipts without recreating their already-committed alerts.
+        await client.query(
+          `INSERT INTO notification_event_inbox VALUES('post:events',$1,$2,now()) ON CONFLICT DO NOTHING`,
+          [event.eventId, { eventType: event.eventType, aggregateId: postId }],
+        );
+        return processed.recipient ?? undefined;
+      }
+      if (receipt) return undefined;
       const recipient = event.postAuthorId ?? meta.author_id ?? undefined;
+      if (event.eventType === 'PostCreated')
+        await scheduleNearby(client, event);
+      const previousPost = { ...meta };
       const terminal =
         event.eventType === 'PostDeleted' || event.eventType === 'PostExpired';
       if (terminal) {
@@ -219,7 +356,36 @@ export class PostgresEventStore {
       ) {
         meta.post_version = Math.max(meta.post_version, event.postVersion);
       }
-      if (event.activityKey && !meta.closed) {
+      if (
+        event.eventType === 'PostUpdated' &&
+        !meta.closed &&
+        (event.postVersion ?? 0) > meta.post_version
+      ) {
+        meta.post_version = event.postVersion!;
+        meta.paused = event.closedAt !== null;
+      }
+      const extended = await projectExtendedPost(
+        client,
+        event,
+        meta,
+        new NotificationEventWriter(this.database),
+        allowedRecipients,
+        now,
+      );
+      await confirmedPostNotifications(
+        client,
+        event,
+        new NotificationEventWriter(this.database),
+        previousPost,
+        now,
+      );
+      if (
+        !extended &&
+        event.activityKey &&
+        !meta.closed &&
+        !meta.paused &&
+        event.eventType !== 'PostCommentUpdated'
+      ) {
         const previous = (
           await client.query<Activity>(
             'SELECT * FROM notification_activities WHERE post_id=$1 AND activity_key=$2',
@@ -236,6 +402,8 @@ export class PostgresEventStore {
           if (
             active &&
             recipient !== event.actorId &&
+            (!allowedRecipients ||
+              (!!recipient && allowedRecipients.has(recipient))) &&
             (!recipient ||
               (await this.allowed(recipient, postId, event.eventType, client)))
           ) {
@@ -311,6 +479,9 @@ export class PostgresEventStore {
               );
               const message: PushMessage = {
                 userId: recipient,
+                ...(event.actorId
+                  ? { authorizationActorId: event.actorId }
+                  : {}),
                 title: notification.title,
                 body: notification.body,
                 targetId: postId,
@@ -377,13 +548,14 @@ export class PostgresEventStore {
         }
       }
       await client.query(
-        `UPDATE notification_posts SET revision=revision+1,author_id=$2,closed=$3,post_version=$4,terminal_type=$5 WHERE post_id=$1`,
+        `UPDATE notification_posts SET revision=revision+1,author_id=$2,closed=$3,post_version=$4,terminal_type=$5,paused=$6 WHERE post_id=$1`,
         [
           postId,
           recipient ?? null,
           meta.closed,
           meta.post_version,
           meta.terminal_type,
+          meta.paused,
         ],
       );
       await client.query(
@@ -398,6 +570,18 @@ export class PostgresEventStore {
             correlationId: event.correlationId,
             reason: event.reason,
             actorType: event.actorType,
+          },
+        ],
+      );
+      await client.query(
+        `INSERT INTO notification_event_inbox(source_stream,event_id,details) VALUES('post:events',$1,$2)
+        ON CONFLICT DO NOTHING`,
+        [
+          event.eventId,
+          {
+            eventType: event.eventType,
+            aggregateId: postId,
+            ...(event.suppressNotifications ? { suppressed: true } : {}),
           },
         ],
       );
@@ -421,22 +605,39 @@ export class PostgresEventStore {
     now = new Date(),
   ): Promise<Delivery | undefined> {
     return this.database.transaction(async (client) => {
-      const meta = await this.lockPost(client, delivery.postId);
+      const meta = delivery.postId
+        ? await this.lockPost(client, delivery.postId)
+        : undefined;
+      const scopeId = delivery.scopeId ?? `post:${delivery.postId}`;
+      if (!meta)
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+          [scopeId],
+        );
       const current = (
         await client.query<DeliveryRow>(
-          'SELECT * FROM notification_deliveries WHERE post_id=$1 AND key=$2 FOR UPDATE',
-          [delivery.postId, delivery.key],
+          'SELECT * FROM notification_deliveries WHERE scope_id=$1 AND key=$2 FOR UPDATE',
+          [scopeId, delivery.key],
         )
       ).rows[0];
+      if (!current || !['PENDING', 'SENDING'].includes(current.status))
+        return undefined;
       if (
-        !current ||
-        !['PENDING', 'SENDING'].includes(current.status) ||
         Number(current.next_attempt_at) > now.getTime() ||
         (current.status === 'SENDING' &&
           Number(current.lease_until) > now.getTime())
       )
         throw new BusyDeliveryError();
       const notificationId = current.message.data?.notificationId;
+      const nearby = current.message.data?.type === 'NEARBY_POST_CREATED';
+      const subscription = nearby
+        ? (
+            await client.query(
+              'SELECT revision FROM notification_nearby_subscriptions WHERE user_id=$1 AND expires_at>now()',
+              [current.message.userId],
+            )
+          ).rows[0]
+        : undefined;
       const notification = notificationId
         ? (
             await client.query<NotificationRow>(
@@ -446,22 +647,30 @@ export class PostgresEventStore {
           ).rows[0]
         : undefined;
       const cancel =
-        meta.closed ||
+        (nearby &&
+          (!nearbyEnabled() ||
+            subscription?.revision !==
+              current.message.data?.subscriptionRevision)) ||
+        (current.message.data?.type === 'BOARD_STALE' &&
+          Date.parse(current.message.data.scheduledCloseAt ?? '') <=
+            now.getTime()) ||
+        ((meta?.closed || meta?.paused) &&
+          current.message.data?.allowTerminal !== 'true') ||
         !notification ||
         notification.count <= 0 ||
         !!notification.deleted_at ||
         Number(notification.expires_at) <= now.getTime() / 1000;
       if (cancel) {
         await client.query(
-          "UPDATE notification_deliveries SET status='CANCELED',lease_id=NULL,lease_until=NULL WHERE post_id=$1 AND key=$2",
-          [delivery.postId, delivery.key],
+          "UPDATE notification_deliveries SET status='CANCELED',lease_id=NULL,lease_until=NULL WHERE scope_id=$1 AND key=$2",
+          [scopeId, delivery.key],
         );
         return undefined;
       }
       const result = await client.query<DeliveryRow>(
         `UPDATE notification_deliveries SET status='SENDING',lease_id=$3,lease_until=$4,attempts=attempts+1
-        WHERE post_id=$1 AND key=$2 RETURNING *`,
-        [delivery.postId, delivery.key, randomUUID(), now.getTime() + 60000],
+        WHERE scope_id=$1 AND key=$2 RETURNING *`,
+        [scopeId, delivery.key, randomUUID(), now.getTime() + 60000],
       );
       const row = result.rows[0];
       if (!row) throw new BusyDeliveryError();
@@ -480,9 +689,9 @@ export class PostgresEventStore {
     };
     const result = await this.database.pool.query(
       `UPDATE notification_deliveries SET status=$4,message=$5,next_attempt_at=$6,lease_id=NULL,lease_until=NULL
-      WHERE post_id=$1 AND key=$2 AND status='SENDING' AND lease_id=$3`,
+      WHERE scope_id=$1 AND key=$2 AND status='SENDING' AND lease_id=$3`,
       [
-        delivery.postId,
+        delivery.scopeId ?? `post:${delivery.postId}`,
         delivery.key,
         delivery.leaseId ?? null,
         status,

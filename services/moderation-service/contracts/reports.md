@@ -30,7 +30,7 @@
 - ReportOutboxWorker는 **제거하지 않았다**. SQL polling 대신 SSCAN cursor/overflow buffer로 tick당 최대20개 신고를 복구한다. 1초 주기와 시작 시 복구를 유지하고, 여러 인스턴스도 동일 Lua를 사용한다. 클라이언트가 다시 요청하지 않아도 미발행 이벤트를 복구한다.
 - 원본·journal·중복 방지 정보에는 TTL이나 자동 삭제가 없다. reportId와 이벤트 UUID, 응답 스키마, 신고/취소 멱등 정책을 유지한다. 설명은 원본에만 남고 이벤트에는 넣지 않는다.
 
-REDIS_URL, REPORTS_POST_SERVICE_URL, MODERATION_HTTP_GATEWAY_TRUSTED_JWKS를 설정한다. Redis 미설정/연결 장애·손상된 키는503이며 메모리나 User DB로 우회하지 않는다. Redis 장애 중 신규 신고를 PostgreSQL에 접수하던 이전 동작은 사라진다. 서버에서 상태 전이가 실행되고 응답만 실패한 경우에는 원본이 남을 수 있으므로 재요청은 저장된 결과를 따른다.
+REDIS_URL, MODERATION_HTTP_GATEWAY_TRUSTED_JWKS, MODERATION_POST_REPORT_TARGET_URL, MODERATION_SERVICE_PRIVATE_JWK를 설정한다. REPORTS_POST_SERVICE_URL은 인증 대상 검증에 사용하지 않는 이전 변수다. Redis 미설정/연결 장애·손상된 키는503이며 메모리나 User DB로 우회하지 않는다. Redis 장애 중 신규 신고를 PostgreSQL에 접수하던 이전 동작은 사라진다. 서버에서 상태 전이가 실행되고 응답만 실패한 경우에는 원본이 남을 수 있으므로 재요청은 저장된 결과를 따른다.
 
 기존 `moderation:report:<64자리 hash>` 및 다른 Redis 키·스트림·Consumer Group은 건드리지 않는다. 과거 형식과 새 report_UUID 계약을 자동 변환하지 않는다. 실제 PostgreSQL 데이터가 있다면 전환 전에 reportId·eventId·원본 payload·발행 이력을 보존하는 별도 검토 이관이 필요하다. 이번 로컬 작업은 기존 DB나 Redis 데이터를 이관·삭제하지 않았다. 설정·Compose 정의 제거도 기존 PostgreSQL 볼륨/테이블 삭제를 실행하지 않는다.
 
@@ -40,9 +40,9 @@ Redis 원본과 journal이 함께 영구 유실되면 독립 PostgreSQL 원본�
 
 ## Post 대상 검증
 
-기준 dev `77691c9`의 공개 Post 조회는 HTTP Gateway 인증을, 내부 조회는 WS Gateway 전용 서비스 인증을 요구한다. Moderation 호출자를 허용하는 공식 계약은 없다. 따라서 ReportTarget은 네트워크 요청 없이 503으로 신규 접수를 거부한다. REPORTS_POST_SERVICE_URL 설정만으로 활성화되지 않으며, 무인증 조회·WS 사칭·Gateway private key 재사용은 하지 않는다. 이는 **운영 신고 접수 배포 차단 요소**다.
+Post의 `POST /internal/v1/moderation/report-target` 읽기 전용 계약으로 최초 신고 대상의 존재·부모·ACTIVE/미종료/미만료 상태와 댓글 ACTIVE 상태를 검증한다. 요청은 `{targetType,postId,commentId?}`, 응답 200은 `{verified:true,targetType,postId,commentId?}`이며 본문·작성자·신고자 정보는 반환하지 않는다. 대상 없음/비활성은 404다.
 
-Post 담당자와 최소 계약을 확정해야 한다: Moderation 전용 ES256 issuer/subject·Post audience·공개 키 신뢰 등록, 부모 ACTIVE/미만료와 댓글 ID·부모·ACTIVE 여부를 조회하는 읽기 전용 대상 검증 응답, 404/401/503 및 timeout. 이번에는 Post 소스나 운영 Secret을 수정하지 않았다. 기존 신고 재요청·본인 취소·journal 복구는 Post 접근과 독립적으로 유지한다.
+Moderation은 `MODERATION_POST_REPORT_TARGET_URL` 전체 URL과 별도 `MODERATION_SERVICE_PRIVATE_JWK`를 사용한다. Post는 `POST_MODERATION_TRUSTED_JWKS` 공개키를 신뢰하며 issuer=wgo-moderation-service, subject=moderation-service, audience=wgo-post-service, ES256, typ=wgo-service+jwt, 최대30초를 검증한다. 조회 timeout2초, redirect 거부. 미설정·인증/네트워크/응답 오류는503이며 무인증 조회·WS 사칭·Gateway 키 공유가 없다. REPORTS_POST_SERVICE_URL만 설정해도 열리지 않는다. 기존 신고 재요청·본인 취소·journal 복구는 Post 접근과 독립적이다. 운영 Secret은 수정하지 않았다.
 
 검증 이후 로컬 커밋 전에 대상이 삭제되는 경쟁은 분산 트랜잭션으로 막지 않는다. 신고는 검증 당시 대상에 대한 감사 기록이다. 취소는 Post 가용성에 의존하지 않는다.
 

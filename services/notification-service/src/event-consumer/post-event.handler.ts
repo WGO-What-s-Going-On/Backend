@@ -14,6 +14,7 @@ import {
 } from '../persistence/postgres-event.store.js';
 import { NotificationState } from '../redis/notification-state.js';
 import type { PostEvent } from './post-event.js';
+import { NotificationBlockChecker } from '../notification/block-checker.js';
 
 @Injectable()
 export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
@@ -27,6 +28,7 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
     private readonly state: NotificationState,
     @Inject(PUSH_SENDER) private readonly push: PushSender,
     @Optional() private readonly config?: ConfigService,
+    @Optional() private readonly blocks?: NotificationBlockChecker,
   ) {}
   onModuleInit(): void {
     if (!this.config?.get<string>('redis.url')) return;
@@ -49,7 +51,12 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
   async handle(event: PostEvent): Promise<void> {
     // Redis lock/window는 정확성의 근거가 아니다. PostgreSQL transaction의 post 행 잠금이 처리권을 결정한다.
     const recipient = await this.store.apply(event);
-    if (recipient) await this.state.invalidateUnread(recipient);
+    for (const id of new Set([
+      recipient,
+      event.commentAuthorId,
+      event.parentCommentAuthorId,
+    ]))
+      if (id) await this.state.invalidateUnread(id);
     await this.dispatch(event.aggregateId);
   }
   async dispatch(postId?: string): Promise<void> {
@@ -63,7 +70,9 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
           !(await this.store.allowed(
             delivery.message.userId,
             delivery.postId,
-            delivery.message.data?.type ?? '',
+            delivery.message.data?.category ??
+              delivery.message.data?.type ??
+              '',
           ))
         ) {
           await this.store.finish(delivery, 'CANCELED');
@@ -71,6 +80,17 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
         }
         let result;
         try {
+          const actorId =
+            delivery.message.authorizationActorId ??
+            delivery.message.data?.actorId;
+          if (
+            actorId &&
+            this.blocks &&
+            !(await this.blocks.allowed(delivery.message.userId, actorId))
+          ) {
+            await this.store.finish(delivery, 'CANCELED');
+            continue;
+          }
           result = await this.push.send(delivery.message);
         } catch (error) {
           // 응답을 잃으면 성공 여부는 알 수 없다. notificationId를 유지하고 at-least-once로 재시도한다.
@@ -97,6 +117,9 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
       }
     }
     if (failure) throw failure;
+  }
+  async ignore(fields: Record<string, string>) {
+    await this.store.recordIgnored(fields);
   }
   async drain(): Promise<void> {
     if (this.running) return this.draining;

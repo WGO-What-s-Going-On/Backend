@@ -11,6 +11,7 @@ import {
 } from '@grpc/grpc-js';
 import { loadSync } from '@grpc/proto-loader';
 import type { LocationAuthorization } from '../application/ports.js';
+import type { PostRegion } from '../domain/post.js';
 import {
   LocationDeniedError,
   ParticipationUnavailableError,
@@ -53,23 +54,33 @@ export class GrpcLocationAuthorization
     this.client.close();
   }
 
-  resolveRegion(
-    latitude: number,
-    longitude: number,
-  ): Promise<{ code: string; name: string }> {
+  resolveRegion(latitude: number, longitude: number): Promise<PostRegion> {
     return new Promise((resolve, reject) =>
       this.client.ResolveRegion(
         { latitude, longitude },
         mapMetadata(),
         { deadline: new Date(Date.now() + 2000) },
-        (error: Error | null, result: { code: string; name: string }) =>
-          error
-            ? reject(
-                new ParticipationUnavailableError(
-                  'Region resolution unavailable',
-                ),
-              )
-            : resolve(result),
+        (error: Error | null, result: unknown) => {
+          if (
+            error ||
+            !result ||
+            typeof result !== 'object' ||
+            !('code' in result) ||
+            typeof result.code !== 'string' ||
+            !/^[0-9]{10}$/.test(result.code) ||
+            !('name' in result) ||
+            typeof result.name !== 'string' ||
+            !result.name.trim()
+          ) {
+            reject(
+              new ParticipationUnavailableError(
+                'Region resolution unavailable',
+              ),
+            );
+            return;
+          }
+          resolve({ code: result.code, name: result.name });
+        },
       ),
     );
   }

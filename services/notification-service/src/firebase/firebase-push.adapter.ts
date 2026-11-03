@@ -43,7 +43,17 @@ export class FirebasePushAdapter implements PushSender {
       return { attempted: 0, succeeded: 0, failed: 0, invalidTokens: [] };
 
     const data = {
-      ...(message.data ?? {}),
+      ...Object.fromEntries(
+        Object.entries(message.data ?? {}).filter(
+          ([key]) =>
+            ![
+              'actorId',
+              'authorizationActorId',
+              'allowTerminal',
+              'subscriptionRevision',
+            ].includes(key),
+        ),
+      ),
       ...(message.targetId ? { targetId: message.targetId } : {}),
       ...(message.actionPath ? { actionPath: message.actionPath } : {}),
     };
@@ -58,6 +68,12 @@ export class FirebasePushAdapter implements PushSender {
         response = await this.client().sendEachForMulticast({
           tokens: batch,
           notification: { title: message.title, body: message.body },
+          // Repeated transport delivery replaces the active Web notification.
+          ...(message.data?.notificationId
+            ? {
+                webpush: { notification: { tag: message.data.notificationId } },
+              }
+            : {}),
           data,
         });
       } catch {

@@ -1,5 +1,11 @@
 export type SupportedPostEventType =
   | 'PostCreated'
+  | 'PostUpdated'
+  | 'PostCommentUpdated'
+  | 'PostCommentReactionCreated'
+  | 'PostCommentReactionRemoved'
+  | 'PostVoteCandidateSelected'
+  | 'PostVoteWon'
   | 'PostCommentCreated'
   | 'PostReactionCreated'
   | 'PostParticipantJoined'
@@ -8,6 +14,7 @@ export type SupportedPostEventType =
   | 'PostDeleted'
   | 'PostParticipantLeft'
   | 'PostExpired';
+// Extended producer facts retain the legacy Post envelope and state versions.
 export interface PostEvent {
   eventId: string;
   eventType: SupportedPostEventType;
@@ -24,9 +31,26 @@ export interface PostEvent {
   commentId?: string;
   reason?: string;
   actorType?: string;
+  parentCommentId?: string;
+  parentCommentAuthorId?: string;
+  commentAuthorId?: string;
+  reactionType?: string;
+  resultId?: string;
+  regionCode?: string | null;
+  closedAt?: string | null;
+  latitude?: number;
+  longitude?: number;
+  // Set by the consumer's durable rollout boundary, never read from producer JSON.
+  suppressNotifications?: boolean;
 }
 const supported = new Set<SupportedPostEventType>([
   'PostCreated',
+  'PostUpdated',
+  'PostCommentUpdated',
+  'PostCommentReactionCreated',
+  'PostCommentReactionRemoved',
+  'PostVoteCandidateSelected',
+  'PostVoteWon',
   'PostCommentCreated',
   'PostReactionCreated',
   'PostParticipantJoined',
@@ -67,11 +91,7 @@ export function parsePostEvent(
     throw new Error('Invalid post event JSON');
   }
   require(record(value), 'post event envelope');
-  if (
-    !text(value.eventType) ||
-    !supported.has(value.eventType as SupportedPostEventType)
-  )
-    return null;
+  require(text(value.eventType), 'post event type');
   require(text(value.eventId) &&
     value.schemaVersion === 1 &&
     value.producer === 'post-service' &&
@@ -84,6 +104,7 @@ export function parsePostEvent(
   for (const key of ['activityVersion', 'postVersion'])
     if (value[key] !== undefined)
       require(positive(value[key]), 'post event version');
+  if (!supported.has(value.eventType as SupportedPostEventType)) return null;
   if (value.postAuthorId !== undefined)
     require(positive(value.postAuthorId), 'post author ID');
   const event: PostEvent = {
@@ -111,21 +132,32 @@ export function parsePostEvent(
     require(positive(value.activityVersion) &&
       positive(value.postAuthorId) &&
       text(value.postCategory), 'activity context');
-  if (['PostCreated', 'PostDeleted', 'PostExpired'].includes(type)) {
+  if (
+    ['PostCreated', 'PostUpdated', 'PostDeleted', 'PostExpired'].includes(type)
+  ) {
     require(record(value.post) &&
       value.post.postId === event.aggregateId &&
       positive(value.post.authorId) &&
       text(value.post.category), 'post payload');
     event.postAuthorId = String(value.post.authorId);
-    if (type === 'PostCreated')
+    if (type === 'PostCreated') {
       require(typeof value.post.latitude === 'number' &&
         Number.isFinite(value.post.latitude) &&
         typeof value.post.longitude === 'number' &&
         Number.isFinite(value.post.longitude) &&
         typeof value.post.radiusM === 'number' &&
         value.post.radiusM > 0 &&
-        value.post.expiresAt === null, 'created post payload');
-    else {
+        value.post.expiresAt === null &&
+        Math.abs(value.post.latitude) <= 90 &&
+        Math.abs(value.post.longitude) <= 180, 'created post payload');
+      event.latitude = value.post.latitude as number;
+      event.longitude = value.post.longitude as number;
+    } else if (type === 'PostUpdated') {
+      require(positive(value.postVersion) &&
+        (value.post.closedAt === null ||
+          date(value.post.closedAt)), 'post update');
+      event.closedAt = value.post.closedAt as string | null;
+    } else {
       require(positive(value.postVersion), 'post version');
       require(date(
         type === 'PostDeleted' ? value.post.deletedAt : value.post.expiredAt,
@@ -134,7 +166,11 @@ export function parsePostEvent(
     if (type === 'PostExpired')
       require(date(value.post.expiresAt), 'post expiry time');
   }
-  if (['PostCommentCreated', 'PostCommentDeleted'].includes(type)) {
+  if (
+    ['PostCommentCreated', 'PostCommentUpdated', 'PostCommentDeleted'].includes(
+      type,
+    )
+  ) {
     require(record(value.comment) &&
       text(value.comment.commentId) &&
       value.comment.postId === event.aggregateId &&
@@ -144,10 +180,73 @@ export function parsePostEvent(
         value.comment.status === 'ACTIVE' &&
         date(value.comment.createdAt) &&
         value.comment.updatedAt === null, 'created comment payload');
-    else require(date(value.comment.deletedAt), 'deleted comment payload');
+    else if (type === 'PostCommentDeleted')
+      require(date(value.comment.deletedAt), 'deleted comment payload');
+    else
+      require(date(value.comment.updatedAt) &&
+        positive(value.activityVersion), 'updated comment payload');
     event.actorId = String(value.comment.authorId);
     event.commentId = value.comment.commentId;
     event.activityKey = `comment#${event.commentId}`;
+    event.commentAuthorId = event.actorId;
+    if (
+      value.comment.parentCommentId !== undefined &&
+      value.comment.parentCommentId !== null
+    ) {
+      require(text(value.comment.parentCommentId), 'parent comment ID');
+      event.parentCommentId = value.comment.parentCommentId;
+    }
+    if (value.parentCommentAuthorId !== undefined) {
+      require(positive(value.parentCommentAuthorId) &&
+        event.parentCommentId, 'parent comment author');
+      event.parentCommentAuthorId = String(value.parentCommentAuthorId);
+    }
+  }
+  if (
+    ['PostCommentReactionCreated', 'PostCommentReactionRemoved'].includes(type)
+  ) {
+    const r = value.commentReaction;
+    require(record(r) &&
+      r.postId === event.aggregateId &&
+      text(r.commentId) &&
+      positive(r.userId) &&
+      ['HELPFUL', 'AGREE', 'DIFFERENT'].includes(String(r.type)) &&
+      date(r.createdAt) &&
+      positive(value.commentAuthorId) &&
+      positive(value.activityVersion), 'comment reaction');
+    if (type === 'PostCommentReactionRemoved')
+      require(date(r.removedAt), 'removed comment reaction');
+    event.commentId = r.commentId as string;
+    event.commentAuthorId = String(value.commentAuthorId);
+    event.actorId = String(r.userId);
+    event.reactionType = r.type as string;
+  }
+  if (['PostVoteCandidateSelected', 'PostVoteWon'].includes(type)) {
+    const v = type === 'PostVoteWon' ? value.vote : value.candidate;
+    require(record(v) &&
+      v.postId === event.aggregateId &&
+      text(v.commentId) &&
+      positive(
+        type === 'PostVoteWon' ? v.winnerAuthorId : v.authorId,
+      ), 'vote identity');
+    if (type === 'PostVoteWon')
+      require(v.resultId === event.aggregateId &&
+        positive(v.votes) &&
+        date(v.closedAt), 'vote result');
+    else
+      require(typeof v.scoreAtSelection === 'number' &&
+        Number.isFinite(v.scoreAtSelection) &&
+        v.scoreAtSelection >= 0 &&
+        date(v.selectedAt), 'vote candidate');
+    if (v.regionCode !== undefined && v.regionCode !== null)
+      require(text(v.regionCode), 'vote region');
+    event.commentId = v.commentId as string;
+    event.commentAuthorId = String(
+      type === 'PostVoteWon' ? v.winnerAuthorId : v.authorId,
+    );
+    if (v.resultId !== undefined) event.resultId = v.resultId as string;
+    if (v.regionCode !== undefined)
+      event.regionCode = v.regionCode as string | null;
   }
   if (['PostReactionCreated', 'PostReactionRemoved'].includes(type)) {
     require(record(value.reaction) &&

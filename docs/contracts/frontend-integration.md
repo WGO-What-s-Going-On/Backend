@@ -1,5 +1,8 @@
 # 프론트엔드 연동 계약
 
+프로필 이미지 업로드·검증·Signed GET·재시도는 [User 프로필 이미지 계약](../../services/user-service/PROFILE_IMAGE_GCS_IMPLEMENTATION_REPORT.md#4-api프론트엔드-연동-계약)을 따른다.
+`PATCH /api/v1/users/me`의 `profileImageKey`는 이제 제거용 `null`만 받으며 문자열 설정은 400이다.
+
 대상 브랜치: `dev`. 이 문서는 구현 계약이며 실제 운영 배포·카카오 콘솔 등록 완료를 뜻하지 않는다.
 화면 기준: Frontend `67186831ee5a11854c7b48166bbb3f9a5a563ce9`.
 
@@ -81,7 +84,7 @@ Post·Map·Notification·Moderation은 서비스 서명과 JWT의 `userId`가 �
 | --- | --- | --- |
 | PATCH /posts/{postId} | title 및/또는 content | 작성자만, 활성·미종료 글만. 204. 위치·카테고리는 수정하지 않음 |
 | PUT /posts/{postId}/closed | `{closed:true|false}` | 작성자만, 멱등 204. 자동 만료·삭제·제재된 글의 재개는 거절 |
-| POST /moderation/reports | `{targetType:"POST"|"COMMENT",postId,commentId?,reason,description?}` | 201. enum 사유, description 최대 2,000자. 운영 대상 검증 계약 미지원 시 503 |
+| POST /moderation/reports | `{targetType:"POST"|"COMMENT",postId,commentId?,reason,description?}` | 201. enum 사유, description 최대 2,000자. 전용 대상 검증 키/URL 미설정·조회 장애는503 |
 | DELETE /moderation/reports/{reportId} | 없음 | 본인 PENDING만 취소, 200. 중복 취소는 최초 결과 |
 | POST /users/me/blocks | `{blockedUserId:"123"}` | 자기 차단 금지, ACTIVE/SUSPENDED 대상만, 멱등 204 |
 | DELETE /users/me/blocks/{blockedUserId} | 없음 | 멱등 204 |
@@ -92,7 +95,7 @@ Post·Map·Notification·Moderation은 서비스 서명과 JWT의 `userId`가 �
 차단은 User가 관계를 소유한다. 프론트는 차단 목록으로 표시할 작성자 콘텐츠를 숨긴다.
 이 API는 차단 대상의 서비스 전체 접근권을 박탈하는 제재 API가 아니다.
 신고 원본·이벤트 journal은 Redis `moderation:reports:v1:records` HASH, 복구 대상은 `moderation:reports:v1:pending` SET에 보관한다. 기존 `moderation:report:<hash>` 데이터는 보존하며 자동 이관하지 않는다. REPORT_CREATED/REPORT_WITHDRAWN은 기존 moderation:report-events로 발행한다. 자동으로 삭제·제재하지 않는다.
-신규 신고에는 대상 존재·상태 검증이 필수지만 최신 Post는 Moderation 호출자를 인증하지 못하므로 **신규 접수는 503으로 닫혀 있다**. [필요한 연동 계약](../../services/moderation-service/contracts/gateway-handoff.md)을 완료해야 운영 접수가 가능하다. 테스트 어댑터로 검증한 로컬 생성 성공과 구분한다.
+신규 신고는 Moderation 전용 ES256으로 Post의 읽기 전용 대상 검증을 통과해야 한다. [대상 검증 계약](../../services/moderation-service/contracts/reports.md)의 별도 키·URL이 미설정이면503이다. 접수·취소 알림은 본인 알림함에만 기록하고 검토 완료를 뜻하지 않는다. REVIEWED 관리자 명령/완료 생산자는 아직 없으므로 처리 결과 알림을 만들지 않는다. 실제 운영 키·GCP 연동 검증과 로컬 테스트는 구분한다.
 운영 Redis 영속성·백업·용량·보존 정책은 원본 데이터까지 포함해야 한다. 차단은 기존 User PostgreSQL 관계와 Outbox를 함께 커밋한다.
 
 작성자 종료 시 투표 결과를 확정하며 재개해도 이미 확정된 투표를 재시작하지 않는다.
@@ -135,8 +138,9 @@ Swagger에 목록 응답 스키마가 포함된다.
 - `GET /posts/me/ranking?regionCode=<10자리 코드>` → regionCode, items(상위100), myRank|null, myScore.
   전역 칭호가 천리안인 사용자만 포함하며 해당 행정동 게시글에서 받은 대표 의견 점수 순이다.
   동점은 userId 오름차순으로 정한다. 한 사람이 여러 동에서 활동하면 각 동에 등장할 수 있다.
-- `POST_REGION_ENABLED=true`와 Map `KAKAO_LOCAL_REST_API_KEY`가 필요하다.
-  신규 글의 위치 인가 뒤 행정동을 기록한다. 활성화 후 지역 판정 실패는 생성 실패로 반환하며 추측하지 않는다.
+- 신규 글은 위치 인가 뒤 Map `ResolveRegion`으로 행정동을 항상 조회·저장한다.
+  Map에 `KAKAO_LOCAL_REST_API_KEY`가 필요하며, 조회 실패나 잘못된 응답은 게시물·Outbox 저장 없이 503으로 반환한다.
+  `POST_REGION_ENABLED`는 더 이상 사용하지 않는다. 미설정·false여도 생성과 지역 랭킹을 비활성화하지 않는다.
 - 기존 글은 Post에서 `pnpm build` 후 `pnpm region:backfill 100`을 반복한다.
   한번에 최대 1,000개, 이미 기록된 지역은 덮어쓰지 않는다. 운영 데이터 변경은 별도 실행 단계다.
 - 지역 후보 1,000명 및 각 DB 집계 2초 제한. 초과 시 잘못된 순위를 반환하지 않고 503.
@@ -168,3 +172,12 @@ MongoDB 통합 테스트는 프론트 응답·답글·반응·종료/재개·권
 닉네임 RPC와 Map 후보는 테스트 대역이며, Map 행정동 응답과 좌표 순서는 HTTP 대역으로 별도 검증한다.
 Notification은 실제 로컬 PostgreSQL/Redis에서 설정·삭제·전체 읽음을 검증한다.
 실제 카카오 OAuth/행정구역, 운영 MongoDB replica set 호환성·성능, 실제 FCM 전송은 로컬 테스트 통과로 대체하지 않는다.
+# Notification 위치 구독과 알림 설정 확장
+
+기존 `/api/v1/notifications` 목록·읽음·삭제·FCM 토큰·게시글 mute를 유지한다. settings PATCH는 기존 네 boolean에 rewards/votes/moderation을 추가한다. 각 false는 해당 종류의 **새 알림함과 Push 모두** 억제한다. 기존 알림 이력은 유지하며 Push 직전에도 설정을 재검증한다.
+
+`GET|PUT|DELETE /api/v1/notifications/nearby-subscription`은 기존 Access JWT→HTTP Gateway ES256 인증을 사용하며 서명된 본인만 접근한다. PUT `{enabled:true,locationConsent:true,latitude,longitude,capturedAt:"UTC ISO",expiresInSeconds?:60..900}`은 별도 주변 알림 opt-in과 위치 이용 동의다. 사용자 버튼/브라우저 위치 권한과 위치 이용 목적 동의 UI가 필요하며 기존 약관·게시글 참여·거주 지역으로 대신하지 않는다. 위치는 최대15분, 갱신에는 새 측정값이 필요하다. enabled=false만 보내거나 DELETE(204)하면 철회와 대기 Push 취소다. GET/PUT 응답은 `{featureEnabled,enabled,locationConsent,expiresAt,radiusM:150}`이며 좌표를 반환하지 않는다.
+
+NEARBY_NOTIFICATIONS_ENABLED 기본false이며 OFF에서 새 위치 저장 요청은503이다. User 차단 조회 전용 키·URL과 프런트 동의 UI를 배포 검증한 후 true로 전환한다. 반경150m 포함, 작성자 제외, 양방향 차단/종류 설정/게시글 mute 적용, 사용자당 기본10분에 최대1회 예약한다. 위치 철회·갱신·만료 및 게시글 종료·삭제는 이전 미전송 작업을 취소한다. 다수 수신자는 영속 cursor/lease와 최대50명/페이지, 최대5개 권위 조회 동시 실행으로 처리한다.
+
+FCM data.notificationId로 중복 표시를 막고 알림함을 원본으로 동기화한다. /posts/{id}와 commentId는 실제 원본 대상이 있는 경우만 사용한다. 칭호·신고·삭제 안내는 /notifications이며 payload.metadata에는 검증된 칭호/지역/레벨 등만 있다. regionName=null을 행정동 이름으로 추정하지 않는다. WS Notification 전용 인증 채널은 현재 없으며 REST/FCM으로 연결한다. 토큰 등록 성공과 실제 PWA 수신 성공은 별도 검증한다.

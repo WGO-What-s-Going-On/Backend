@@ -17,7 +17,7 @@ import type {
   CommentRecord,
   CommentReactionRecord,
   CommentReactionType,
-  PostRecord,
+  NewPostRecord,
   ReactionRecord,
   ParticipantRecord,
 } from '../domain/post.js';
@@ -57,9 +57,9 @@ export class CreatePost {
     private readonly authorization: LocationAuthorization,
   ) {}
 
-  async execute(input: PostInput, authorId: number): Promise<PostRecord> {
+  async execute(input: PostInput, authorId: number): Promise<NewPostRecord> {
     const now = new Date();
-    const post = createPost(input, authorId, `post_${randomUUID()}`, now);
+    const draft = createPost(input, authorId, `post_${randomUUID()}`, now);
     // 위치 판정이 실패하면 MongoDB 트랜잭션과 Outbox 기록을 시작하지 않는다.
     await this.authorization.assertCanCreate(
       authorId,
@@ -67,16 +67,13 @@ export class CreatePost {
       input.longitude,
       input.radiusM,
     );
-    if (process.env.POST_REGION_ENABLED === 'true') {
-      if (!this.authorization.resolveRegion)
-        throw new ParticipationUnavailableError(
-          'Region resolution unavailable',
-        );
-      post.region = await this.authorization.resolveRegion(
+    const post: NewPostRecord = {
+      ...draft,
+      region: await this.authorization.resolveRegion(
         input.latitude,
         input.longitude,
-      );
-    }
+      ),
+    };
     await this.unitOfWork.execute(async ({ commands }) => {
       await commands.insertPost(post);
       await commands.appendEvent(
@@ -172,6 +169,7 @@ export class CreateComment {
     try {
       return await this.unitOfWork.execute(async (transaction) => {
         const post = await active(transaction, postId);
+        let parentCommentAuthorId: number | undefined;
         if (parentCommentId) {
           const parent = await transaction.queries.findComment(
             postId,
@@ -189,6 +187,7 @@ export class CreateComment {
             throw new PostNotFoundError(
               'Active top-level parent comment required',
             );
+          parentCommentAuthorId = parent.authorId;
         }
         // 재연결 후 같은 작성 요청이 다시 와도 댓글과 카운터를 한 번만 기록한다.
         if (mutationId) {
@@ -223,6 +222,9 @@ export class CreateComment {
               postAuthorId: post.authorId,
               postCategory: post.category,
               activityVersion: 1,
+              ...(parentCommentAuthorId !== undefined
+                ? { parentCommentAuthorId }
+                : {}),
             },
             now,
           ),

@@ -1,4 +1,10 @@
-import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  ServiceUnavailableException,
+  Optional,
+} from '@nestjs/common';
+import { NotificationStreamWorkers } from '../event-consumer/notification-stream.workers.js';
 import {
   ApiOkResponse,
   ApiOperation,
@@ -14,6 +20,7 @@ export class NotificationReadinessController {
   constructor(
     private readonly database: PostgresDatabase,
     private readonly consumer: PostEventConsumer,
+    @Optional() private readonly streams?: NotificationStreamWorkers,
   ) {}
 
   @Get('ready')
@@ -27,13 +34,13 @@ export class NotificationReadinessController {
     description: 'A required dependency is unavailable',
   })
   async ready() {
-    if (!this.consumer.isReady())
+    if (!this.consumer.isReady() || (this.streams && !this.streams.isReady()))
       throw new ServiceUnavailableException(
         'Notification dependencies are not ready',
       );
     try {
       const result = await this.database.pool.query(
-        'SELECT version FROM notification_schema_versions WHERE version=1',
+        'SELECT version FROM notification_schema_versions WHERE version=4',
       );
       if (result.rowCount !== 1) throw new Error('Schema not initialized');
     } catch {

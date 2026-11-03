@@ -337,6 +337,9 @@ export class UsersService {
     input: UpdateUserProfile,
     correlationId: string = randomUUID(),
   ): Promise<UserProfileResponse> {
+    // Enforce this at the service boundary too; key syntax cannot prove ownership.
+    if (input.profileImageKey !== undefined && input.profileImageKey !== null)
+      throw new BadRequestException('Use verified profile image uploads');
     try {
       return await this.usersRepository.manager.transaction(async (manager) => {
         const users = manager.getRepository(UserEntity);

@@ -18,9 +18,12 @@
     "migration:revert": "nest build && typeorm migration:revert -d dist/database/data-source.js",
     "migration:show": "nest build && typeorm migration:show -d dist/database/data-source.js",
     "seed:terms": "nest build && node dist/database/seeds/seed-terms.js",
-    "seed:terms:run": "node dist/database/seeds/seed-terms.js"
+    "seed:terms:run": "node dist/database/seeds/seed-terms.js",
+    "seed:badges": "nest build && node dist/database/seeds/seed-badges.js",
+    "rewards:reconcile": "nest build && node dist/rewards/reconcile.js"
   },
   "dependencies": {
+    "@google-cloud/storage": "8.4.0",
     "@grpc/grpc-js": "1.14.5",
     "@grpc/proto-loader": "0.8.1",
     "@nestjs/common": "12.0.4",
@@ -29,6 +32,7 @@
     "@nestjs/platform-express": "12.0.4",
     "@nestjs/swagger": "12.0.2",
     "@nestjs/typeorm": "12.0.1",
+    "file-type": "22.2.0",
     "ioredis": "5.8.2",
     "jose": "6.1.0",
     "pg": "8.23.0",

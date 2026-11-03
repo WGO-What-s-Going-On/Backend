@@ -47,9 +47,13 @@ export async function harness() {
   const ownedKeys = new Set<string>();
   async function cleanup() {
     await state.onModuleDestroy();
-    if (ownedKeys.size) await redis.del([...ownedKeys]);
-    await redis.quit();
-    await pg.cleanup();
+    try {
+      if (!redis.isOpen) await redis.connect();
+      if (ownedKeys.size) await redis.del([...ownedKeys]);
+    } finally {
+      if (redis.isOpen) await redis.quit();
+      await pg.cleanup();
+    }
   }
   return {
     config,

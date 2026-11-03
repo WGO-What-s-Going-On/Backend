@@ -1,6 +1,6 @@
 # WGO Notification Service
 
-Post Redis Streams 이벤트를 사용자 알림으로 변환하고 PostgreSQL 원본, 읽음 상태, FCM 구독 및 전달 상태를 관리합니다. Node.js 24 / pnpm 10을 사용합니다.
+Post·User·Moderation Redis Streams 이벤트를 사용자 알림으로 변환하고 PostgreSQL 원본, 읽음 상태, FCM 구독 및 전달 상태를 관리합니다. Node.js 24 / pnpm 10을 사용합니다. 전체 정책은 [이벤트 계약](EVENT_CONTRACTS.md), [기능 매트릭스](NOTIFICATION_MATRIX.md), [운영 절차](OPERATIONS.md)를 참조합니다.
 
 ## 로컬 실행
 
@@ -41,15 +41,19 @@ Stream은 `post:events`, group은 `post-notification`, DLQ는 `notification:post
 
 | 이벤트 | 처리 |
 | --- | --- |
-| PostCreated | 작성자 projection 저장. 주변 조회·동의 계약이 없어 Push 없음 |
-| PostCommentCreated | 작성자 댓글 알림과 묶음 처리 |
+| PostCreated | 작성자 projection 저장. 명시적 위치 구독에만 주변 fanout 예약, 기능 기본 OFF |
+| PostCommentCreated | 게시글 작성자 댓글/답글과 확인된 부모 작성자 답글, 중복 수신자 제거 |
+| PostCommentUpdated | 버전/정상 처리 기록. 편집 자체의 추가 Push 없음 |
+| PostCommentReactionCreated/Removed | 댓글 작성자 수신, HELPFUL/AGREE/DIFFERENT 묶음·버전·취소 |
+| PostVoteCandidateSelected/PostVoteWon | 별도 사실로 후보/승리 작성자 수신. 후보는 게시글·사용자당 한 제품 알림 |
+| PostUpdated | 실제 수동 닫힘/재열림과 postVersion, 경고·미전송 작업 취소 |
 | PostReactionCreated | 4종 공감·legacy LIKE 알림과 묶음 처리. ENDED로 게시물 종료하지 않음 |
 | PostParticipantJoined | 인식·ACK. 참여를 알림 구독 동의로 해석하지 않음 |
 | PostReactionRemoved | activityVersion 기반 기여 제거, 역순·중복·재등록 처리 |
 | PostCommentDeleted | 기여 제거·숨김·미전송 취소. USER/MODERATION 및 reason 감사 기록 |
-| PostDeleted | terminal postVersion 반영, 후속 활동·미전송 Push 차단 |
+| PostDeleted | terminal postVersion 반영, 후속 활동·미전송 Push 차단. 확정 MODERATION 삭제는 작성자 안내 |
 | PostParticipantLeft | 인식·ACK. 참여 알림 없음 |
-| PostExpired | 만료 tombstone과 후속 전송 차단. BOARD_CLOSED로 해석하지 않음 |
+| PostExpired | 실제 적용된 종료 안내, 만료 tombstone과 후속 전송 차단. Moderation 판단만으로 대체하지 않음 |
 
 과거 생성 v1의 postAuthorId/activityVersion/postVersion 누락을 허용합니다. 수신자는 이벤트의 postAuthorId, 또는 실제 소비한 PostCreated 등에서 저장한 작성자 projection으로만 결정합니다. 둘 다 없으면 보류하여 pending/retry 후 DLQ에 원본과 사유를 남깁니다. 인가되지 않은 Post API를 호출하거나 수신자를 추측하지 않습니다. 재처리는 작성자 projection 확보 후 운영자가 DLQ 원본의 동일 eventId를 재발행하는 방식으로 가능합니다.
 
@@ -126,14 +130,11 @@ Event marker와 activity tombstone은 자동 만료시키지 않습니다. Strea
 
 | 기능 | 실제 코드 확인 결과 / 필요한 계약 |
 | --- | --- |
-| F02 답글 | parentCommentId/부모 작성자 및 reply 이벤트 없음 |
-| F03 댓글 공감 | 댓글 공감 HTTP/저장은 있지만 생성·취소 이벤트를 발행하지 않음 |
-| F05 주변 150m | Map은 주변 게시물 ID 조회만 제공. 사용자 ID·알림 동의 범위를 반환하는 인가된 계약 필요 |
-| F07 종료 예정 | 확정된 예정 시각·Lifecycle 상태 버전과 작성자/동의한 수신자 계약 필요 |
-| F08 종료 | Post가 상태를 실제 적용한 뒤의 확정 종료 이벤트 필요. PostExpired와 동일시하지 않음 |
+| 신고 검토 결과 | REVIEWED 상태만 있고 실제 관리자 검토·결정/조치 완료 생산자는 없음 |
+| 주변 150m 활성화 | 구현/로컬 검증, 기본 OFF. 별도 위치 동의 UI·User 차단 조회 서비스 키 설정과 실제 배포 검증 필요 |
 | 실시간 인앱 | Realtime Gateway의 사용자별 Notification 전달·인증 계약 없음 |
 
-이번 GCP 전환은 PostgreSQL을 알림 원본으로 사용합니다. 참여를 수신 동의로 보거나 ENDED 공감을 게시물 종료로 해석하지 않습니다. 위 표의 미구현 기능을 인프라 이전 완료와 혼동하지 않습니다.
+답글·댓글 공감·후보/승리·칭호/레벨·버전 있는 STALE/재활성화·Post 실제 종료·신고 접수/취소·확정 삭제 제재를 구현했습니다. PostgreSQL을 알림 원본으로 사용하며 참여를 수신 동의로 보거나 ENDED/AI flagged를 확정 종료/제재로 해석하지 않습니다. 운영 GCP 검증과 로컬 검증을 구분합니다.
 
 ## 환경변수
 

@@ -50,7 +50,7 @@ describe('LifecycleService', () => {
   it('keeps posts ACTIVE during the first hour and transitions once after inactivity', async () => {
     const repository = new MemoryLifecycle();
     const service = new LifecycleService(repository);
-    await service.initialize('post_1', '2026-01-01T00:00:00.000Z');
+    await service.initialize('post_1', '2026-01-01T00:00:00.000Z', '42');
     await service.evaluate('post_1', new Date('2026-01-01T00:59:59.000Z'));
     expect((await repository.find('post_1'))?.state).toBe('ACTIVE');
     await service.evaluate('post_1', new Date('2026-01-01T01:00:00.000Z'));
@@ -62,6 +62,11 @@ describe('LifecycleService', () => {
     expect(repository.events.map((event) => event.eventType)).toEqual([
       'BOARD_STALE',
     ]);
+    expect(repository.events[0]?.payload).toMatchObject({
+      postAuthorId: '42',
+      version: 1,
+      scheduledCloseAt: '2026-01-01T01:10:00.000Z',
+    });
   });
 
   it('closes STALE after ten minutes and never reopens CLOSED', async () => {

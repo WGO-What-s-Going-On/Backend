@@ -41,6 +41,9 @@ describe('real PostgreSQL persistence', () => {
       replies: false,
       reactions: false,
       lifecycle: true,
+      rewards: true,
+      votes: true,
+      moderation: true,
     });
     expect(await settings.allowed('1', 'post_test', 'POST_COMMENTED')).toBe(
       false,
