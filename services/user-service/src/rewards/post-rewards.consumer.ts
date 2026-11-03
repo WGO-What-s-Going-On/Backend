@@ -13,6 +13,7 @@ import {
   ConflictingRewardEvent,
   UnsupportedRewardEvent,
   parsePostEvent,
+  type RegionContract,
 } from './post-event.js';
 
 export const POST_STREAM = 'post:events',
@@ -33,7 +34,7 @@ export class PostRewardsConsumer
   private readonly idle: number;
   private readonly attempts: number;
   private readonly pollMs: number;
-  private readonly regionContract: 'none' | 'post-region-v1';
+  private readonly regionContract: RegionContract;
   constructor(
     config: ConfigService,
     private readonly activities: ActivityService,
@@ -42,7 +43,7 @@ export class PostRewardsConsumer
     this.attempts = config.get<number>('rewards.maxAttempts') ?? 5;
     this.pollMs = config.get<number>('rewards.pollIntervalMs') ?? 1000;
     this.regionContract =
-      config.get<'none' | 'post-region-v1'>('rewards.regionContract') ?? 'none';
+      config.get<RegionContract>('rewards.regionContract') ?? 'vote-region-v1';
     this.redis = new Redis(config.getOrThrow<string>('redis.url'), {
       lazyConnect: true,
       enableOfflineQueue: false,

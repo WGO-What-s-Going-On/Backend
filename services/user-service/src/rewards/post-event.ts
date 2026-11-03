@@ -1,6 +1,7 @@
 export class InvalidRewardEvent extends Error {}
 export class ConflictingRewardEvent extends InvalidRewardEvent {}
 export class UnsupportedRewardEvent extends InvalidRewardEvent {}
+export type RegionContract = 'none' | 'post-region-v1' | 'vote-region-v1';
 export interface PostRegionSnapshot {
   code: string;
   name: string;
@@ -18,6 +19,7 @@ export interface ActivityInput {
     | 'PARTICIPATION'
     | 'POST_REACTION'
     | 'COMMENT_REACTION'
+    | 'VOTE_CANDIDATE'
     | 'VOTE_WIN';
   actorId: string;
   beneficiaryId: string | null;
@@ -27,6 +29,9 @@ export interface ActivityInput {
   commentId?: string;
   resultId?: string;
   occurredAt?: string;
+  // Missing (old producer), explicit null and a known event snapshot remain distinct.
+  regionCode?: string | null;
+  scoreAtSelection?: number;
   postRegion?: PostRegionSnapshot;
   regionUpdate?: { version: number; region: PostRegionSnapshot | null };
   postStatus?: 'ACTIVE' | 'DELETED' | 'EXPIRED';
@@ -47,7 +52,7 @@ function check(v: unknown): asserts v {
 // Retain identifiers and state only: content, location and profile data stay with Post.
 export function parsePostEvent(
   fields: Record<string, string>,
-  regionContract: 'none' | 'post-region-v1' = 'none',
+  regionContract: RegionContract = 'vote-region-v1',
 ): ActivityInput | null {
   let v: unknown;
   try {
@@ -135,6 +140,35 @@ export function parsePostEvent(
       occurredAt: String(v.occurredAt),
     };
   }
+  if (v.eventType === 'PostVoteCandidateSelected') {
+    const candidate = v.candidate;
+    check(
+      record(candidate) &&
+        candidate.postId === v.aggregateId &&
+        id(candidate.commentId, 'comment') &&
+        positive(candidate.authorId) &&
+        Number.isSafeInteger(candidate.scoreAtSelection) &&
+        Number(candidate.scoreAtSelection) >= 0 &&
+        date(candidate.selectedAt) &&
+        v.activityVersion === 1,
+    );
+    return {
+      eventId: String(v.eventId),
+      correlationId: String(v.correlationId),
+      postId: String(v.aggregateId),
+      key: `candidate:${v.aggregateId}:${candidate.commentId}`,
+      kind: 'VOTE_CANDIDATE',
+      commentId: String(candidate.commentId),
+      actorId: String(candidate.authorId),
+      beneficiaryId: String(candidate.authorId),
+      reactionType: null,
+      version: 1,
+      active: true,
+      occurredAt: String(candidate.selectedAt),
+      scoreAtSelection: Number(candidate.scoreAtSelection),
+      ...parseVoteRegion(candidate),
+    };
+  }
   if (v.eventType === 'PostVoteWon') {
     const vote = v.vote;
     check(
@@ -161,6 +195,7 @@ export function parsePostEvent(
       version: 1,
       active: true,
       occurredAt: String(vote.closedAt),
+      ...parseVoteRegion(vote),
       ...(regionContract === 'post-region-v1' && v.postRegion !== undefined
         ? { postRegion: parseRegionSnapshot(v.postRegion) }
         : {}),
@@ -298,6 +333,18 @@ export function parsePostEvent(
         }
       : {}),
   };
+}
+
+function parseVoteRegion(value: Record<string, unknown>): {
+  regionCode?: string | null;
+} {
+  if (!Object.hasOwn(value, 'regionCode')) return {};
+  check(
+    value.regionCode === null ||
+      (typeof value.regionCode === 'string' &&
+        /^[0-9]{10}$/.test(value.regionCode)),
+  );
+  return { regionCode: value.regionCode as string | null };
 }
 
 export function parseRegionSnapshot(v: unknown): PostRegionSnapshot {
