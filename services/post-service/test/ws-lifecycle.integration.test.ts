@@ -126,6 +126,10 @@ suite('Post lifecycle -> Outbox -> WS', () => {
       .overrideProvider(LOCATION_AUTHORIZATION)
       .useValue({
         assertCanCreate: async () => {},
+        resolveRegion: async () => ({
+          code: '1159053000',
+          name: '서울특별시 동작구 상도1동',
+        }),
         assertCanJoin: async () => {},
       })
       .overrideProvider(OutboxWorker)

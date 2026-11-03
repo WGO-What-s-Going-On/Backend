@@ -32,6 +32,10 @@ suite('vote candidate events with MongoDB and Redis', () => {
     for (const model of Object.values(db.models)) await model.syncIndexes();
     votes = new MongooseVote(db, posts, comments, selections, outbox, {
       assertCanCreate: async () => {},
+      resolveRegion: async () => ({
+        code: '1159053000',
+        name: '서울특별시 동작구 상도1동',
+      }),
       assertCanJoin: async () => {},
     });
     worker = new OutboxWorker(outbox);
@@ -94,6 +98,14 @@ suite('vote candidate events with MongoDB and Redis', () => {
 
   it('publishes the top two candidate facts once despite concurrent and repeated selection', async () => {
     const { postId, candidates } = await fixture();
+    await posts.updateOne(
+      { postId },
+      {
+        $set: {
+          region: { code: '1159053000', name: '서울특별시 동작구 상도1동' },
+        },
+      },
+    );
     await Promise.all(
       Array.from({ length: 4 }, () => votes.selectDue(postId, selectedAt)),
     );
@@ -109,6 +121,7 @@ suite('vote candidate events with MongoDB and Redis', () => {
             commentId: candidate.commentId,
             authorId: candidate.authorId,
             scoreAtSelection: index === 0 ? 5 : 0,
+            regionCode: '1159053000',
             selectedAt,
           },
           activityVersion: 1,
@@ -132,7 +145,11 @@ suite('vote candidate events with MongoDB and Redis', () => {
         aggregateId: postId,
         occurredAt: selectedAt.toISOString(),
         activityVersion: 1,
-        candidate: { postId, selectedAt: selectedAt.toISOString() },
+        candidate: {
+          postId,
+          selectedAt: selectedAt.toISOString(),
+          regionCode: '1159053000',
+        },
       });
       expect(fields.eventType).toBe(data.eventType);
       expect(data).not.toHaveProperty('payload');
@@ -155,7 +172,9 @@ suite('vote candidate events with MongoDB and Redis', () => {
     const rows = await events(postId);
     expect(rows).toHaveLength(2);
     for (const row of rows)
-      expect(row.payload).toMatchObject({ candidate: { authorId: 456 } });
+      expect(row.payload).toMatchObject({
+        candidate: { authorId: 456, regionCode: null },
+      });
   });
 
   it.each([

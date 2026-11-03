@@ -635,7 +635,7 @@ Post 조회가 원본 공개 상태를 다시 검증한다. WS는 postVersion으
 | --- | --- |
 | PostCommentReactionCreated | `commentReaction: {postId, commentId, userId, type, createdAt}`, `commentAuthorId`, `activityVersion` |
 | PostCommentReactionRemoved | `commentReaction: {postId, commentId, userId, type, createdAt, removedAt}`, `commentAuthorId`, `activityVersion` |
-| PostVoteWon | `vote: {postId, resultId, commentId, winnerAuthorId, votes, closedAt}`, `activityVersion: 1` |
+| PostVoteWon | `vote: {postId, resultId, commentId, winnerAuthorId, votes, closedAt, regionCode}`, `activityVersion: 1` |
 
 - 공감 종류는 HELPFUL/AGREE/DIFFERENT. 댓글 작성자 `commentAuthorId`가 지급 대상이며
   반응한 `userId`나 게시물 작성자가 아니다. User 정책이 종류별 지급량과 자기 공감 제외를 결정한다.
@@ -693,7 +693,8 @@ pnpm post:operations moderate-comment post_<UUID> comment_<UUID> decision-456 2
     "commentId": "comment_44444444-4444-4444-8444-444444444444",
     "authorId": 456,
     "scoreAtSelection": 5,
-    "selectedAt": "2026-11-03T03:00:00.000Z"
+    "selectedAt": "2026-11-03T03:00:00.000Z",
+    "regionCode": "1159053000"
   },
   "activityVersion": 1
 }
@@ -703,7 +704,7 @@ pnpm post:operations moderate-comment post_<UUID> comment_<UUID> decision-456 2
 `candidate.postId = aggregateId`다. `authorId`는 후보 댓글 작성자의 양의 안전 정수 ID다.
 `scoreAtSelection`은 후보 확정 시 HELPFUL + AGREE의 합인 0 이상의 안전 정수다.
 투표 득표수나 지급 점수가 아니다. `selectedAt`은 확정 시각의 ISO-8601 UTC 문자열이다.
-`activityVersion`은 불변 선정 사실의 버전인 `1`이다. 댓글 본문, 행정동, 보상량과 칭호는 포함하지 않는다.
+`activityVersion`은 불변 선정 사실의 버전인 `1`이다. `regionCode`는 아래 공통 지역 계약을 따른다. 댓글 본문, 보상량과 칭호는 포함하지 않는다.
 
 - 활성 댓글이 둘 미만이거나 선정 시각 전이면 발행하지 않는다. 삭제·종료·만료된 게시물에도 발행하지 않는다.
 - 반복 호출과 동시 워커는 이미 확정된 후보에 새 이벤트를 만들지 않는다. Outbox 저장 실패 시 후보 상태와 이벤트를 모두 롤백한다.
@@ -720,3 +721,25 @@ pnpm post:operations moderate-comment post_<UUID> comment_<UUID> decision-456 2
 
 `test/vote-candidate-events.integration.test.ts`는 전용 MongoDB
 `wgo_vote_candidate_events_integration`과 Redis DB 10에서 실제 선정·롤백·발행을 검증한다.
+
+## 투표 이벤트의 행정동 코드
+
+신규 `PostVoteCandidateSelected`는 `candidate.regionCode`, 신규 `PostVoteWon`은
+`vote.regionCode`를 항상 포함한다. 값은 10자리 숫자 문자열 또는 `null`이다.
+사용자의 거주지가 아니라 각 사건 확정 트랜잭션에서 읽은 게시물의 `region.code`다.
+추가 Map 호출 없이 후보·승리 상태와 같은 스냅샷을 Outbox에 저장한다.
+다른 이벤트의 데이터와 `schemaVersion: 1`은 유지한다.
+
+- 새 게시물은 생성 위치 인가 뒤 행정동을 반드시 조회·저장한다. 지역 조회 실패 시 생성하지 않는다.
+- 과거 게시물의 지역이 없으면 새 투표 이벤트는 `regionCode: null`이다. 임의 지역이나 사용자 소속 지역으로 대체하지 않는다.
+- 이전 버전이 저장한 Outbox에는 필드가 없을 수 있다. 직렬화는 누락을 허용하고 기존 메시지를 그대로 재발행한다.
+  소비자는 누락과 `null`을 지역 미확인으로 취급한다. 전역 실적은 처리하고 지역 집계에서는 제외한다.
+- 명시된 지역 값은 `null` 또는 10자리 숫자 문자열이어야 한다. 다른 값은 기존 Outbox 실패·격리 경로를 따른다.
+- 후보 선정 뒤 게시물 지역을 backfill하면 후보 이벤트는 `null`, 이후 승리 이벤트는 코드가 있을 수 있다.
+  이미 저장된 이벤트는 발행·재시도 시 지역을 다시 조회하거나 덮어쓰지 않는다.
+- 필드를 엄격히 제한하는 소비자는 `regionCode`의 추가와 과거 누락을 먼저 지원한 뒤 생산자를 배포한다.
+
+기존 게시물은 `pnpm build` 후 `pnpm region:backfill 100`으로 별도 보정한다.
+CLI는 누락된 비삭제 게시물을 한 번에 최대 1,000개 처리하며 기존 지역은 덮어쓰지 않는다.
+실패 전 완료된 변경은 유지된다. 좌표가 없는 게시물은 운영자가 확인해야 한다.
+코드 배포만으로 과거 게시물이나 과거 이벤트가 자동 보정되지는 않는다.

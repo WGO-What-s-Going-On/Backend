@@ -23,7 +23,7 @@ import type {
   CommentReactionRecord,
   CommentReactionType,
   ParticipantRecord,
-  PostRecord,
+  NewPostRecord,
   PostState,
   ReactionRecord,
   StoredPostReactionType,
@@ -236,7 +236,7 @@ class MongoCommands implements PostCommands {
     }
   }
 
-  async insertPost(post: PostRecord): Promise<void> {
+  async insertPost(post: NewPostRecord): Promise<void> {
     await this.attachMedia(post.mediaIds, post.authorId, post.postId);
     await this.posts.create(
       [
@@ -584,6 +584,7 @@ class MongoCommands implements PostCommands {
           resultId: postId,
           commentId: winner.commentId,
           winnerAuthorId: comment!.authorId,
+          regionCode: post.region?.code ?? null,
           votes: winner.votes,
           closedAt: now,
         }

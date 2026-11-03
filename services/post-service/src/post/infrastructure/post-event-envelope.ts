@@ -111,6 +111,15 @@ export function serializePostEvent(row: Record<string, any>): string {
         value.activityVersion !== 1)
     )
       throw new Error('Invalid vote candidate');
+    // 과거 Outbox의 필드 누락은 허용하고 새 지역 값은 전송 전에 검증한다.
+    if (
+      (key === 'candidate' || key === 'vote') &&
+      target.regionCode !== undefined &&
+      target.regionCode !== null &&
+      (typeof target.regionCode !== 'string' ||
+        !/^[0-9]{10}$/.test(target.regionCode))
+    )
+      throw new Error('Invalid vote region');
     const requiredDates: Record<string, string[]> = {
       PostCommentReactionCreated: ['createdAt'],
       PostCommentReactionRemoved: ['createdAt', 'removedAt'],

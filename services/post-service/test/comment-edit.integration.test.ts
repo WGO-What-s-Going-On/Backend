@@ -24,7 +24,6 @@ suite('Comment edit HTTP and Mongo transactions', () => {
   beforeAll(async () => {
     vi.stubEnv('NODE_ENV', 'test');
     vi.stubEnv('SEMANTIC_MODEL_ENABLED', 'false');
-    vi.stubEnv('POST_REGION_ENABLED', 'false');
     vi.stubEnv(
       'MONGODB_URI',
       'mongodb://localhost:27017/wgo_comment_edit_integration?replicaSet=rs0',
@@ -33,6 +32,10 @@ suite('Comment edit HTTP and Mongo transactions', () => {
       .overrideProvider(LOCATION_AUTHORIZATION)
       .useValue({
         assertCanCreate: async () => {},
+        resolveRegion: async () => ({
+          code: '1159053000',
+          name: '서울특별시 동작구 상도1동',
+        }),
         assertCanJoin: async () => {},
       })
       .overrideProvider(UserProfiles)

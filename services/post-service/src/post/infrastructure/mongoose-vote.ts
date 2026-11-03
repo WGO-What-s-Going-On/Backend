@@ -132,6 +132,7 @@ export class MongooseVote {
             Number(comment.reactionCounts?.HELPFUL ?? 0) +
             Number(comment.reactionCounts?.AGREE ?? 0),
           selectedAt: now,
+          regionCode: post.region?.code ?? null,
         };
         await this.outbox.create(
           [

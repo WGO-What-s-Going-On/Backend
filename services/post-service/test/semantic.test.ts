@@ -45,6 +45,10 @@ describe('semantic search policy', () => {
   };
   const auth = {
     assertCanCreate: vi.fn(async () => {}),
+    resolveRegion: vi.fn(async () => ({
+      code: '1159053000',
+      name: '서울특별시 동작구 상도1동',
+    })),
     assertCanJoin: vi.fn(async () => {}),
   };
   const search = () =>

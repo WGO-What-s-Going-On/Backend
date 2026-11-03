@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { event } from '../src/post/application/event.js';
+import type { EventType } from '../src/post/application/ports.js';
 import {
   InvalidOutboxEvent,
   serializePostEvent,
@@ -63,3 +64,61 @@ describe('vote candidate event contract', () => {
     },
   );
 });
+
+describe.each([
+  {
+    eventType: 'PostVoteCandidateSelected',
+    key: 'candidate',
+    target: candidate,
+  },
+  {
+    eventType: 'PostVoteWon',
+    key: 'vote',
+    target: {
+      postId,
+      resultId: postId,
+      commentId: candidate.commentId,
+      winnerAuthorId: candidate.authorId,
+      votes: 1,
+      closedAt: candidate.selectedAt,
+    },
+  },
+] satisfies { eventType: EventType; key: string; target: object }[])(
+  '$eventType region compatibility',
+  ({ eventType, key, target }) => {
+    it.each(['1159053000', null, undefined])(
+      'preserves regionCode %s including historical omissions',
+      (regionCode) => {
+        const stored = event(
+          postId,
+          eventType,
+          {
+            [key]: {
+              ...target,
+              ...(regionCode === undefined ? {} : { regionCode }),
+            },
+            activityVersion: 1,
+          },
+          candidate.selectedAt,
+        );
+        const wire = JSON.parse(serializePostEvent(stored));
+        if (regionCode === undefined)
+          expect(wire[key]).not.toHaveProperty('regionCode');
+        else expect(wire[key].regionCode).toBe(regionCode);
+      },
+    );
+
+    it.each([1159053000, '', '123', '11590530000', '115905300x', true, {}])(
+      'rejects invalid regionCode %j',
+      (regionCode) => {
+        const stored = event(
+          postId,
+          eventType,
+          { [key]: { ...target, regionCode }, activityVersion: 1 },
+          candidate.selectedAt,
+        );
+        expect(() => serializePostEvent(stored)).toThrow(InvalidOutboxEvent);
+      },
+    );
+  },
+);

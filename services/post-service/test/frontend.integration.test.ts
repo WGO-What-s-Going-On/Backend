@@ -19,7 +19,6 @@ suite('Frontend contracts against MongoDB', () => {
   beforeAll(async () => {
     vi.stubEnv('NODE_ENV', 'test');
     vi.stubEnv('SEMANTIC_MODEL_ENABLED', 'false');
-    vi.stubEnv('POST_REGION_ENABLED', 'false');
     vi.stubEnv(
       'MONGODB_URI',
       'mongodb://localhost:27017/wgo_frontend_integration?replicaSet=rs0',
@@ -28,6 +27,10 @@ suite('Frontend contracts against MongoDB', () => {
       .overrideProvider(LOCATION_AUTHORIZATION)
       .useValue({
         assertCanCreate: async () => {},
+        resolveRegion: async () => ({
+          code: '1159053000',
+          name: '서울특별시 동작구 상도1동',
+        }),
         assertCanJoin: async () => {},
       })
       .overrideProvider(UserProfiles)
@@ -201,7 +204,6 @@ suite('Frontend contracts against MongoDB', () => {
     });
   }, 30000);
   it('separates administrative dongs and ranks only qualified users by local winning points', async () => {
-    vi.stubEnv('POST_REGION_ENABLED', 'true');
     const posts = app.get(getModelToken('Post')),
       comments = app.get(getModelToken('Comment'));
     for (let i = 0; i < 5; i++) {
@@ -260,7 +262,6 @@ suite('Frontend contracts against MongoDB', () => {
       .set({ 'x-user-id': '999' })
       .expect(200);
     expect(two.body).toMatchObject({ myRank: 1, myScore: 20 });
-    vi.stubEnv('POST_REGION_ENABLED', 'false');
   });
   it('requires signed gateway identity in production and rejects forged user context', async () => {
     const { privateKey, publicKey } = generateKeyPairSync('ec', {

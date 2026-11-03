@@ -34,7 +34,7 @@ import { rebuildSemanticIndex } from '../src/post/semantic/rebuild.js';
 import { draft, vector } from './fixtures/semantic.js';
 import { E5EmbeddingProvider } from '../src/post/semantic/embedding-provider.js';
 
-// 실제 Map 빌드와 MongoDB/Redis/Cassandra/ES가 필요하다. 대체하는 것은 모델 포트뿐이다.
+// 실제 Map 빌드와 MongoDB/Redis/Cassandra/ES가 필요하다. 모델 포트와 외부 카카오 응답만 대체한다.
 const suite =
   process.env.RUN_SEMANTIC_INTEGRATION === '1' ? describe : describe.skip;
 suite('semantic pipeline with real stores and Map gRPC', () => {
@@ -68,6 +68,26 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
     pathToFileURL(resolve('../map-service/dist', file)).href;
   beforeAll(async () => {
     vi.stubEnv('NODE_ENV', 'test');
+    vi.stubEnv('KAKAO_LOCAL_REST_API_KEY', 'semantic-test');
+    const nativeFetch = globalThis.fetch;
+    const fetchWithRegion: typeof fetch = async (input, init) => {
+      const target = new URL(input instanceof Request ? input.url : input);
+      if (
+        target.origin === 'https://dapi.kakao.com' &&
+        target.pathname === '/v2/local/geo/coord2regioncode.json'
+      )
+        return Response.json({
+          documents: [
+            {
+              region_type: 'H',
+              code: '1159053000',
+              address_name: '서울특별시 동작구 상도1동',
+            },
+          ],
+        });
+      return nativeFetch(input, init);
+    };
+    vi.stubGlobal('fetch', fetchWithRegion);
     vi.stubEnv(
       'MONGODB_URI',
       `mongodb://localhost:27017/${prefix.replaceAll('-', '_')}?replicaSet=rs0`,
@@ -194,6 +214,7 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
       await mapIndex.close();
     }
     await locationStore?.close();
+    vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   }, 60000);
   const read = async (group: string, name: string) => {
@@ -226,6 +247,10 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
         .expect(201);
       ids.push(response.body.postId);
     }
+    expect((await posts.findOne({ postId: ids[0] }).lean()).region).toEqual({
+      code: '1159053000',
+      name: '서울특별시 동작구 상도1동',
+    });
     await expect
       .poll(
         async () => {
