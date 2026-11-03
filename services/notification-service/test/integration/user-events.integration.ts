@@ -41,15 +41,13 @@ describe('User stream → PostgreSQL inbox → mock FCM', () => {
     ['user:events', 'notification:user:dead', 'notification:unread:42'].forEach(
       (k) => h.ownedKeys.add(k),
     );
-    send
-      .mockReset()
-      .mockResolvedValue({
-        attempted: 1,
-        succeeded: 1,
-        failed: 0,
-        invalidTokens: [],
-        retryTokens: [],
-      });
+    send.mockReset().mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      failed: 0,
+      invalidTokens: [],
+      retryTokens: [],
+    });
     handler = new UserEventHandler(
       new NotificationEventWriter(h.database),
       h.state,
