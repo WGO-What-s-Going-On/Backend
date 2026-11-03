@@ -18,6 +18,7 @@ import { SemanticModule } from './semantic/semantic.module.js';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { InternalPostController, PostController } from './post.controller.js';
+import { ReportTargetController } from './report-target.controller.js';
 import {
   CreateComment,
   CreateCommentReaction,
@@ -101,6 +102,7 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
     MediaController,
     PostController,
     InternalPostController,
+    ReportTargetController,
   ],
   providers: [
     Activities,

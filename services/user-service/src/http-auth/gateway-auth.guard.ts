@@ -8,6 +8,7 @@ import {
 import { createPublicKey, type KeyObject } from 'node:crypto';
 import { jwtVerify, decodeProtectedHeader } from 'jose';
 import { parseUserId } from '../user-id.js';
+import { notificationServiceIdentity } from '../users/notification-blocks.controller.js';
 
 const operations: Record<string, 'public' | 'user'> = {
   'POST /api/v1/auth/kakao': 'public',
@@ -74,6 +75,23 @@ export class GatewayAuthGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     if (context.getType() !== 'http') return true;
     const request = context.switchToHttp().getRequest<Request>();
+    // This read-only internal operation authenticates Notification's distinct
+    // service key, never a forwarded user header or the Gateway private key.
+    if (
+      request.method === 'POST' &&
+      request.path === '/internal/notifications/blocks/check'
+    ) {
+      if (
+        request.rawHeaders.filter(
+          (v, i) => i % 2 === 0 && v.toLowerCase() === 'authorization',
+        ).length !== 1 ||
+        !notificationServiceIdentity(request.headers.authorization)
+      )
+        throw new UnauthorizedException(
+          'Invalid Notification service identity',
+        );
+      return true;
+    }
     if (
       request.method === 'GET' &&
       (request.path === '/health/live' || request.path === '/health/ready')

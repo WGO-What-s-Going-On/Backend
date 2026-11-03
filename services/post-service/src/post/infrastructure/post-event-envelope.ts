@@ -78,6 +78,19 @@ export function serializePostEvent(row: Record<string, any>): string {
     if (key === 'comment' && !id(target.commentId, 'comment'))
       throw new Error('Invalid comment ID');
     if (
+      key === 'comment' &&
+      target.parentCommentId !== undefined &&
+      target.parentCommentId !== null &&
+      !id(target.parentCommentId, 'comment')
+    )
+      throw new Error('Invalid parent comment ID');
+    if (
+      value.parentCommentAuthorId !== undefined &&
+      (!user(value.parentCommentAuthorId) ||
+        !id(target.parentCommentId, 'comment'))
+    )
+      throw new Error('Invalid parent comment author');
+    if (
       key === 'reaction' &&
       target.type !== 'LIKE' &&
       !Object.values(PostReactionType).includes(target.type)

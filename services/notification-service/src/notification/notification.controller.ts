@@ -1,7 +1,8 @@
 import { Optional } from '@nestjs/common';
 import { PostgresEventStore } from '../persistence/postgres-event.store.js';
 import { HttpCode } from '@nestjs/common';
-import { ApiOperation, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiOkResponse, ApiTags, ApiBody } from '@nestjs/swagger';
+import { NotificationPreferencesPatch } from './preferences.dto.js';
 import { UseGuards } from '@nestjs/common';
 import { GatewayAuthGuard } from '../gateway-auth.js';
 import {
@@ -38,9 +39,11 @@ export class NotificationController {
     return this.settings!.preferences(requireUserId(header));
   }
   @Patch('settings')
+  @ApiBody({ type: NotificationPreferencesPatch })
   @ApiOperation({
     summary: 'Update notification type preferences',
-    description: 'Partial booleans: nearby, replies, reactions, lifecycle.',
+    description:
+      'Partial booleans: nearby, replies, reactions, lifecycle, rewards, votes, moderation. False suppresses new inbox entries and push.',
   })
   savePreferences(
     @Headers('x-user-id') header: unknown,
@@ -53,8 +56,15 @@ export class NotificationController {
       !Object.keys(body).length ||
       Object.entries(body).some(
         ([key, value]) =>
-          !['nearby', 'replies', 'reactions', 'lifecycle'].includes(key) ||
-          typeof value !== 'boolean',
+          ![
+            'nearby',
+            'replies',
+            'reactions',
+            'lifecycle',
+            'rewards',
+            'votes',
+            'moderation',
+          ].includes(key) || typeof value !== 'boolean',
       )
     )
       throw new BadRequestException('Invalid preferences');
@@ -209,7 +219,7 @@ export class NotificationController {
   }
 }
 
-function requireUserId(value: unknown): string {
+export function requireUserId(value: unknown): string {
   if (typeof value !== 'string' || !/^[1-9][0-9]*$/.test(value))
     throw new BadRequestException('positive decimal x-user-id is required');
   return value;

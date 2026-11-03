@@ -19,7 +19,14 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
   async process(event: PostEvent): Promise<void> {
     switch (event.eventType) {
       case 'PostCreated':
-        await this.lifecycle.initialize(event.aggregateId, event.occurredAt);
+        if (event.post?.authorId)
+          await this.lifecycle.initialize(
+            event.aggregateId,
+            event.occurredAt,
+            String(event.post.authorId),
+          );
+        else
+          await this.lifecycle.initialize(event.aggregateId, event.occurredAt);
         return;
       case 'PostCommentCreated':
       case 'PostCommentUpdated':

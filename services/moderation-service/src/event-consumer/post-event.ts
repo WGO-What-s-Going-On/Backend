@@ -21,7 +21,7 @@ export interface PostEvent {
   occurredAt: string;
   activityVersion?: number;
   postVersion?: number;
-  post?: { postId: string };
+  post?: { postId: string; authorId?: number };
   comment?: {
     commentId: string;
     postId: string;
@@ -119,6 +119,12 @@ export function parsePostEvent(
         : value.post;
   if (!record(payload) || payload.postId !== value.aggregateId)
     throw new Error(`Invalid ${type} payload`);
+  if (
+    type === 'PostCreated' &&
+    payload.authorId !== undefined &&
+    !version(payload.authorId)
+  )
+    throw new Error('Invalid post author');
   if (
     type.startsWith('PostReaction') &&
     (!version(payload.userId) ||

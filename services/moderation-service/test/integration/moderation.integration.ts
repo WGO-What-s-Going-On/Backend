@@ -55,6 +55,7 @@ describe('Moderation production components with real Redis', () => {
       .toBe('done');
     expect(await h.repository.find(id)).toEqual({
       postId: id,
+      postAuthorId: '1',
       state: 'ACTIVE',
       createdAt: start,
       lastMeaningfulActivityAt: start,

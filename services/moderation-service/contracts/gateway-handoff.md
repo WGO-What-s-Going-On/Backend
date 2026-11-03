@@ -6,7 +6,7 @@
 - 통합 Swagger는 양 서비스의 실제 OpenAPI를 병합하며 내부 identity header와 서비스 토큰 대신 사용자 Access JWT를 안내한다.
 - Moderation은 PostgreSQL을 사용하지 않는다. `moderation:reports:v1:records` HASH에 원본·journal·발행 receipt, `moderation:reports:v1:pending` SET에 복구 대상을 저장한다. 기존 키·Stream·Consumer Group을 초기화하지 않는다. Redis 원본은 TTL 없이 보존하므로 용량·보존·익명화 정책이 필요하다.
 - GKE Redis의 TLS/CA, AOF always, noeviction, PVC/백업 구성을 그대로 이용한다. 배포 설정이나 Secret을 이 작업에서 변경하지 않는다. 단일 노드 장애·백업 이후 RPO는 별도 운영 검증이 필요하다. User/Notification Cloud SQL은 유지한다.
-- **배포 차단: Moderation→Post 인증된 대상 확인 계약 미지원.** 현재 Post 내부 API는 WS 전용 JWT만 허용한다. ReportTarget은 신규 접수를 503으로 거부하고 네트워크를 호출하지 않는다. REPORTS_POST_SERVICE_URL만 설정해도 열리지 않는다. Post에 Moderation 전용 공개 키 신뢰·읽기 권한과 대상/부모/상태 확인 계약을 추가한 뒤 실제 인증 연동 테스트가 필요하다. 인증을 우회하거나 다른 서비스의 키를 공유하지 않는다.
+- **배포 전 설정 필요:** Moderation→Post [전용 대상 검증 계약](reports.md)을 구현했다. 별도 ES256 키, POST_MODERATION_TRUSTED_JWKS, MODERATION_POST_REPORT_TARGET_URL, MODERATION_SERVICE_PRIVATE_JWK를 배포 환경에서 연결해야 한다. 미설정이면 신규 접수503이다. REPORTS_POST_SERVICE_URL만으로 열리지 않으며 기존 WS/Gateway 키를 공유하지 않는다. 실제 GCP에서 인증·대상 상태·장애 응답을 검증해야 한다.
 - dev의 과거 `targetId`·자유문자열 사유 신고 API는 `postId`/`commentId`·enum 사유·description 계약으로 바뀐다. 기존 신고 키를 자동 이관하지 않는다. 기존 데이터를 보존하는 별도 이관·클라이언트 전환 계획 없이 운영 완료로 판단하지 않는다.
 
 Redis 원본·복구·이벤트 상세는 [신고 계약](reports.md)을 따른다. PR #70의 PostgreSQL 신고 구현을 그대로 merge하지 않는다.

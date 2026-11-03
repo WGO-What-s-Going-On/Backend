@@ -42,7 +42,7 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
     });
     connection.on('error', () => undefined);
     await connection.connect();
-    consumer = new PostEventConsumer(h.config, handler, connection);
+    consumer = new PostEventConsumer(h.config, handler, connection, h.database);
   });
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -158,7 +158,12 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
       'ALTER TABLE notification_processed_events DROP CONSTRAINT fail_commit',
     );
     await consumer.onModuleDestroy();
-    const recovered = new PostEventConsumer(h.config, handler);
+    const recovered = new PostEventConsumer(
+      h.config,
+      handler,
+      undefined,
+      h.database,
+    );
     await recovered.onModuleInit();
     try {
       await expect.poll(() => pending(), { timeout: 5000 }).toBe(0);
@@ -268,6 +273,12 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
     expect((await items())[0]?.count).toBe(1);
     expect((await items())[0]?.commentId).toBeUndefined();
     expect(send.mock.calls[0]?.[0].data.commentId).toBeUndefined();
+    expect(
+      send.mock.calls.some(
+        (call) =>
+          call[0].data.type === 'CONTENT_REMOVED' && call[0].userId === '2',
+      ),
+    ).toBe(true);
     expect(await store.processedEvent(postId, removed.eventId)).toMatchObject({
       reason: 'MODERATION_VIOLATION',
       actorType: 'MODERATION',
@@ -284,7 +295,7 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
         }),
       ),
     );
-    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledTimes(2);
     const unseen = parsed(
       wire('PostCommentDeleted', { commentId: 'comment_late' }),
     );
@@ -301,7 +312,7 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
   });
 
   it.each(['PostDeleted', 'PostExpired'] as const)(
-    'stops queued and late activities after %s without creating close notifications',
+    'stops queued and late activities after %s and announces only confirmed expiry',
     async (type) => {
       const first = parsed(wire('PostCommentCreated'));
       const postId = first.aggregateId;
@@ -313,9 +324,9 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
       await handler.handle(
         parsed(wire('PostCreated', { postId, postVersion: 1 })),
       );
-      expect(send).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledTimes(type === 'PostExpired' ? 1 : 0);
       expect((await items())[0]?.count).toBe(1);
-      expect(await items()).toHaveLength(1);
+      expect(await items()).toHaveLength(type === 'PostExpired' ? 2 : 1);
       expect(await store.deliveries(postId)).toHaveLength(0);
       expect(await store.postState(postId)).toMatchObject({
         closed: true,
@@ -367,13 +378,11 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
     expect(await pending()).toBe(0);
     expect(
       (await h.redis.xRange(DEAD, '-', '+')).every(
-        (row) =>
-          row.message.eventId &&
-          row.message.error?.startsWith('Error: Invalid'),
+        (row) => row.message.eventId && row.message.reason === 'INVALID_EVENT',
       ),
     ).toBe(true);
     const spy = vi
-      .spyOn(connection, 'xAdd')
+      .spyOn(connection, 'eval')
       .mockRejectedValueOnce(new Error('DLQ offline'));
     const id = await h.redis.xAdd(STREAM, '*', { ...base, data: '{' });
     await expect(consumer.pollOnce()).rejects.toThrow('DLQ offline');
@@ -424,7 +433,7 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
     const ack = vi
       .spyOn(connection, 'xAck')
       .mockRejectedValueOnce(new Error('ACK offline'));
-    await consumer.pollOnce();
+    await expect(consumer.pollOnce()).rejects.toThrow('ACK offline');
     expect(await pending()).toBe(1);
     ack.mockRestore();
     await consumer.pollOnce();

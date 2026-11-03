@@ -169,6 +169,7 @@ export class CreateComment {
     try {
       return await this.unitOfWork.execute(async (transaction) => {
         const post = await active(transaction, postId);
+        let parentCommentAuthorId: number | undefined;
         if (parentCommentId) {
           const parent = await transaction.queries.findComment(
             postId,
@@ -186,6 +187,7 @@ export class CreateComment {
             throw new PostNotFoundError(
               'Active top-level parent comment required',
             );
+          parentCommentAuthorId = parent.authorId;
         }
         // 재연결 후 같은 작성 요청이 다시 와도 댓글과 카운터를 한 번만 기록한다.
         if (mutationId) {
@@ -220,6 +222,9 @@ export class CreateComment {
               postAuthorId: post.authorId,
               postCategory: post.category,
               activityVersion: 1,
+              ...(parentCommentAuthorId !== undefined
+                ? { parentCommentAuthorId }
+                : {}),
             },
             now,
           ),

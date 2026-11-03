@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   evaluateLifecycle,
+  TEN_MINUTES,
   meaningfulActivity,
   type ReactionState,
   type LifecycleDecision,
@@ -23,9 +24,14 @@ export class LifecycleService {
     private readonly repository: LifecycleRepository,
   ) {}
 
-  initialize(postId: string, occurredAt: string): Promise<boolean> {
+  initialize(
+    postId: string,
+    occurredAt: string,
+    postAuthorId?: string,
+  ): Promise<boolean> {
     return this.repository.create({
       postId,
+      ...(postAuthorId ? { postAuthorId } : {}),
       state: 'ACTIVE',
       createdAt: occurredAt,
       lastMeaningfulActivityAt: occurredAt,
@@ -258,6 +264,18 @@ function lifecycleEvent(
     producer: 'moderation-service',
     correlationId,
     occurredAt: occurredAt.toISOString(),
-    payload: { postId: projection.postId, state: projection.state },
+    payload: {
+      postId: projection.postId,
+      state: projection.state,
+      version: projection.version,
+      ...(projection.postAuthorId
+        ? { postAuthorId: projection.postAuthorId }
+        : {}),
+      // This is the same grace deadline used by evaluateLifecycle, not a new notification timer.
+      scheduledCloseAt:
+        projection.state === 'STALE' && projection.staleAt
+          ? new Date(Date.parse(projection.staleAt) + TEN_MINUTES).toISOString()
+          : null,
+    },
   };
 }

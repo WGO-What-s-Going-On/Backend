@@ -9,10 +9,15 @@ import { UserEntity } from '../database/entities/user.entity.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { UsersController } from './users.controller.js';
 import { UsersService } from './users.service.js';
+import { NotificationBlocksController } from './notification-blocks.controller.js';
 
 @Module({
   imports: [TypeOrmModule.forFeature([UserEntity]), AuthModule],
-  controllers: [UsersController, ProfileImageController],
+  controllers: [
+    UsersController,
+    ProfileImageController,
+    NotificationBlocksController,
+  ],
   providers: [
     UsersService,
     ProfileImageService,
