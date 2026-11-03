@@ -257,7 +257,7 @@ export class UsersController {
   @ApiOperation({
     summary: 'Update own profile',
     description:
-      'Provide nickname and/or profileImageKey. Updating nickname completes onboarding. No separate account-status restriction is implemented.',
+      'Provide nickname, realName and/or profileImageKey: null to remove the image. Non-null keys are rejected; use the verified profile-image upload flow. Updating nickname completes onboarding.',
   })
   @userIdentityHeader()
   @ApiBody({
@@ -272,7 +272,13 @@ export class UsersController {
             'Trimmed, non-empty nickname; at most 30 Unicode characters after trimming.',
         },
         realName: { type: 'string', maxLength: 100, nullable: true },
-        profileImageKey: { type: 'string', maxLength: 500, nullable: true },
+        profileImageKey: {
+          type: 'string',
+          nullable: true,
+          enum: [null],
+          description:
+            'Only null is accepted, to remove the current image. Use profile-image/uploads to set an image.',
+        },
       },
     },
   })
@@ -321,13 +327,9 @@ export class UsersController {
     if (Object.hasOwn(input, 'nickname'))
       update.nickname = normalizeNickname(input.nickname);
     if (Object.hasOwn(input, 'profileImageKey')) {
-      if (
-        input.profileImageKey !== null &&
-        (typeof input.profileImageKey !== 'string' ||
-          [...input.profileImageKey].length > 500)
-      ) {
+      if (input.profileImageKey !== null) {
         throw new BadRequestException(
-          'profileImageKey must be null or a string of at most 500 characters',
+          'profileImageKey must be null; use verified profile image uploads',
         );
       }
       update.profileImageKey = input.profileImageKey as string | null;

@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { AddProfileImageUploads1793570000000 } from './migrations/1793570000000-AddProfileImageUploads.js';
 import { AddPrivateRealName1793200000000 } from './migrations/1793200000000-AddPrivateRealName.js';
 
 import { existsSync } from 'node:fs';
@@ -27,6 +28,7 @@ export default new DataSource({
   database: database.name,
   entities: [...USER_SERVICE_ENTITIES],
   migrations: [
+    AddProfileImageUploads1793570000000,
     AddPrivateRealName1793200000000,
     InitialUserServiceSchema1789990707351,
     AddTermsCodeEffectiveAtIndex1789993249262,

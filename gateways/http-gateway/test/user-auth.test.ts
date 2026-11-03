@@ -85,6 +85,18 @@ function access(overrides: Record<string, unknown> = {}, key = secret) {
 }
 describe('User route authentication', () => {
   it.each([
+    [
+      'POST',
+      '/api/v1/users/me/profile-image/uploads',
+      { contentType: 'image/png', sizeBytes: 10, checksum: 'digest' },
+    ],
+    [
+      'POST',
+      '/api/v1/users/me/profile-image/uploads/5e614031-b7fb-47bf-9d0d-23434eb18acd/complete',
+      undefined,
+    ],
+    ['GET', '/api/v1/users/me/profile-image/url', undefined],
+    ['GET', '/api/v1/users/123/profile-image/url', undefined],
     ['POST', '/api/v1/users/me/blocks', { blockedUserId: '123' }],
     ['GET', '/api/v1/users/me/blocks?limit=10&cursor=opaque', undefined],
     ['DELETE', '/api/v1/users/me/blocks/123', undefined],

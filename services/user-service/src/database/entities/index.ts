@@ -1,3 +1,4 @@
+import { ProfileImageUploadEntity } from './profile-image-upload.entity.js';
 import { BadgeEntity } from './badge.entity.js';
 import { OAuthAccountEntity } from './oauth-account.entity.js';
 import { OutboxEventEntity } from './outbox-event.entity.js';
@@ -8,6 +9,7 @@ import { UserTermConsentEntity } from './user-term-consent.entity.js';
 import { UserEntity } from './user.entity.js';
 
 export const USER_SERVICE_ENTITIES = [
+  ProfileImageUploadEntity,
   UserEntity,
   OAuthAccountEntity,
   TermEntity,
