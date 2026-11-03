@@ -20,7 +20,7 @@ export const BADGE_CATALOG = [
     code: 'CLAIRVOYANT',
     name: '천리안',
     description:
-      '행정동별 최근 30일 대표 의견 실적이 있는 특파원 10명 이상 중 상위 10%.',
+      '행정동별 최근 30일 후보 선정·투표 승리 점수가 있는 특파원 10명 이상 중 상위 10%.',
   },
 ] as const;
 export async function seedBadgeCatalog(manager: EntityManager): Promise<void> {

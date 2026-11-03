@@ -404,11 +404,16 @@ Outbox 발행 경로에는 trim/보존 기간, Outbox 정리, retry 상한, DLQ�
 
 ## Activity rewards
 
-기존 Post 9종과 PR #72의 댓글 공감 생성·취소/투표 승리를 `post-user-rewards` group으로 소비한다.
+현재 Post의 댓글 공감·투표 후보 선정·승리를 포함한 활동 이벤트를 `post-user-rewards` group으로 소비한다.
 PostUpdated는 검증 후 명시적으로 무시·ACK한다. 원장·점수·칭호·User Outbox는 같은 PostgreSQL 트랜잭션에 저장한다.
 `USER_REWARD_POLICY_JSON`이 없으면 크레딧 지급은 OFF다. 확정 칭호 자동 평가는 별도로 기본 ON이며 개발 점수 임계값을 공식 칭호에 사용하지 않는다.
 
-기존 보상 및 ActivateWgoTitles migration 적용 후 `pnpm seed:badges`로 소식통·리포터·특파원·천리안을 멱등 생성한다.
+기존 보상/칭호 migration에 이어 StoreVoteActivitySnapshots 및 ApplyRegionalTitlePolicyV2를 적용한다.
+`wgo-titles-v2`는 후보 +1(게시물·사용자당 최대1), 승리 +2를 사건별 지역과 selectedAt/closedAt으로 계산한다.
+특파원 조건은 지역 무관 유효 승리5건 그대로다. 천리안은 KST 최근30일 양의 점수 실적이 있는 현재 특파원 N>=10 중 floor(N/10)이다.
+`USER_TITLE_REGION_CONTRACT=vote-region-v1`이 기본이며 실제 candidate.regionCode/vote.regionCode를 수신한다.
+지역 null/누락은 별도 보존하고 점수에서 제외하며, 게시물 백필로 과거 실적을 재귀속하지 않는다.
+`pnpm seed:badges`는 네 칭호를 insert-if-absent하며 기존 이름/설정/지급 이력을 보존한다.
 기존 `/badges`, `/credits`, `/growth`, `/credits/history`를 유지하고 `/badges/history`를 추가했다.
 모두 `/api/v1/users/me` 하위이며 현재 Gateway ES256 인증 경계를 따른다.
 

@@ -2,12 +2,14 @@ import { TITLE_POLICY } from './title-policy.js';
 
 // $1/$2 are the half-open Seoul window. Ranking and API progress use the same
 // projection, so raw duplicate candidates never inflate either score or evidence.
-export const REGIONAL_SCORE_CTES = `regional_facts AS (
+function scoreCtes(userOnly: boolean) {
+  return `regional_facts AS (
   SELECT a.*,COALESCE(p.representative_wins,0) AS representative_wins FROM reward_title_valid_activities a
   JOIN users u ON u.id=a.beneficiary_id AND u.status='ACTIVE'
   LEFT JOIN user_title_progress p ON p.user_id=u.id
   WHERE a.kind IN ('VOTE_CANDIDATE','VOTE_WIN') AND a.source_time_verified
     AND a.source_region_state='KNOWN' AND a.occurred_at>=$1 AND a.occurred_at<$2
+    ${userOnly ? 'AND a.beneficiary_id=$3' : `AND p.representative_wins>=${TITLE_POLICY.representativeWins}`}
 ),candidate_choices AS (
   SELECT *,row_number() OVER(PARTITION BY post_id,actor_id ORDER BY occurred_at,activity_key) AS choice
   FROM regional_facts WHERE kind='VOTE_CANDIDATE'
@@ -29,3 +31,7 @@ export const REGIONAL_SCORE_CTES = `regional_facts AS (
       ORDER BY occurred_at,activity_key) AS evidence
   FROM scoring_facts GROUP BY region_code,user_id
 )`;
+}
+export const REGIONAL_SCORE_CTES = scoreCtes(false);
+// A personal growth lookup must not aggregate every other user's activity.
+export const USER_REGIONAL_SCORE_CTES = scoreCtes(true);

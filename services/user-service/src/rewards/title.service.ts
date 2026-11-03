@@ -1,7 +1,7 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import { BADGE_CATALOG } from './badge-catalog.js';
-import { REGIONAL_SCORE_CTES } from './regional-score.js';
+import { USER_REGIONAL_SCORE_CTES } from './regional-score.js';
 import {
   ConflictingRewardEvent,
   InvalidRewardEvent,
@@ -422,7 +422,7 @@ export class TitleService {
     const exclusions =
       completeness.missing !== '0' || completeness.unverified !== '0';
     const regions: RegionalProgress[] = await m.query(
-      `WITH ${REGIONAL_SCORE_CTES},region_list AS (
+      `WITH ${USER_REGIONAL_SCORE_CTES},region_list AS (
         SELECT region_code FROM regional_totals WHERE user_id=$3
         UNION SELECT region_code FROM user_regional_badges WHERE user_id=$3 AND revoked_at IS NULL)
       SELECT c.region_code AS "regionCode",NULL::text AS "regionName",run.ranking_date::text AS "rankingDate",COALESCE(e.score,t.score,0)::text AS score,

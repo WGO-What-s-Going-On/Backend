@@ -108,6 +108,10 @@ describe('Regional candidate +1 / winner +2 policy in PostgreSQL', () => {
     await service.record(a);
     await service.record(b);
     expect((await entries())[0].score).toBe('1');
+    await service.record(
+      voteFact('VOTE_WIN', '1', { postId: a.postId, commentId: a.commentId! }),
+    );
+    expect((await entries())[0].score).toBe('3');
     await service.record(deletion(a));
     const [row] = await entries();
     expect(row.score).toBe('1');
@@ -300,6 +304,34 @@ describe('Regional candidate +1 / winner +2 policy in PostgreSQL', () => {
     ]);
     expect(rows[0].last_selected_at.toISOString()).toBe(
       '2026-11-01T02:00:00.000Z',
+    );
+  });
+  it('ignores a duplicate candidate timestamp in ties, and uses the surviving candidate time after deletion', async () => {
+    await qualify();
+    const early = voteFact('VOTE_CANDIDATE', '1', {
+      occurredAt: '2026-11-01T01:00:00Z',
+    });
+    const late = voteFact('VOTE_CANDIDATE', '1', {
+      postId: early.postId,
+      occurredAt: '2026-11-01T03:00:00Z',
+    });
+    await service.record(early);
+    await service.record(late);
+    await service.record(
+      voteFact('VOTE_CANDIDATE', '2', { occurredAt: '2026-11-01T02:00:00Z' }),
+    );
+    let rows = await entries();
+    expect(rows.map((r: { user_id: string }) => r.user_id)).toEqual(['1', '2']);
+    expect(rows[0].score).toBe('1');
+    expect(rows[0].last_selected_at.toISOString()).toBe(
+      '2026-11-01T01:00:00.000Z',
+    );
+    await service.record(deletion(early));
+    rows = await entries();
+    expect(rows.map((r: { user_id: string }) => r.user_id)).toEqual(['2', '1']);
+    expect(rows[1].score).toBe('1');
+    expect(rows[1].last_selected_at.toISOString()).toBe(
+      '2026-11-01T03:00:00.000Z',
     );
   });
   it('grants, revokes and regrants once per transition; replay and worker restart do not repeat outbox notifications', async () => {

@@ -1,14 +1,12 @@
 # User 활동·칭호·보상 계약
 
-기준: 2026-10-31. User PostgreSQL이 보상 원본이다. Redis는 Post 입력 및 User 출력 전달에 사용한다. 크레딧 지급은 기본 OFF, 확정 칭호는 기본 ON이다.
+기준: 2026-11-03. User PostgreSQL이 보상 원본이다. Redis는 Post 입력 및 User 출력 전달에 사용한다. 크레딧 지급은 기본 OFF, 확정 칭호 `wgo-titles-v2`는 기본 ON이다.
 
 ## 계약 근거
 
-- [Post PR #72](https://github.com/WGO-What-s-Going-On/Backend/pull/72): 조사 시 open/unmerged. 확인 SHA `70f35ac2142da954a07417a4355d2a2106880200`.
-- [고정 SHA의 Post 이벤트 계약](https://github.com/WGO-What-s-Going-On/Backend/blob/70f35ac2142da954a07417a4355d2a2106880200/services/post-service/contracts/post-events.md).
-- [Notion 칭호·투표 기획](https://app.notion.com/p/40733f226af7814a8059f453675ae05a?pvs=204): 소식통·리포터·특파원·천리안, 천리안은 순위 기반이라는 방향을 확인. 최근 수정일만으로 정책 승인으로 취급하지 않는다.
-- [Notion 기존 칭호 조회 API](https://app.notion.com/p/3e133f226af781ad8721cd4f180600d9?pvs=204)의 오래된 `BABY_REPORTER` 예시와 최근 명칭은 다르다. 신규 카탈로그는 최근 네 명칭을 사용하지만 기존 배지·지급 데이터는 지우거나 바꾸지 않는다.
-- [이전 PRD](https://app.notion.com/p/33d33f226af7838d86c501f9e67d68dd?pvs=204)의 해결사·탐정 등 과거 제안은 승인된 최신 수치 정책으로 사용하지 않았다.
+- 현재 브랜치에 포함된 최신 [Post 이벤트 계약](../post-service/contracts/post-events.md)과 실제 mongoose-vote / vote / post-event-envelope 생산 코드.
+- 2026-11-03 사용자 확정 조건: 첫 세 칭호 유지, 후보 +1·승리 +2, 행정동별 현재 특파원 상위 floor(N/10).
+- 이전 User 문서의 PostRegionResolved/postRegion 제안과 승리 1점은 현재 생산 계약 및 v2 정책이 아니다. [정책 및 이전 설명](WGO_TITLE_POLICY.md)을 따른다.
 
 ## 처리 경계와 저장소
 
@@ -45,16 +43,19 @@ Redis fields는 `eventId`, `eventType`, `data`. `data`는 중첩 payload가 없�
 | PostCommentDeleted | Post / post:events | 같은 postId/commentId의 댓글 공감·투표 보상 | 댓글 비활성 projection, revokeOnCommentDeletion에 따라 회수; 옛 정책은 revokeOnPostDeletion을 fallback |
 | PostReactionCreated | Post / post:events | postAuthorId | 정책에 지정한 공감만 지급, 자기 공감 제외 |
 | PostReactionRemoved | Post / post:events | postAuthorId | 관계 activityVersion 적용, 최초 지급 정책 revokeOnRemoval에 따라 회수 |
-| PostParticipantJoined | Post / post:events | 참여자 활동 | 참여 자체 크레딧 없음, 칭호 참여 조건 집계 |
+| PostParticipantJoined | Post / post:events | 참여자 활동 | 참여 자체 크레딧 없음, 입장 상태 보존; 소식통 횟수 제외 |
 | PostParticipantLeft | Post / post:events | 참여자 활동 | 최신 관계 버전으로 참여 비활성, 칭호 조건 재평가 |
-| PostCommentReactionCreated | Post PR #72 / post:events | commentAuthorId | HELPFUL/AGREE/DIFFERENT별 명시적 정책 금액, 자기 공감 제외 |
-| PostCommentReactionRemoved | Post PR #72 / post:events | commentAuthorId | removedAt 검증, 최신 관계 버전 및 최초 지급 회수 정책 |
-| PostVoteWon | Post PR #72 / post:events | vote.winnerAuthorId | resultId=postId, votes>0, activityVersion=1. 댓글 작성자가 수혜자 |
-| PostUpdated | Post PR #72 / post:events | 없음 | postId/authorId/category/postVersion/closedAt 검증 후 명시적으로 무시·ACK. 투표 마감/재개를 삭제나 신규 보상으로 취급하지 않음 |
+| PostCommentReactionCreated | Post / post:events | commentAuthorId | HELPFUL/AGREE/DIFFERENT별 명시적 정책 금액, 자기 공감 제외 |
+| PostCommentReactionRemoved | Post / post:events | commentAuthorId | removedAt 검증, 최신 관계 버전 및 최초 지급 회수 정책 |
+| PostVoteCandidateSelected | Post / post:events | candidate.authorId | 댓글별 원본 저장, selectedAt/regionCode 스냅샷, 게시물·사용자별 지역 +1; 크레딧 없음 |
+| PostVoteWon | Post / post:events | vote.winnerAuthorId | resultId=postId, votes>0, activityVersion=1. closedAt/regionCode 스냅샷, 지역 +2; 기존 승리 크레딧 정책 유지 |
+| PostUpdated | Post / post:events | 없음 | postId/authorId/category/postVersion/closedAt 검증 후 명시적으로 무시·ACK. 투표 마감/재개를 삭제나 신규 보상으로 취급하지 않음 |
 
 댓글 공감 키는 `commentId:reaction:userId:type`, 투표 키는 `vote:resultId`다. 관계 버전 1 생성→2 취소→3 재생성을 보존한다. 새 eventId여도 같은 확정 상태는 재지급하지 않는다. 상충하는 승리자/댓글/관계 신원 또는 같은 버전의 반대 상태는 `ACTIVITY_CONFLICT`로 격리한다. 높은 버전이 이미 저장되면 늦은 낮은 버전은 상태를 덮어쓰지 못한다. 동일 버전에서 누락된 beneficiary/comment/result 문맥만 안전하게 보충할 수 있다.
 
-기존 9종과 신규 3종은 같은 Consumer/Projection/원장을 사용한다. PostUpdated의 명시적 무시 외에 알 수 없는 타입을 성공으로 삼키지 않는다.
+후보 업무 키는 `candidate:postId:commentId`다. scoreAtSelection은 공감 감사 값이며 랭킹 점수가 아니다. 같은 사용자 복수 후보는 각각 저장하고 창 안의 유효 후보 하나만 +1로 집계한다. 승리와 후보는 독립적으로 지연/역순 처리하며 가짜 후보를 만들지 않는다.
+candidate.regionCode/vote.regionCode는 10자리 문자열 또는 null, 과거 필드 누락을 지원한다. 각 사건의 지역을 저장하며 게시물 백필로 과거 사건을 재귀속하지 않는다. KNOWN/NULL/MISSING/LEGACY를 구별하고 미확인 사실은 지역 집계에서만 제외한다. 확정 시각·지역·공감 감사 값 충돌도 ACTIVITY_CONFLICT다.
+같은 Consumer/Projection/원장을 유지한다. PostUpdated의 명시적 무시 외에 알 수 없는 타입을 성공으로 삼키지 않는다.
 
 | DLQ reason | 의미 / 복구 |
 | --- | --- |
@@ -67,11 +68,11 @@ DLQ는 streamId/eventId/raw data/reason을 보관한다. 성공한 Inbox를 삭�
 
 ## 확정 칭호와 크레딧 정책 분리
 
-2026-10-31 최종 사용자 지시를 반영하여 칭호는 `wgo-titles-v1`의 실제 활동 조건으로 기본 활성화한다.
+2026-11-03 최종 사용자 지시를 반영하여 칭호는 새 `wgo-titles-v2`의 실제 활동 조건으로 기본 활성화한다. 기존 v1 정의와 지급/랭킹 이력은 보존한다.
 크레딧 정책 OFF가 공식 칭호를 끄지 않는다. 공식 네 칭호에 옛 점수 임계값 badge 규칙을 사용할 수 없다.
-행정동별 최근 30일 천리안은 User 계산·저장·수신부를 구현했으나 실제 Post 지역 생산 계약이 없어 기본 준비 상태가 CONTRACT_UNAVAILABLE이다.
+행정동별 최근 30일 천리안은 실제 투표 지역 계약 `vote-region-v1`을 기본 사용한다. 지역 미확인 사실은 제외하고 준비 상태/제외 건수를 노출한다. none 설정 시 CONTRACT_UNAVAILABLE로 랭킹을 중단할 수 있다.
 
-전체 확정 조건·스위치·자연 만료 유지·지역 계약 제안·마이그레이션·API·Notification 필드는 [WGO_TITLE_POLICY.md](WGO_TITLE_POLICY.md)를 따른다.
+전체 확정 조건·스위치·자연 만료 유지·실제 지역 계약·마이그레이션·API·Notification 필드는 [WGO_TITLE_POLICY.md](WGO_TITLE_POLICY.md)를 따른다.
 
 크레딧/성장 점수의 기존 1:1 증감·최초 지급 금액/회수 정책·gross 일일 한도·활동당 재지급 제한은 유지한다.
 `USER_REWARD_POLICY_JSON`이 없으면 크레딧 지급은 계속 OFF다. 지급 수치가 승인되었다고 주장하지 않는다.
@@ -83,7 +84,7 @@ DLQ는 streamId/eventId/raw data/reason을 보관한다. 성공한 Inbox를 삭�
 
 과거 내부 fixture 투표 키 `vote:resultId:winnerId`도 result_id로 조회하여 기존 키·원장을 유지한다. 같은 결과의 여러 승리자가 이미 있으면 유니크 인덱스가 migration을 실패시켜 자동 병합/삭제하지 않는다. 과거 투표의 commentId는 원장에서 추론할 수 없다. 운영에 해당 데이터가 있다면 원본 문맥을 확인하여 **같은 결과의 새 eventId envelope**를 replay해 context를 보충해야 한다. 이미 처리된 같은 eventId는 Inbox에서 걸러지므로 문맥 보충이 되지 않는다.
 
-배포 전 DB backup 및 과거 충돌/누락 조사 → migration → seed → 정책 OFF 상태로 소비 확인 → fixture를 통한 격리 검증 → 승인 정책 적용 순서다. down은 새 테이블과 컬럼을 제거하므로 신규 데이터 생성 이후 운영 down은 보조 이력 손실을 일으킨다. 단순 코드 rollback만으로 새 migration을 되돌리지 말고 backup/복구 계획에 따라 결정한다.
+추가 migration `1793650000000-StoreVoteActivitySnapshots`와 `1793651000000-ApplyRegionalTitlePolicyV2`는 후보/지역 사실과 정책별 랭킹 키를 추가한다. 과거 게시물 지역을 사건별 스냅샷으로 복사하지 않는다. 운영 backup·누락 조사 후 순서대로 적용한다. 새 두 migration의 down은 이력 손실을 막기 위해 거부하며 forward migration/검토된 복구를 사용한다. 오래된 migration의 destructive down도 운영 rollback으로 임의 실행하지 않는다.
 
 ```sh
 pnpm migration:show
@@ -141,11 +142,11 @@ Stream `user:events`; Redis fields `eventId`, `eventType`, `data`. **기존 User
 | --- | --- | --- |
 | USER_CREDIT_CHANGED | 양/음 원장 entry가 실제 생성될 때 | ledgerId, delta, credits, growthScore, policyVersion |
 | USER_LEVEL_CHANGED | 최초 저장 레벨 설정 또는 현재 레벨 변경 | previousLevel, level, growthScore, policyVersion, **changeType: INITIAL/UP/DOWN** |
-| USER_BADGE_GRANTED | 부재/회수 상태에서 지급 상태로 실제 전환 | badgeId, policyVersion |
-| USER_BADGE_REVOKED | 현재 지급 상태에서 실제 회수로 전환 | badgeId, policyVersion |
+| USER_BADGE_GRANTED | 부재/회수 상태에서 지급 상태로 실제 전환 | badgeId, policyVersion; 공식 칭호 badgeCode/badgeName/stage; 지역 천리안 regionCode/rank/score/rankingRunId 등 |
+| USER_BADGE_REVOKED | 현재 지급 상태에서 실제 회수로 전환 | 위 메타데이터와 reason; 지역별 현재 자격 전환 |
 
-공통 payload.userId/sourceEventId와 기존 envelope/eventId/version은 유지했다. changeType만 호환 가능한 추가 필드다. sourceEventId는 보통 Post eventId이고 maintenance/CLI에서는 `reward-title:...` 또는 `reward-reconcile:...`이므로 UUID 전용 검증을 하지 않는다. badgeId는 문자열이며 code/name은 현재 출력 payload에 추가하지 않았다. Notification이 표시 문구가 필요하면 합의한 배지 카탈로그 매핑을 사용해야 한다.
+공통 payload.userId/sourceEventId와 기존 envelope/eventId/version은 유지한다. sourceEventId는 Post eventId 또는 maintenance/CLI의 reward-title/reward-reconcile, 랭킹의 regional-ranking:runId이므로 UUID 전용 검증을 하지 않는다. badgeId/userId/rank/score는 문자열이다. 공식 칭호는 badgeCode/badgeName/stage로 표시할 수 있다. 천리안에는 regionCode/regionName/rankingDate/windowStart/windowEnd/rank/score/competitors/slots/rankingRunId/reason이 추가되며 지역명은 실제 계약이 없어 null이다. 즉시 계정/특파원 자격 상실 회수에는 regionCode/rankingRunId/reason을 유지하고 계산되지 않은 순위/점수를 꾸미지 않는다.
 
 기존 OutboxWorker가 저장된 envelope를 그대로 발행한다. Redis 실패 시 PENDING 유지·재시도, DB rollback 시 원장과 Outbox 동시 rollback. XADD 성공 후 DB commit/응답이 실패하면 **같은 eventId가 Redis에 여러 번 나타날 수 있는 at-least-once**다. Notification은 자체 별도 group(예: `user-notification`)을 만들고 eventId Inbox dedup + 알림 저장 transaction commit 후 XACK, XAUTOCLAIM 및 DLQ를 구현해야 한다. 최초 레벨 생성/강등을 level-up 알림으로 잘못 보내지 않도록 changeType을 확인한다. 원장/칭호별 상태와 시각을 기준으로 하며, User Outbox가 모든 사용자의 이벤트 전역 순서를 보장한다고 가정하지 않는다.
 
-이번 작업은 User 생산자까지 검증한다. Notification Consumer/FCM, 실제 PR #72 Post 프로세스, 운영 Redis/Aurora 장애 복구는 별도 검증 대상이다.
+같은 현재 상태의 재평가만으로 칭호 획득 알림을 반복하지 않는다. 복수 지역은 (userId,badgeCode,regionCode) 상태 전환별로 처리한다. Notification Consumer/FCM, 실제 MongoDB Post 프로세스부터의 운영 E2E, GCP Cloud SQL/Redis 장애 복구는 별도 검증 대상이다. Notification 코드는 이번 작업에서 변경하지 않는다.
