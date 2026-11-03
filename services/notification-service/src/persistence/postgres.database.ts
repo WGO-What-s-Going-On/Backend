@@ -1,4 +1,5 @@
-import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
+import { createLogger } from '../observability/logging.js';
+import { Injectable, type OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
 import { postgresConfig } from './postgres.config.js';
@@ -6,14 +7,21 @@ import { postgresConfig } from './postgres.config.js';
 @Injectable()
 export class PostgresDatabase implements OnApplicationShutdown {
   readonly pool: Pool;
-  private readonly logger = new Logger(PostgresDatabase.name);
+  private readonly logger = createLogger('notification-service', 'database');
 
   constructor(config: ConfigService) {
     this.pool = new Pool(
       config.get<PoolConfig>('database') ?? postgresConfig(),
     );
-    this.pool.on('error', () =>
-      this.logger.error('Idle PostgreSQL connection failed'),
+    this.pool.on('error', (error) =>
+      this.logger.failure(
+        'database_connection_failed',
+        error,
+        'DATABASE_CONNECTION_FAILED',
+        'Idle PostgreSQL connection failed',
+        {},
+        true,
+      ),
     );
   }
 

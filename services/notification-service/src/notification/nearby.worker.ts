@@ -1,6 +1,6 @@
+import { createLogger } from '../observability/logging.js';
 import {
   Injectable,
-  Logger,
   type OnModuleInit,
   type OnModuleDestroy,
 } from '@nestjs/common';
@@ -29,7 +29,7 @@ interface Location {
 }
 @Injectable()
 export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(NearbyWorker.name);
+  private readonly logger = createLogger('notification-service', 'nearby');
   private timer?: NodeJS.Timeout;
   private stopped = false;
   private running: Promise<void> | undefined;
@@ -47,7 +47,16 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
     this.timer = setInterval(() => {
       if (!this.stopped && !this.running) {
         this.running = this.runOnce()
-          .catch(() => this.logger.warn('Nearby fanout remains pending'))
+          .catch((error) =>
+            this.logger.failure(
+              'nearby_fanout_failed',
+              error,
+              'NEARBY_FANOUT_FAILED',
+              'Nearby fanout remains pending',
+              {},
+              true,
+            ),
+          )
           .finally(() => {
             this.running = undefined;
           });
@@ -119,6 +128,11 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
         [job.post_id, lease, rows.length < 50 ? 'DONE' : 'PENDING'],
       );
       await this.deliveries.dispatch(job.post_id);
+      this.logger.success(
+        'nearby_fanout_completed',
+        'Nearby fanout page completed',
+        { postId: job.post_id, eventId: job.event_id, count: rows.length },
+      );
     } catch (error) {
       await this.database.pool.query(
         `UPDATE notification_nearby_jobs SET status='PENDING',lease_id=NULL,lease_until=NULL,next_attempt_at=now()+interval '5 seconds' WHERE post_id=$1 AND lease_id=$2`,
@@ -129,7 +143,7 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
   }
   async cleanupExpired() {
     // Coordinates are short lived even when fanout is disabled; receipts retain no location.
-    await this.database.pool.query(
+    const subscriptions = await this.database.pool.query(
       `DELETE FROM notification_nearby_subscriptions WHERE user_id IN (SELECT user_id FROM notification_nearby_subscriptions WHERE expires_at<=now() LIMIT 1000)`,
     );
     await this.database.pool.query(
@@ -138,6 +152,12 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
     await this.database.pool.query(
       `DELETE FROM notification_nearby_limits WHERE user_id IN (SELECT user_id FROM notification_nearby_limits WHERE last_enqueued_at<now()-interval '30 days' LIMIT 1000)`,
     );
+    if (subscriptions.rowCount)
+      this.logger.success(
+        'nearby_retention_completed',
+        'Expired location subscriptions removed',
+        { count: subscriptions.rowCount },
+      );
   }
   private async enqueue(job: Job, location: Location, allowed: boolean) {
     return this.database.transaction(async (client) => {

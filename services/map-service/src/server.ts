@@ -1,3 +1,5 @@
+import { requestContext, withLogContext } from './observability/logging.js';
+import { observeHttp, observeRpc, rpcContext } from './logging.js';
 import { resolveRegion } from './region.js';
 import { gatewayIdentity } from './gateway-auth.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -74,151 +76,163 @@ export function createGrpcServer(
   );
   const pkg = loadPackageDefinition(definition) as any;
   const server = new Server();
-  const check =
-    (participation: boolean) =>
-    async (
-      call: ServerUnaryCall<Check, Decision>,
-      callback: sendUnaryData<Decision>,
-    ) => {
-      const caller = serviceCaller(call.metadata, keys);
-      if (!caller)
-        return callback({
-          code: status.UNAUTHENTICATED,
-          message: 'Invalid service token',
-        });
-      if (caller !== 'post-service')
-        return callback({
-          code: status.PERMISSION_DENIED,
-          message: 'Service not allowed',
-        });
-      const input = call.request;
-      const userId = Number(input.userId);
-      if (
-        !Number.isSafeInteger(userId) ||
-        userId <= 0 ||
-        !validCoordinates(input.latitude, input.longitude) ||
-        !Number.isFinite(input.radiusM) ||
-        input.radiusM < 1 ||
-        input.radiusM > 10000 ||
-        (participation && !/^post_[0-9a-f-]{36}$/.test(input.postId ?? ''))
-      )
-        return callback({
-          code: status.INVALID_ARGUMENT,
-          message: 'Invalid location check',
-        });
-      try {
-        callback(null, decide(await store.get(userId), input, input.radiusM));
-      } catch {
-        callback({
-          code: status.UNAVAILABLE,
-          message: 'Location store unavailable',
-        });
-      }
-    };
-  server.addService(pkg.wgo.map.v1.MapAuthorization.service, {
-    ResolveRegion: async (
-      call: ServerUnaryCall<{ latitude: number; longitude: number }, unknown>,
-      callback: sendUnaryData<unknown>,
-    ) => {
-      if (serviceCaller(call.metadata, keys, '') !== 'post-service')
-        return callback({
-          code: status.UNAUTHENTICATED,
-          message: 'ES256 post-service token required',
-        });
-      if (!validCoordinates(call.request.latitude, call.request.longitude))
-        return callback({
-          code: status.INVALID_ARGUMENT,
-          message: 'Invalid coordinates',
-        });
-      try {
-        callback(
-          null,
-          await resolveRegion(call.request.latitude, call.request.longitude),
+  const check = (participation: boolean) =>
+    rpcContext(
+      async (
+        call: ServerUnaryCall<Check, Decision>,
+        callback: sendUnaryData<Decision>,
+      ) => {
+        callback = observeRpc(
+          call,
+          callback,
+          participation ? 'CheckPostParticipation' : 'CheckPostCreation',
         );
-      } catch {
-        callback({
-          code: status.UNAVAILABLE,
-          message: 'Region resolution unavailable',
-        });
-      }
-    },
+        const caller = serviceCaller(call.metadata, keys);
+        if (!caller)
+          return callback({
+            code: status.UNAUTHENTICATED,
+            message: 'Invalid service token',
+          });
+        if (caller !== 'post-service')
+          return callback({
+            code: status.PERMISSION_DENIED,
+            message: 'Service not allowed',
+          });
+        const input = call.request;
+        const userId = Number(input.userId);
+        if (
+          !Number.isSafeInteger(userId) ||
+          userId <= 0 ||
+          !validCoordinates(input.latitude, input.longitude) ||
+          !Number.isFinite(input.radiusM) ||
+          input.radiusM < 1 ||
+          input.radiusM > 10000 ||
+          (participation && !/^post_[0-9a-f-]{36}$/.test(input.postId ?? ''))
+        )
+          return callback({
+            code: status.INVALID_ARGUMENT,
+            message: 'Invalid location check',
+          });
+        try {
+          callback(null, decide(await store.get(userId), input, input.radiusM));
+        } catch {
+          callback({
+            code: status.UNAVAILABLE,
+            message: 'Location store unavailable',
+          });
+        }
+      },
+    );
+  server.addService(pkg.wgo.map.v1.MapAuthorization.service, {
+    ResolveRegion: rpcContext(
+      async (
+        call: ServerUnaryCall<{ latitude: number; longitude: number }, unknown>,
+        callback: sendUnaryData<unknown>,
+      ) => {
+        callback = observeRpc(call, callback, 'ResolveRegion');
+        if (serviceCaller(call.metadata, keys, '') !== 'post-service')
+          return callback({
+            code: status.UNAUTHENTICATED,
+            message: 'ES256 post-service token required',
+          });
+        if (!validCoordinates(call.request.latitude, call.request.longitude))
+          return callback({
+            code: status.INVALID_ARGUMENT,
+            message: 'Invalid coordinates',
+          });
+        try {
+          callback(
+            null,
+            await resolveRegion(call.request.latitude, call.request.longitude),
+          );
+        } catch {
+          callback({
+            code: status.UNAVAILABLE,
+            message: 'Region resolution unavailable',
+          });
+        }
+      },
+    ),
     CheckPostCreation: check(false),
     CheckPostParticipation: check(true),
   });
   server.addService(pkg.wgo.map.v1.MapPostQuery.service, {
-    SearchNearbyPosts: async (
-      call: ServerUnaryCall<
-        {
-          latitude: number;
-          longitude: number;
-          radiusM: number;
-          limit: number;
-          cursor?: string;
-        },
-        unknown
-      >,
-      callback: sendUnaryData<unknown>,
-    ) => {
-      // 신규 RPC에는 기존 위치 인가의 HS256 전환 예외를 적용하지 않는다.
-      if (serviceCaller(call.metadata, keys, '') !== 'post-service')
-        return callback({
-          code: status.UNAUTHENTICATED,
-          message: 'ES256 post-service token required',
-        });
-      const input = call.request;
-      if (
-        !validCoordinates(input.latitude, input.longitude) ||
-        ![150, 250, 350].includes(input.radiusM) ||
-        !Number.isInteger(input.limit) ||
-        input.limit < 1 ||
-        input.limit > 200 ||
-        (input.cursor !== undefined &&
-          input.cursor !== '' &&
-          (input.cursor.length > 1024 ||
-            !/^[A-Za-z0-9_-]+$/.test(input.cursor)))
-      )
-        return callback({
-          code: status.INVALID_ARGUMENT,
-          message: 'Invalid nearby query',
-        });
-      const cancellation = new AbortController();
-      const cancel = () => cancellation.abort();
-      call.on('cancelled', cancel);
-      if (call.cancelled) cancel();
-      const deadline = Number(call.getDeadline());
-      try {
-        if (!index) throw new Error('Post index unavailable');
-        const result = await index.nearby(
+    SearchNearbyPosts: rpcContext(
+      async (
+        call: ServerUnaryCall<
           {
-            ...input,
-            radiusM: input.radiusM as 150 | 250 | 350,
+            latitude: number;
+            longitude: number;
+            radiusM: number;
+            limit: number;
+            cursor?: string;
           },
-          { deadline, signal: cancellation.signal },
-        );
-        callback(null, {
-          items: result.items,
-          truncated: result.nextCursor !== null,
-          nextCursor: result.nextCursor ?? '',
-        });
-      } catch (error) {
-        callback({
-          code:
-            error instanceof NearbySearchError
-              ? status[error.code]
-              : error instanceof InvalidCursorError
-                ? status.INVALID_ARGUMENT
-                : status.UNAVAILABLE,
-          message:
-            error instanceof NearbySearchError
-              ? error.code
-              : error instanceof InvalidCursorError
-                ? 'Invalid nearby cursor'
-                : 'Post index unavailable',
-        });
-      } finally {
-        call.removeListener('cancelled', cancel);
-      }
-    },
+          unknown
+        >,
+        callback: sendUnaryData<unknown>,
+      ) => {
+        callback = observeRpc(call, callback, 'SearchNearbyPosts');
+        // 신규 RPC에는 기존 위치 인가의 HS256 전환 예외를 적용하지 않는다.
+        if (serviceCaller(call.metadata, keys, '') !== 'post-service')
+          return callback({
+            code: status.UNAUTHENTICATED,
+            message: 'ES256 post-service token required',
+          });
+        const input = call.request;
+        if (
+          !validCoordinates(input.latitude, input.longitude) ||
+          ![150, 250, 350].includes(input.radiusM) ||
+          !Number.isInteger(input.limit) ||
+          input.limit < 1 ||
+          input.limit > 200 ||
+          (input.cursor !== undefined &&
+            input.cursor !== '' &&
+            (input.cursor.length > 1024 ||
+              !/^[A-Za-z0-9_-]+$/.test(input.cursor)))
+        )
+          return callback({
+            code: status.INVALID_ARGUMENT,
+            message: 'Invalid nearby query',
+          });
+        const cancellation = new AbortController();
+        const cancel = () => cancellation.abort();
+        call.on('cancelled', cancel);
+        if (call.cancelled) cancel();
+        const deadline = Number(call.getDeadline());
+        try {
+          if (!index) throw new Error('Post index unavailable');
+          const result = await index.nearby(
+            {
+              ...input,
+              radiusM: input.radiusM as 150 | 250 | 350,
+            },
+            { deadline, signal: cancellation.signal },
+          );
+          callback(null, {
+            items: result.items,
+            truncated: result.nextCursor !== null,
+            nextCursor: result.nextCursor ?? '',
+          });
+        } catch (error) {
+          callback({
+            code:
+              error instanceof NearbySearchError
+                ? status[error.code]
+                : error instanceof InvalidCursorError
+                  ? status.INVALID_ARGUMENT
+                  : status.UNAVAILABLE,
+            message:
+              error instanceof NearbySearchError
+                ? error.code
+                : error instanceof InvalidCursorError
+                  ? 'Invalid nearby cursor'
+                  : 'Post index unavailable',
+          });
+        } finally {
+          call.removeListener('cancelled', cancel);
+        }
+      },
+    ),
   });
   return server;
 }
@@ -238,158 +252,161 @@ export function createHttpServer(
   index?: Pick<PostIndex, 'nearby'>,
   readiness: () => Promise<boolean> = async () => false,
 ): HttpServer {
-  return createServer(async (request, response) => {
-    if (await serveSwagger(request, response)) return;
-    const url = new URL(request.url ?? '/', 'http://localhost');
-    if (
-      request.method === 'GET' &&
-      ['/health/live', '/health/ready'].includes(url.pathname)
-    ) {
-      let ready = url.pathname === '/health/live';
-      if (!ready) {
-        try {
-          ready = await readiness();
-        } catch {
-          ready = false;
+  return createServer((request, response) =>
+    withLogContext(requestContext(request.headers), async () => {
+      observeHttp(request, response);
+      if (await serveSwagger(request, response)) return;
+      const url = new URL(request.url ?? '/', 'http://localhost');
+      if (
+        request.method === 'GET' &&
+        ['/health/live', '/health/ready'].includes(url.pathname)
+      ) {
+        let ready = url.pathname === '/health/live';
+        if (!ready) {
+          try {
+            ready = await readiness();
+          } catch {
+            ready = false;
+          }
         }
+        response.writeHead(ready ? 200 : 503, {
+          'content-type': 'application/json',
+        });
+        response.end(JSON.stringify({ status: ready ? 'ok' : 'unavailable' }));
+        return;
       }
-      response.writeHead(ready ? 200 : 503, {
-        'content-type': 'application/json',
-      });
-      response.end(JSON.stringify({ status: ready ? 'ok' : 'unavailable' }));
-      return;
-    }
-    if (
-      request.method === 'GET' &&
-      url.pathname === '/internal/v1/posts/nearby'
-    ) {
-      if (!validGatewayToken(request.headers.authorization)) {
+      if (
+        request.method === 'GET' &&
+        url.pathname === '/internal/v1/posts/nearby'
+      ) {
+        if (!validGatewayToken(request.headers.authorization)) {
+          response.writeHead(401).end();
+          return;
+        }
+        const params = url.searchParams;
+        const latitude = Number(params.get('latitude'));
+        const longitude = Number(params.get('longitude'));
+        const radiusM = Number(params.get('radiusM'));
+        const limit = params.has('limit') ? Number(params.get('limit')) : 20;
+        if (
+          [...params.keys()].some(
+            (key) =>
+              !['latitude', 'longitude', 'radiusM', 'limit', 'cursor'].includes(
+                key,
+              ),
+          ) ||
+          ['latitude', 'longitude', 'radiusM'].some(
+            (key) =>
+              !params.has(key) ||
+              !params.get(key) ||
+              params.getAll(key).length !== 1,
+          ) ||
+          ['limit', 'cursor'].some((key) => params.getAll(key).length > 1) ||
+          !validCoordinates(latitude, longitude) ||
+          ![150, 250, 350].includes(radiusM) ||
+          !Number.isInteger(limit) ||
+          limit < 1 ||
+          limit > 100 ||
+          (params.has('cursor') && !params.get('cursor'))
+        ) {
+          response.writeHead(400).end();
+          return;
+        }
+        const cancellation = new AbortController();
+        const cancel = () => {
+          if (!response.writableEnded) cancellation.abort();
+        };
+        response.on('close', cancel);
+        try {
+          if (!index) throw new Error('Post index unavailable');
+          const result = await index.nearby(
+            {
+              latitude,
+              longitude,
+              radiusM: radiusM as 150 | 250 | 350,
+              limit,
+              cursor: params.get('cursor') ?? undefined,
+            },
+            { signal: cancellation.signal },
+          );
+          response
+            .writeHead(200, { 'content-type': 'application/json' })
+            .end(JSON.stringify(result));
+        } catch (error) {
+          if (!response.destroyed) {
+            if (error instanceof NearbySearchError)
+              response
+                .writeHead(error.code === 'DEADLINE_EXCEEDED' ? 504 : 503, {
+                  'content-type': 'application/json',
+                })
+                .end(JSON.stringify({ code: error.code }));
+            else
+              response
+                .writeHead(error instanceof InvalidCursorError ? 400 : 503)
+                .end();
+          }
+        } finally {
+          response.removeListener('close', cancel);
+        }
+        return;
+      }
+      if (request.method !== 'PUT' || request.url !== '/api/v1/location') {
+        response.writeHead(404).end();
+        return;
+      }
+      if (
+        (process.env.NODE_ENV === 'production' ||
+          request.headers.authorization) &&
+        !gatewayIdentity(
+          request.headers.authorization,
+          request.headers['x-user-id'],
+        )
+      ) {
         response.writeHead(401).end();
         return;
       }
-      const params = url.searchParams;
-      const latitude = Number(params.get('latitude'));
-      const longitude = Number(params.get('longitude'));
-      const radiusM = Number(params.get('radiusM'));
-      const limit = params.has('limit') ? Number(params.get('limit')) : 20;
-      if (
-        [...params.keys()].some(
-          (key) =>
-            !['latitude', 'longitude', 'radiusM', 'limit', 'cursor'].includes(
-              key,
-            ),
-        ) ||
-        ['latitude', 'longitude', 'radiusM'].some(
-          (key) =>
-            !params.has(key) ||
-            !params.get(key) ||
-            params.getAll(key).length !== 1,
-        ) ||
-        ['limit', 'cursor'].some((key) => params.getAll(key).length > 1) ||
-        !validCoordinates(latitude, longitude) ||
-        ![150, 250, 350].includes(radiusM) ||
-        !Number.isInteger(limit) ||
-        limit < 1 ||
-        limit > 100 ||
-        (params.has('cursor') && !params.get('cursor'))
-      ) {
+      const userId = Number(request.headers['x-user-id']);
+      if (!Number.isSafeInteger(userId) || userId <= 0) {
+        response.writeHead(403).end();
+        return;
+      }
+      let input: Record<string, unknown>;
+      try {
+        let body = '';
+        for await (const chunk of request) {
+          body += chunk;
+          if (body.length > 1024) throw new Error('body too large');
+        }
+        input = JSON.parse(body) as Record<string, unknown>;
+        if (
+          !input ||
+          typeof input !== 'object' ||
+          Array.isArray(input) ||
+          Object.keys(input).some(
+            (key) => !['latitude', 'longitude'].includes(key),
+          ) ||
+          typeof input.latitude !== 'number' ||
+          typeof input.longitude !== 'number' ||
+          !validCoordinates(input.latitude, input.longitude)
+        )
+          throw new Error('invalid coordinates');
+      } catch {
         response.writeHead(400).end();
         return;
       }
-      const cancellation = new AbortController();
-      const cancel = () => {
-        if (!response.writableEnded) cancellation.abort();
+      const location = {
+        latitude: input.latitude as number,
+        longitude: input.longitude as number,
+        updatedAt: new Date(),
       };
-      response.on('close', cancel);
       try {
-        if (!index) throw new Error('Post index unavailable');
-        const result = await index.nearby(
-          {
-            latitude,
-            longitude,
-            radiusM: radiusM as 150 | 250 | 350,
-            limit,
-            cursor: params.get('cursor') ?? undefined,
-          },
-          { signal: cancellation.signal },
-        );
+        const saved = await store.put(userId, location);
         response
           .writeHead(200, { 'content-type': 'application/json' })
-          .end(JSON.stringify(result));
-      } catch (error) {
-        if (!response.destroyed) {
-          if (error instanceof NearbySearchError)
-            response
-              .writeHead(error.code === 'DEADLINE_EXCEEDED' ? 504 : 503, {
-                'content-type': 'application/json',
-              })
-              .end(JSON.stringify({ code: error.code }));
-          else
-            response
-              .writeHead(error instanceof InvalidCursorError ? 400 : 503)
-              .end();
-        }
-      } finally {
-        response.removeListener('close', cancel);
+          .end(JSON.stringify(saved));
+      } catch {
+        response.writeHead(503).end();
       }
-      return;
-    }
-    if (request.method !== 'PUT' || request.url !== '/api/v1/location') {
-      response.writeHead(404).end();
-      return;
-    }
-    if (
-      (process.env.NODE_ENV === 'production' ||
-        request.headers.authorization) &&
-      !gatewayIdentity(
-        request.headers.authorization,
-        request.headers['x-user-id'],
-      )
-    ) {
-      response.writeHead(401).end();
-      return;
-    }
-    const userId = Number(request.headers['x-user-id']);
-    if (!Number.isSafeInteger(userId) || userId <= 0) {
-      response.writeHead(403).end();
-      return;
-    }
-    let input: Record<string, unknown>;
-    try {
-      let body = '';
-      for await (const chunk of request) {
-        body += chunk;
-        if (body.length > 1024) throw new Error('body too large');
-      }
-      input = JSON.parse(body) as Record<string, unknown>;
-      if (
-        !input ||
-        typeof input !== 'object' ||
-        Array.isArray(input) ||
-        Object.keys(input).some(
-          (key) => !['latitude', 'longitude'].includes(key),
-        ) ||
-        typeof input.latitude !== 'number' ||
-        typeof input.longitude !== 'number' ||
-        !validCoordinates(input.latitude, input.longitude)
-      )
-        throw new Error('invalid coordinates');
-    } catch {
-      response.writeHead(400).end();
-      return;
-    }
-    const location = {
-      latitude: input.latitude as number,
-      longitude: input.longitude as number,
-      updatedAt: new Date(),
-    };
-    try {
-      const saved = await store.put(userId, location);
-      response
-        .writeHead(200, { 'content-type': 'application/json' })
-        .end(JSON.stringify(saved));
-    } catch {
-      response.writeHead(503).end();
-    }
-  });
+    }),
+  );
 }

@@ -1,4 +1,5 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { createLogger } from '../observability/logging.js';
+import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -18,7 +19,7 @@ import {
 
 @Injectable()
 export class LifecycleService {
-  private readonly logger = new Logger(LifecycleService.name);
+  private readonly logger = createLogger('moderation-service', 'lifecycle');
   constructor(
     @Inject(LIFECYCLE_REPOSITORY)
     private readonly repository: LifecycleRepository,
@@ -231,17 +232,17 @@ export class LifecycleService {
         )
       ) {
         if (event)
-          this.logger.log(
-            JSON.stringify({
-              event: 'lifecycle_transition_published',
-              service: 'moderation-service',
+          this.logger.success(
+            'lifecycle_transition_published',
+            'lifecycle transition published',
+            {
               postId,
               eventId: event.eventId,
               eventType: event.eventType,
-              version: decision.projection.version,
-              reason: decision.projection.staleReason,
+              entityVersion: decision.projection.version,
+              reasonCode: decision.projection.staleReason,
               correlationId,
-            }),
+            },
           );
         return;
       }

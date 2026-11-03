@@ -11,7 +11,14 @@ export interface Authenticator {
   authenticate(request: FastifyRequest): Promise<AuthenticatedUser>;
 }
 
-export class AuthenticationError extends Error {}
+export class AuthenticationError extends Error {
+  constructor(
+    message: string,
+    readonly code = 'AUTH_TOKEN_INVALID',
+  ) {
+    super(message);
+  }
+}
 
 export class JwtAuthenticator implements Authenticator {
   readonly #key: Uint8Array;
@@ -49,7 +56,12 @@ export class JwtAuthenticator implements Authenticator {
             ? request.cookies[this.#cookieName]
             : undefined;
       if (!token)
-        throw new AuthenticationError('A valid access token is required.');
+        throw new AuthenticationError(
+          'A valid access token is required.',
+          header === undefined && !request.cookies[this.#cookieName]
+            ? 'AUTH_TOKEN_MISSING'
+            : 'AUTH_TOKEN_INVALID',
+        );
       const { payload } = await jwtVerify(token, this.#key, {
         algorithms: ['HS256'],
         issuer: this.#issuer,
@@ -77,7 +89,14 @@ export class JwtAuthenticator implements Authenticator {
       return { userId: payload.sub };
     } catch (error) {
       if (error instanceof AuthenticationError) throw error;
-      throw new AuthenticationError('The access token is invalid or expired.');
+      throw new AuthenticationError(
+        'The access token is invalid or expired.',
+        error instanceof Error &&
+        'code' in error &&
+        error.code === 'ERR_JWT_EXPIRED'
+          ? 'AUTH_TOKEN_EXPIRED'
+          : 'AUTH_TOKEN_INVALID',
+      );
     }
   }
 }

@@ -1,3 +1,4 @@
+import { correlationHeaders } from '../../observability/logging.js';
 import { createPrivateKey, createPublicKey, sign } from 'node:crypto';
 import { Metadata } from '@grpc/grpc-js';
 import { ParticipationUnavailableError } from '../application/errors.js';
@@ -54,6 +55,8 @@ export function mapMetadata(audience = 'wgo-map-service'): Metadata {
   }).toString('base64url');
   const metadata = new Metadata();
   metadata.set('authorization', `Bearer ${header}.${payload}.${signature}`);
+  for (const [name, value] of Object.entries(correlationHeaders()))
+    metadata.set(name, value);
   return metadata;
 }
 

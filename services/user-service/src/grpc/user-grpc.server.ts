@@ -1,4 +1,9 @@
 import {
+  createLogger,
+  requestContext,
+  withLogContext,
+} from '../observability/logging.js';
+import {
   Injectable,
   type OnApplicationBootstrap,
   type OnModuleDestroy,
@@ -21,6 +26,7 @@ import { UserQueriesService, UserRpcError } from './user-queries.service.js';
 
 @Injectable()
 export class UserGrpcServer implements OnApplicationBootstrap, OnModuleDestroy {
+  private readonly logger = createLogger('user-service', 'user');
   private readonly server = new Server({
     'grpc.max_receive_message_length': 64 * 1024,
   });
@@ -95,39 +101,71 @@ export class UserGrpcServer implements OnApplicationBootstrap, OnModuleDestroy {
   ) {
     return async (
       call: ServerUnaryCall<Record<string, unknown>, object>,
-      callback: sendUnaryData<object>,
-    ) => {
-      try {
-        const caller = serviceCaller(
-          call.metadata,
-          this.keys,
-          this.config.get<string>('grpc.serviceJwtSecret'),
-        );
-        if (!caller) {
-          callback({
-            code: status.UNAUTHENTICATED,
-            message: 'Invalid service token',
-          });
-          return;
+      respond: sendUnaryData<object>,
+    ) =>
+      withLogContext(requestContext(call.metadata.getMap()), async () => {
+        const started = performance.now();
+        const callback: sendUnaryData<object> = (
+          error,
+          value,
+          trailer,
+          flags,
+        ) => {
+          const grpcStatus =
+            error?.code ?? (error ? status.UNKNOWN : status.OK);
+          const fields = {
+            rpcMethod: method,
+            grpcStatus,
+            durationMs: Math.round(performance.now() - started),
+          };
+          if (error)
+            this.logger.failure(
+              'grpc_request_completed',
+              error,
+              `GRPC_${status[grpcStatus] ?? 'UNKNOWN'}`,
+              'User RPC failed',
+              fields,
+              grpcStatus === status.UNAVAILABLE,
+            );
+          else
+            this.logger.success(
+              'grpc_request_completed',
+              'User RPC completed',
+              fields,
+            );
+          respond(error, value, trailer, flags);
+        };
+        try {
+          const caller = serviceCaller(
+            call.metadata,
+            this.keys,
+            this.config.get<string>('grpc.serviceJwtSecret'),
+          );
+          if (!caller) {
+            callback({
+              code: status.UNAUTHENTICATED,
+              message: 'Invalid service token',
+            });
+            return;
+          }
+          if (!this.authorized(caller, method)) {
+            callback({
+              code: status.PERMISSION_DENIED,
+              message: 'Caller is not authorized for this RPC',
+            });
+            return;
+          }
+          callback(null, await work(call.request));
+        } catch (error) {
+          if (error instanceof UserRpcError)
+            callback({ code: error.code, message: error.message });
+          else
+            callback({
+              code: status.UNAVAILABLE,
+              message: 'User store unavailable',
+            });
         }
-        if (!this.authorized(caller, method)) {
-          callback({
-            code: status.PERMISSION_DENIED,
-            message: 'Caller is not authorized for this RPC',
-          });
-          return;
-        }
-        callback(null, await work(call.request));
-      } catch (error) {
-        if (error instanceof UserRpcError)
-          callback({ code: error.code, message: error.message });
-        else
-          callback({
-            code: status.UNAVAILABLE,
-            message: 'User store unavailable',
-          });
-      }
-    };
+      });
   }
 
   private authorized(

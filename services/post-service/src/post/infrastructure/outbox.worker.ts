@@ -1,9 +1,5 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { createLogger } from '../../observability/logging.js';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { randomUUID } from 'node:crypto';
 import type { Model } from 'mongoose';
@@ -16,7 +12,7 @@ import {
 
 @Injectable()
 export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(OutboxWorker.name);
+  private readonly logger = createLogger('post-service', 'outbox');
   private readonly config = eventWorkerConfig();
   private timer?: NodeJS.Timeout;
   private running = false;
@@ -34,7 +30,14 @@ export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
 
   constructor(@InjectModel('Outbox') private readonly outbox: Model<any>) {
     this.redis.on('error', (error: Error) =>
-      this.logger.warn(`Redis: ${error.message}`),
+      this.logger.failure(
+        'outbox.redis',
+        error,
+        'REDIS_CONNECTION_FAILED',
+        'Outbox Redis connection failed',
+        {},
+        true,
+      ),
     );
   }
 
@@ -42,7 +45,14 @@ export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
     // 즉시 깨우기가 누락되거나 Redis가 잠시 실패한 경우를 위한 복구 폴링이다.
     this.timer = setInterval(() => {
       void this.publishPending().catch((error) =>
-        this.logger.warn(`Outbox polling failed: ${String(error)}`),
+        this.logger.failure(
+          'outbox.poll',
+          error,
+          'OUTBOX_POLL_FAILED',
+          'Outbox scan failed',
+          {},
+          true,
+        ),
       );
     }, this.config.pollMs);
     this.timer.unref();
@@ -54,7 +64,14 @@ export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
     this.wakeRequested = true;
     setImmediate(() => {
       void this.publishPending().catch((error) =>
-        this.logger.warn(`Outbox polling failed: ${String(error)}`),
+        this.logger.failure(
+          'outbox.poll',
+          error,
+          'OUTBOX_POLL_FAILED',
+          'Outbox scan failed',
+          {},
+          true,
+        ),
       );
     });
   }
@@ -128,10 +145,7 @@ export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
             }),
           );
           if (!streamId) throw new Error('Redis did not return a Stream ID');
-          this.logger.debug(
-            `Published ${event.eventId}; outboxWaitMs=${Date.now() - event.createdAt.getTime()}`,
-          );
-          await this.outbox.updateOne(
+          const saved = await this.outbox.updateOne(
             { _id: event._id, status: 'PUBLISHING', claimedBy: claimToken },
             {
               $set: {
@@ -145,6 +159,26 @@ export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
               },
             },
           );
+          if (saved.matchedCount === 1)
+            this.logger.success(
+              'outbox.published',
+              'Outbox event published and recorded',
+              {
+                correlationId: event.correlationId,
+                eventId: event.eventId,
+                eventType: event.eventType,
+                postId: event.aggregateId,
+                stream: 'post:events',
+                streamId,
+                attempt: event.attemptCount,
+                durationMs: Date.now() - event.createdAt.getTime(),
+              },
+            );
+          else
+            this.logger.skipped('outbox.publish_record', 'CLAIM_LOST', {
+              eventId: event.eventId,
+              streamId,
+            });
         } catch (error) {
           // Redis 성공 후 DB 저장이 실패해도 같은 ID로 재시도한다. 정확히 한 번 전달은 보장하지 않는다.
           if (this.redis.isOpen) this.redis.destroy();
@@ -152,8 +186,19 @@ export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
             error instanceof InvalidOutboxEvent ||
             event.attemptCount >= this.config.maxAttempts;
           const lastError = String(error).slice(0, 1000);
-          this.logger.warn(
-            `Publish ${event.eventId}: ${failed ? 'FAILED' : 'retry'}; ${lastError}`,
+          this.logger.failure(
+            'outbox.publish',
+            error,
+            failed ? 'OUTBOX_RETRY_EXHAUSTED' : 'OUTBOX_PUBLISH_FAILED',
+            'Outbox event publishing failed',
+            {
+              correlationId: event.correlationId,
+              eventId: event.eventId,
+              eventType: event.eventType,
+              postId: event.aggregateId,
+              attempt: event.attemptCount,
+            },
+            !failed,
           );
           await this.outbox.updateOne(
             { _id: event._id, status: 'PUBLISHING', claimedBy: claimToken },

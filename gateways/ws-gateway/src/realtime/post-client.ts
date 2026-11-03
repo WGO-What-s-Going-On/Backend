@@ -1,3 +1,4 @@
+import { correlationHeaders } from '../observability/logging.js';
 import { createPrivateKey, type KeyObject } from 'node:crypto';
 import { SignJWT } from 'jose';
 import type { AppConfig } from '../config.js';
@@ -88,6 +89,7 @@ export class HttpPostClient implements PostClient {
     const response = await fetch(new URL(path, this.config.url), {
       method: body === undefined ? 'GET' : 'POST',
       headers: {
+        ...correlationHeaders(),
         Authorization: `Bearer ${await this.token(userId)}`,
         ...(this.signingKey && userId !== undefined
           ? { 'X-User-Id': userId }

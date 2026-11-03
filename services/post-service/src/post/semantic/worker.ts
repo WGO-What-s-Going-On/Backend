@@ -1,7 +1,7 @@
+import { createLogger } from '../../observability/logging.js';
 import {
   Inject,
   Injectable,
-  Logger,
   type OnModuleDestroy,
   type OnModuleInit,
 } from '@nestjs/common';
@@ -64,6 +64,7 @@ export async function withSemanticLease<T>(
 }
 
 export class SemanticConsumer {
+  private readonly logger = createLogger('post-service', 'semantic');
   readonly name = `semantic-${randomUUID()}`;
   readonly group: string;
   readonly deadStream: string;
@@ -120,6 +121,13 @@ export class SemanticConsumer {
     leaseSignal = new AbortController().signal,
   ) {
     const fields = entry.message;
+    const context = {
+      stream: SEMANTIC_STREAM,
+      streamId: entry.id,
+      consumerGroup: this.group,
+      eventId: fields.eventId,
+    };
+
     try {
       const id = semanticEvent(fields);
       if (id)
@@ -129,6 +137,18 @@ export class SemanticConsumer {
         );
       leaseSignal.throwIfAborted();
       await this.redis.xAck(SEMANTIC_STREAM, this.group, entry.id);
+      if (id)
+        this.logger.success(
+          'semantic.event_processed',
+          'Semantic event processed and acknowledged',
+          { ...context, postId: id },
+        );
+      else
+        this.logger.skipped(
+          'semantic.event_processed',
+          'EVENT_NOT_SUPPORTED',
+          context,
+        );
     } catch (error) {
       leaseSignal.throwIfAborted();
       const pending = await this.redis.xPendingRange(
@@ -137,6 +157,17 @@ export class SemanticConsumer {
         entry.id,
         entry.id,
         1,
+      );
+      const terminal =
+        error instanceof InvalidSemanticEvent ||
+        (pending[0]?.deliveriesCounter ?? 1) >= 5;
+      this.logger.failure(
+        'semantic.event_process',
+        error,
+        terminal ? 'SEMANTIC_EVENT_TERMINAL' : 'SEMANTIC_EVENT_RETRY',
+        'Semantic event processing failed',
+        { ...context, attempt: pending[0]?.deliveriesCounter ?? 1 },
+        !terminal,
       );
       if (
         error instanceof InvalidSemanticEvent ||
@@ -150,6 +181,11 @@ export class SemanticConsumer {
           data: fields.data ?? '',
         });
         await this.redis.xAck(SEMANTIC_STREAM, this.group, entry.id);
+        this.logger.success(
+          'semantic.dead_lettered',
+          'Semantic event saved to dead letter stream and acknowledged',
+          context,
+        );
       }
     }
   }
@@ -157,7 +193,7 @@ export class SemanticConsumer {
 
 @Injectable()
 export class SemanticWorker implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(SemanticWorker.name);
+  private readonly logger = createLogger('post-service', 'semantic');
   readonly redis = semanticRedis();
   private stopped = false;
   private running?: Promise<void>;
@@ -165,7 +201,16 @@ export class SemanticWorker implements OnModuleInit, OnModuleDestroy {
     @Inject(EMBEDDING_PROVIDER) private readonly embedding: EmbeddingProvider,
     private readonly indexing: IndexSemanticPost,
   ) {
-    this.redis.on('error', (error) => this.logger.warn(String(error)));
+    this.redis.on('error', (error) =>
+      this.logger.failure(
+        'semantic.redis',
+        error,
+        'REDIS_CONNECTION_FAILED',
+        'Semantic Redis connection failed',
+        {},
+        true,
+      ),
+    );
   }
   onModuleInit() {
     // 준비 전에는 Redis 연결·그룹 생성·배달 자체를 시작하지 않는다.
@@ -181,7 +226,12 @@ export class SemanticWorker implements OnModuleInit, OnModuleDestroy {
       await this.embedding.initialize?.();
       if (!this.stopped && this.embedding.ready) await this.run();
     } catch (error) {
-      this.logger.warn(`Semantic worker not started: ${String(error)}`);
+      this.logger.failure(
+        'semantic.start',
+        error,
+        'SEMANTIC_START_FAILED',
+        'Semantic worker initialization failed',
+      );
     }
   }
   private async run() {
@@ -195,7 +245,14 @@ export class SemanticWorker implements OnModuleInit, OnModuleDestroy {
           await delay(250);
         }
       } catch (error) {
-        this.logger.warn(`Semantic worker retry: ${String(error)}`);
+        this.logger.failure(
+          'semantic.poll',
+          error,
+          'SEMANTIC_POLL_FAILED',
+          'Semantic worker polling failed',
+          {},
+          true,
+        );
         if (!this.stopped) await delay(1000);
       }
     }

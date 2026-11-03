@@ -1,3 +1,5 @@
+import { createLogger } from '../observability/logging.js';
+const logger = createLogger('notification-service', 'retention');
 import { Pool } from 'pg';
 import { postgresConfig } from './postgres.config.js';
 
@@ -11,9 +13,20 @@ try {
   )`,
     [Math.floor(Date.now() / 1000)],
   );
-  console.info(`Expired notifications removed: ${result.rowCount ?? 0}`);
-} catch {
-  console.error('Notification retention cleanup failed');
+  logger.success(
+    'notification_retention_completed',
+    'Expired notifications removed',
+    { count: result.rowCount ?? 0 },
+  );
+} catch (error) {
+  logger.failure(
+    'notification_retention_failed',
+    error,
+    'RETENTION_FAILED',
+    'Notification retention cleanup failed',
+    {},
+    true,
+  );
   process.exitCode = 1;
 } finally {
   await pool.end();

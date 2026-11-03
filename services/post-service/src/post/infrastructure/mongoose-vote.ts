@@ -1,3 +1,4 @@
+import { createLogger } from '../../observability/logging.js';
 import { Injectable } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import type { ClientSession, Connection, Model } from 'mongoose';
@@ -49,7 +50,7 @@ export class MongooseVote {
   }
 
   async selectDue(postId: string, now = new Date()): Promise<void> {
-    await this.transaction(async (session) => {
+    const result = await this.transaction(async (session) => {
       const post = await this.posts.findOne({ postId }).session(session).lean();
       if (
         !post ||
@@ -57,13 +58,13 @@ export class MongooseVote {
         !post.voteAt ||
         post.voteAt > now
       )
-        return;
+        return null;
       if (
         post.status !== 'ACTIVE' ||
         post.closedAt != null ||
         (post.expiresAt && post.expiresAt <= now)
       )
-        return;
+        return null;
       const comments = await this.comments
         .find({ postId, status: 'ACTIVE' })
         .session(session)
@@ -80,12 +81,13 @@ export class MongooseVote {
         )
         .slice(0, 2);
       if (ranked.length < 2) {
-        await this.posts.updateOne(
+        const closed = await this.posts.updateOne(
           { postId, 'vote.status': 'PENDING' },
           { $set: { vote: { ...post.vote, status: 'NONE', closedAt: now } } },
           { session },
         );
-        return;
+        if (closed.matchedCount !== 1) return null;
+        return { status: 'NONE' as const, candidateIds: [] as string[] };
       }
       // 댓글 삭제·공감 변경과 후보 스냅샷 저장의 순서를 확정한다.
       for (const comment of ranked) {
@@ -151,7 +153,35 @@ export class MongooseVote {
           { session },
         );
       }
+      return {
+        status: 'OPEN' as const,
+        candidateIds: candidates.map((candidate) => candidate.commentId),
+      };
     });
+    const logger = createLogger('post-service', 'vote');
+    if (!result) {
+      logger.skipped('vote.selection', 'NOT_DUE_OR_INACTIVE', { postId });
+      return;
+    }
+    // 재시도된 트랜잭션의 후보는 기록하지 않고 최종 커밋 결과만 남긴다.
+    logger.success(
+      result.status === 'OPEN' ? 'vote.opened' : 'vote.none',
+      result.status === 'OPEN'
+        ? 'Vote opened'
+        : 'Vote closed without enough candidates',
+      {
+        postId,
+        status: result.status,
+        candidateCount: result.candidateIds.length,
+        selectedAt: now.toISOString(),
+      },
+    );
+    for (const commentId of result.candidateIds)
+      logger.success('vote.candidate_selected', 'Vote candidate selected', {
+        postId,
+        commentId,
+        selectedAt: now.toISOString(),
+      });
   }
 
   async read(postId: string, userId?: number) {

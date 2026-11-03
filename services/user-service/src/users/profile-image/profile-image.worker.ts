@@ -1,9 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { createLogger } from '../../observability/logging.js';
+import { Injectable } from '@nestjs/common';
 import { ProfileImageService } from './profile-image.service.js';
 
 @Injectable()
 export class ProfileImageCleanupWorker {
-  private readonly logger = new Logger(ProfileImageCleanupWorker.name);
+  private readonly logger = createLogger('user-service', 'profile-image');
   private timer?: NodeJS.Timeout;
   private running: Promise<void> | undefined;
   private stopped = false;
@@ -20,8 +21,15 @@ export class ProfileImageCleanupWorker {
     if (this.running) return this.running;
     this.running = this.images
       .cleanup()
-      .catch(() => {
-        this.logger.warn('Profile image cleanup failed; retained for retry');
+      .catch((error) => {
+        this.logger.failure(
+          'profile_cleanup_failed',
+          error,
+          'PROFILE_CLEANUP_FAILED',
+          'Profile image cleanup failed; retained for retry',
+          {},
+          true,
+        );
       })
       .finally(() => {
         this.running = undefined;

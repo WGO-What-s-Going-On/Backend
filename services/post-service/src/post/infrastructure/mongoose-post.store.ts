@@ -1,3 +1,4 @@
+import { createLogger, type LogFields } from '../../observability/logging.js';
 import { ConflictException } from '@nestjs/common';
 import type { MediaRecord } from '../media/media.schema.js';
 import { mediaIds } from '../media/media.policy.js';
@@ -174,6 +175,8 @@ class MongoQueries implements PostStateQueries {
 }
 
 class MongoCommands implements PostCommands {
+  readonly committedEvents: OutboxEvent[] = [];
+  readonly closedVotes: LogFields[] = [];
   constructor(
     private readonly posts: Model<any>,
     private readonly comments: Model<any>,
@@ -545,6 +548,7 @@ class MongoCommands implements PostCommands {
         },
         { session: this.session },
       );
+      this.closedVotes.push({ postId, status: 'NONE', hasWinner: false });
       return null;
     }
     const [first, second] = vote.candidates ?? [];
@@ -578,6 +582,13 @@ class MongoCommands implements PostCommands {
       },
       { session: this.session },
     );
+    this.closedVotes.push({
+      postId,
+      status: 'CLOSED',
+      hasWinner: Boolean(winner),
+      tie: Boolean(first && second && first.votes === second.votes),
+      totalVotes: Number(first?.votes ?? 0) + Number(second?.votes ?? 0),
+    });
     return winner
       ? {
           postId,
@@ -690,6 +701,7 @@ class MongoCommands implements PostCommands {
       ],
       { session: this.session },
     );
+    this.committedEvents.push(event);
   }
 }
 
@@ -785,27 +797,51 @@ export class MongoosePostStore implements PostUnitOfWork, PostStateQueries {
     for (let attempt = 0; ; attempt++) {
       try {
         // 도메인 데이터·카운터·Outbox가 함께 커밋되거나 함께 롤백된다.
-        const result = await this.connection.transaction((session) =>
-          work({
+        const result = await this.connection.transaction(async (session) => {
+          const commands = new MongoCommands(
+            this.posts,
+            this.comments,
+            this.reactions,
+            this.commentReactions,
+            this.participants,
+            this.outbox,
+            this.counters,
+            this.config.getOrThrow<number>('post.bucketCount'),
+            this.moderationReceipts,
+            session,
+            this.media,
+          );
+          const value = await work({
             queries: this.queries(session),
-            commands: new MongoCommands(
-              this.posts,
-              this.comments,
-              this.reactions,
-              this.commentReactions,
-              this.participants,
-              this.outbox,
-              this.counters,
-              this.config.getOrThrow<number>('post.bucketCount'),
-              this.moderationReceipts,
-              session,
-              this.media,
-            ),
-          }),
-        );
+            commands,
+          });
+          return {
+            value,
+            events: commands.committedEvents,
+            votes: commands.closedVotes,
+          };
+        });
+        // 콜백은 드라이버가 재실행할 수 있으므로 커밋된 시도의 기록만 출력한다.
+        for (const entry of result.events)
+          createLogger('post-service', 'post').success(
+            'domain.event_committed',
+            'Domain change committed with outbox event',
+            {
+              eventId: entry.eventId,
+              eventType: entry.eventType,
+              postId: entry.aggregateId,
+              correlationId: entry.correlationId,
+            },
+          );
+        for (const vote of result.votes)
+          createLogger('post-service', 'vote').success(
+            'vote.closed',
+            'Vote result committed',
+            vote,
+          );
         // 커밋이 끝난 뒤에만 발행을 깨운다. 실패한 트랜잭션의 이벤트는 보이지 않아야 한다.
         this.outboxWorker.wake();
-        return result;
+        return result.value;
       } catch (error) {
         const duplicate = error as {
           code?: number;
