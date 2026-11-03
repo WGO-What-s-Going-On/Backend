@@ -120,6 +120,17 @@ describe('User Access JWT contract', () => {
       ),
     ).rejects.toThrow();
   });
+  it('distinguishes missing, malformed and expired credentials for internal logs', async () => {
+    await expect(auth.authenticate(request())).rejects.toMatchObject({
+      code: 'AUTH_TOKEN_MISSING',
+    });
+    await expect(auth.authenticate(request('Basic bad'))).rejects.toMatchObject(
+      { code: 'AUTH_TOKEN_INVALID' },
+    );
+    await expect(
+      auth.authenticate(request(`Bearer ${await token({ iat: 1, exp: 2 })}`)),
+    ).rejects.toMatchObject({ code: 'AUTH_TOKEN_EXPIRED' });
+  });
   it('rejects missing credentials', async () => {
     await expect(auth.authenticate(request())).rejects.toThrow();
   });

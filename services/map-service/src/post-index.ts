@@ -1,3 +1,5 @@
+import { createLogger, safeError } from './observability/logging.js';
+const log = createLogger('map-service', 'map');
 import { cassandraOptions } from './cassandra-config.js';
 import { createHash, randomUUID } from 'node:crypto';
 import cassandra from 'cassandra-driver';
@@ -484,11 +486,19 @@ export class PostIndex {
       return await this.searchNearby(query, budget);
     } catch (error) {
       if (error instanceof NearbySearchError && error.code !== 'CANCELLED')
-        console.warn({
-          event: 'map_nearby_budget_exceeded',
-          code: error.code,
-          ...budget.snapshot(),
-        });
+        log.emit(
+          {
+            event: 'map.nearby.budget_exceeded',
+            message: 'Nearby search budget exceeded.',
+            outcome: 'failure',
+            error: safeError(
+              error,
+              error.code,
+              'Nearby search budget exceeded.',
+            ),
+          },
+          'WARNING',
+        );
       throw error;
     } finally {
       budget.close();

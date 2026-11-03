@@ -1,3 +1,4 @@
+import { safeError } from '../observability/logging.js';
 import { randomUUID } from 'node:crypto';
 import { createClient } from 'redis';
 import type { SubscriptionManager } from './subscription-manager.js';
@@ -70,7 +71,11 @@ export class PostEvents implements RealtimeBus {
   constructor(
     redisUrl: string,
     private readonly subscriptions: SubscriptionManager,
-    private readonly log: { warn(value: unknown): void },
+    private readonly log: {
+      warn(value: unknown): void;
+      info?(value: unknown): void;
+      debug?(value: unknown): void;
+    },
   ) {
     const options = {
       url: redisUrl,
@@ -82,7 +87,18 @@ export class PostEvents implements RealtimeBus {
     this.subscriber = createClient(options);
     for (const client of [this.reader, this.publisher, this.subscriber])
       client.on('error', () =>
-        this.log.warn({ event: 'realtime_redis_error' }),
+        this.log.warn({
+          event: 'realtime.redis.failed',
+          domain: 'realtime',
+          outcome: 'failure',
+          message: 'Realtime Redis connection failed.',
+          error: safeError(
+            undefined,
+            'REDIS_CONNECTION_FAILED',
+            'Realtime Redis connection failed.',
+            true,
+          ),
+        }),
       );
     this.subscriber.on('error', () => this.resync());
     this.subscriber.on('reconnecting', () => this.resync());
@@ -180,8 +196,17 @@ export class PostEvents implements RealtimeBus {
         if (!this.stopped) {
           this.failures++;
           this.log.warn({
-            event: 'realtime_consumer_retry',
-            failures: this.failures,
+            event: 'consumer.poll.failed',
+            domain: 'realtime',
+            outcome: 'failure',
+            message: 'Realtime consumer polling failed.',
+            error: safeError(
+              undefined,
+              'STREAM_POLL_FAILED',
+              'Realtime consumer polling failed.',
+              true,
+            ),
+            failed: this.failures,
           });
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
@@ -193,6 +218,16 @@ export class PostEvents implements RealtimeBus {
     id: string,
     fields: Record<string, string>,
   ): Promise<void> {
+    const context = {
+      stream,
+      consumerGroup: group,
+      streamId: id,
+      eventId: fields.eventId,
+      eventType: fields.eventType,
+      domain: 'realtime',
+    };
+    let reasonCode: string | undefined;
+    let deadLettered = false;
     try {
       const message = realtimePostEvent(fields);
       if (message) {
@@ -203,7 +238,8 @@ export class PostEvents implements RealtimeBus {
             arguments: [JSON.stringify(message), channel],
           });
         if (Number(delivered) < 0) throw new Error('No subscribers');
-      }
+        if (Number(delivered) === 0) reasonCode = 'STALE_OR_DUPLICATE';
+      } else reasonCode = 'UNSUPPORTED_EVENT';
     } catch (error) {
       this.failures++;
       const pending = await this.reader
@@ -212,7 +248,16 @@ export class PostEvents implements RealtimeBus {
       const attempt = pending[0]?.deliveriesCounter ?? 1;
       const invalid = error instanceof InvalidPostEvent;
       this.log.warn({
-        event: 'realtime_event_failed',
+        ...context,
+        event: 'consumer.event.failed',
+        outcome: 'failure',
+        message: 'Realtime event processing failed.',
+        error: safeError(
+          error,
+          invalid ? 'INVALID_CONTRACT' : 'DELIVERY_FAILED',
+          'Realtime event processing failed.',
+          !invalid && attempt < 5,
+        ),
         streamId: id,
         attempt,
         errorCode: invalid ? 'INVALID_CONTRACT' : 'DELIVERY_FAILED',
@@ -226,11 +271,40 @@ export class PostEvents implements RealtimeBus {
           error: invalid ? 'INVALID_CONTRACT' : 'RETRY_EXHAUSTED',
           original: JSON.stringify(fields),
         });
-      this.log.warn({ event: 'realtime_event_dead_lettered', streamId: id });
+      deadLettered = true;
+      this.log.warn({
+        ...context,
+        event: 'consumer.event.dead_lettered',
+        outcome: 'failure',
+        message: 'Realtime event stored in dead letter stream.',
+        error: safeError(
+          undefined,
+          invalid ? 'INVALID_CONTRACT' : 'RETRY_EXHAUSTED',
+          'Realtime event stored in dead letter stream.',
+          false,
+        ),
+      });
     }
     await this.reader
       .withCommandOptions({ timeout: 2000 })
       .xAck(stream, group, id);
+    if (reasonCode)
+      this.log.debug?.({
+        ...context,
+        event: 'consumer.event.acknowledged',
+        outcome: 'skipped',
+        reasonCode,
+        message: 'Realtime event skipped and acknowledged.',
+      });
+    else
+      this.log.info?.({
+        ...context,
+        event: deadLettered
+          ? 'consumer.dead_letter.acknowledged'
+          : 'consumer.event.acknowledged',
+        outcome: 'success',
+        message: 'Realtime event acknowledged.',
+      });
   }
 
   private deliver(raw: string): void {
@@ -264,16 +338,52 @@ export class PostEvents implements RealtimeBus {
           socket.send(encoded, (error) => {
             if (error) {
               this.failures++;
+              this.log.warn({
+                event: 'websocket.delivery.failed',
+                domain: 'realtime',
+                outcome: 'failure',
+                message: 'WebSocket delivery failed.',
+                eventId: message.eventId,
+                postId: message.postId,
+                error: safeError(
+                  error,
+                  'WS_SEND_FAILED',
+                  'WebSocket delivery failed.',
+                ),
+              });
               socket.terminate();
             }
           });
-        } catch {
+        } catch (error) {
+          this.log.warn({
+            event: 'websocket.delivery.failed',
+            domain: 'realtime',
+            outcome: 'failure',
+            message: 'WebSocket delivery failed.',
+            eventId: message.eventId,
+            postId: message.postId,
+            error: safeError(
+              error,
+              'WS_SEND_FAILED',
+              'WebSocket delivery failed.',
+            ),
+          });
           this.failures++;
           socket.terminate();
         }
       }
     } catch {
-      this.log.warn({ event: 'invalid_realtime_message' });
+      this.log.warn({
+        event: 'websocket.message.invalid',
+        domain: 'realtime',
+        outcome: 'failure',
+        message: 'Invalid realtime message.',
+        error: safeError(
+          undefined,
+          'INVALID_CONTRACT',
+          'Invalid realtime message.',
+        ),
+      });
     }
   }
 }

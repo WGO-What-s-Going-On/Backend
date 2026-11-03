@@ -1,4 +1,5 @@
-import { Injectable, OnModuleDestroy, Logger } from '@nestjs/common';
+import { createLogger } from '../observability/logging.js';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient } from 'redis';
 
@@ -13,7 +14,7 @@ export class RedisModerationResultRepository
   private readonly redis;
   private readonly stream: string;
   private connecting: Promise<unknown> | undefined;
-  private readonly logger = new Logger(RedisModerationResultRepository.name);
+  private readonly logger = createLogger('moderation-service', 'content');
 
   constructor(config: ConfigService) {
     this.redis = createClient({
@@ -98,23 +99,25 @@ export class RedisModerationResultRepository
         },
       )
       .catch((error) => {
-        this.logger.warn(
-          JSON.stringify({
-            event: 'content_result_publication_failed',
-            service: 'moderation-service',
-            sourceEventId: result.eventId,
-          }),
+        this.logger.failure(
+          'content_result_publication_failed',
+          error,
+          'CONTENT_RESULT_PUBLICATION_FAILED',
+          'content result publication failed',
+          {
+            correlationId: result.correlationId ?? result.eventId,
+          },
         );
         throw error;
       });
     if (Number(saved) === 1)
-      this.logger.log(
-        JSON.stringify({
-          event: 'content_result_published',
-          service: 'moderation-service',
-          sourceEventId: result.eventId,
+      this.logger.success(
+        'content_result_published',
+        'content result published',
+        {
+          correlationId: result.correlationId ?? result.eventId,
           eventId: contentEvent(result).eventId,
-        }),
+        },
       );
     return Number(saved) === 1;
   }

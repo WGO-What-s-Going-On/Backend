@@ -1,3 +1,4 @@
+import { createLogger } from '../observability/logging.js';
 import { Inject, Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 
@@ -23,6 +24,7 @@ export interface CommentModerationInput {
 
 @Injectable()
 export class CommentModerationService {
+  private readonly logger = createLogger('moderation-service', 'content');
   constructor(
     @Inject(MODERATION_PROVIDER) private readonly provider: ModerationProvider,
     @Inject(MODERATION_RESULT_REPOSITORY)
@@ -47,6 +49,16 @@ export class CommentModerationService {
         throw new Error('Invalid conflicting moderation source event');
       // A saved result is not completion until its output publication is confirmed.
       await this.repository.save(existing);
+      this.logger.success(
+        'comment_moderation_publication_confirmed',
+        'Stored comment moderation publication confirmed',
+        {
+          eventId: input.eventId,
+          postId: input.postId,
+          commentId: input.commentId,
+          correlationId: input.correlationId,
+        },
+      );
       return existing;
     }
     const result = await this.provider.moderate(input.content);
@@ -64,11 +76,33 @@ export class CommentModerationService {
         : {}),
     };
     await this.repository.save(stored);
+    this.logger.success(
+      'comment_moderation_completed',
+      'Comment moderation result persisted and published',
+      {
+        eventId: input.eventId,
+        postId: input.postId,
+        commentId: input.commentId,
+        correlationId: input.correlationId,
+      },
+    );
     return (await this.repository.find(input.eventId)) ?? stored;
   }
 
   async republishExisting(eventId: string): Promise<void> {
     const result = await this.repository.find(eventId);
-    if (result) await this.repository.save(result);
+    if (result) {
+      await this.repository.save(result);
+      this.logger.success(
+        'comment_moderation_publication_confirmed',
+        'Stored moderation publication confirmed',
+        { eventId, postId: result.postId, commentId: result.commentId },
+      );
+    } else
+      this.logger.skipped(
+        'comment_moderation_republish_skipped',
+        'RESULT_NOT_FOUND',
+        { eventId },
+      );
   }
 }

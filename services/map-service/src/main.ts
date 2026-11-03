@@ -1,3 +1,5 @@
+import { createLogger } from './observability/logging.js';
+const log = createLogger('map-service', 'lifecycle');
 import { createGrpcServer, createHttpServer, listenGrpc } from './server.js';
 import { CassandraLocationStore } from './store.js';
 import { PostIndex } from './post-index.js';
@@ -11,7 +13,12 @@ await store.connect();
 await index.connect();
 const consumer = new PostConsumer(index);
 void consumer.run().catch((error) => {
-  console.error('post-map stopped', error);
+  log.failure(
+    'consumer.stopped',
+    error,
+    'CONSUMER_STOPPED',
+    'Map consumer stopped unexpectedly.',
+  );
   process.exitCode = 1;
 });
 await listenGrpc(grpc, Number(process.env.GRPC_PORT ?? 50051));

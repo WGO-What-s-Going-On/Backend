@@ -1,6 +1,6 @@
+import { createLogger } from '../observability/logging.js';
 import {
   Injectable,
-  Logger,
   type OnApplicationBootstrap,
   type OnModuleDestroy,
 } from '@nestjs/common';
@@ -18,7 +18,7 @@ import { OutboxEventEntity } from '../database/entities/outbox-event.entity.js';
 export class WithdrawalScheduler
   implements OnApplicationBootstrap, OnModuleDestroy
 {
-  private readonly logger = new Logger(WithdrawalScheduler.name);
+  private readonly logger = createLogger('user-service', 'withdrawal');
   private timer?: NodeJS.Timeout;
   private running: Promise<void> | undefined;
   private stopping = false;
@@ -47,8 +47,15 @@ export class WithdrawalScheduler
     if (this.stopping) return Promise.resolve();
     if (this.running) return this.running;
     this.running = this.finalizeBatch()
-      .catch(() => {
-        this.logger.warn('Withdrawal finalization failed; retry on next poll');
+      .catch((error) => {
+        this.logger.failure(
+          'withdrawal_finalization_failed',
+          error,
+          'WITHDRAWAL_FINALIZATION_FAILED',
+          'Withdrawal finalization failed; retry on next poll',
+          {},
+          true,
+        );
       })
       .finally(() => {
         this.running = undefined;
@@ -63,7 +70,8 @@ export class WithdrawalScheduler
   }
 
   private async finalizeBatch(): Promise<void> {
-    await this.database.transaction(async (manager) => {
+    const count = await this.database.transaction(async (manager) => {
+      let processed = 0;
       const users = manager.getRepository(UserEntity);
       const candidates = await users
         .createQueryBuilder('user')
@@ -130,9 +138,17 @@ export class WithdrawalScheduler
           createdAt: now,
           publishedAt: null,
         });
+        processed++;
         // No Redis dependency: refresh already rejects non-ACTIVE users even with stale sessions.
       }
+      return processed;
     });
+    if (count)
+      this.logger.success(
+        'withdrawal_finalized',
+        'Withdrawal finalization committed',
+        { count },
+      );
   }
 }
 

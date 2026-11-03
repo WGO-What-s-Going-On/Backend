@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { createLogger } from '../../observability/logging.js';
 import type { EmbeddingProvider } from './ports.js';
 import { DIMENSIONS, validateEmbedding, type Embedding } from './policy.js';
 import { E5_VERSION, modelPath } from './model-artifacts.js';
@@ -15,7 +15,7 @@ type Job = {
 
 export class E5EmbeddingProvider implements EmbeddingProvider {
   readonly version = E5_VERSION;
-  private readonly logger = new Logger(E5EmbeddingProvider.name);
+  private readonly logger = createLogger('post-service', 'semantic');
   private runtime: E5Runtime | undefined;
   private initialization?: Promise<void>;
   private running: Promise<void> | undefined;
@@ -48,7 +48,12 @@ export class E5EmbeddingProvider implements EmbeddingProvider {
   onModuleInit() {
     // 모델 준비 실패가 기존 생성·조회와 생존 확인을 막지 않게 한다.
     void this.initialize().catch((error: unknown) =>
-      this.logger.warn(`Embedding unavailable: ${String(error)}`),
+      this.logger.failure(
+        'semantic.model_initialize',
+        error,
+        'EMBEDDING_UNAVAILABLE',
+        'Embedding model initialization failed',
+      ),
     );
   }
 
@@ -64,7 +69,9 @@ export class E5EmbeddingProvider implements EmbeddingProvider {
       await this.calculate('모델 준비 확인', this.stop.signal);
       this.stop.signal.throwIfAborted();
       this.warmed = true;
-      this.logger.log(`Embedding ready: ${this.version}`);
+      this.logger.success('semantic.model_ready', 'Embedding model ready', {
+        version: this.version,
+      });
     } catch (error) {
       await this.runtime?.close();
       this.runtime = undefined;

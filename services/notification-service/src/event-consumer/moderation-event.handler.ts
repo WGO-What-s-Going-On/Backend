@@ -1,3 +1,4 @@
+import { createLogger } from '../observability/logging.js';
 import { Injectable } from '@nestjs/common';
 import { NotificationEventWriter } from '../persistence/notification-event.writer.js';
 import { NotificationState } from '../redis/notification-state.js';
@@ -6,6 +7,10 @@ import { parseModerationEvent } from './moderation-event.js';
 
 @Injectable()
 export class ModerationEventHandler {
+  private readonly logger = createLogger(
+    'notification-service',
+    'notification',
+  );
   constructor(
     private readonly writer: NotificationEventWriter,
     private readonly state: NotificationState,
@@ -116,6 +121,15 @@ export class ModerationEventHandler {
           },
         });
         return n?.created ? [recipient] : [];
+      },
+    );
+    this.logger.success(
+      'notification_event_committed',
+      'Notification event receipt committed',
+      {
+        eventId: event.eventId,
+        eventType: event.eventType,
+        count: recipients.length,
       },
     );
     for (const userId of recipients) await this.state.invalidateUnread(userId);

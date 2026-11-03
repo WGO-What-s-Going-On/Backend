@@ -1,6 +1,17 @@
+import { safeError, withLogContext } from './observability/logging.js';
+import {
+  loggingOptions,
+  registerRequestLogging,
+  requestFailure,
+  gatewayContext,
+} from './logging.js';
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, {
+  type FastifyInstance,
+  type FastifyRequest,
+  type FastifyBaseLogger,
+} from 'fastify';
 import { WebSocket, type RawData } from 'ws';
 
 import { loadConfig, type AppConfig } from './config.js';
@@ -44,8 +55,45 @@ export interface BuildAppOptions {
   enableEvents?: boolean;
 }
 
+const socketLogs = new WeakMap<WebSocket, FastifyBaseLogger>();
+
 function send(socket: WebSocket, message: ServerMessage): void {
-  socket.send(serializeServerMessage(message));
+  const log = socketLogs.get(socket);
+  socket.send(serializeServerMessage(message), (error) => {
+    if (error)
+      log?.warn(
+        {
+          event: 'websocket.send.failed',
+          domain: 'realtime',
+          outcome: 'failure',
+          error: safeError(error, 'WS_SEND_FAILED', 'WebSocket send failed.'),
+        },
+        'WebSocket send failed.',
+      );
+  });
+  if (message.type === 'command.error')
+    log?.warn(
+      {
+        event: 'websocket.command.completed',
+        domain: 'realtime',
+        outcome: 'failure',
+        error: safeError(
+          undefined,
+          message.code,
+          'WebSocket command rejected.',
+        ),
+      },
+      'WebSocket command rejected.',
+    );
+  else if (message.type === 'command.ack' || message.type === 'command.result')
+    log?.info(
+      {
+        event: 'websocket.command.completed',
+        domain: 'realtime',
+        outcome: 'success',
+      },
+      'WebSocket command completed.',
+    );
 }
 
 function commandError(
@@ -78,17 +126,24 @@ export async function buildApp(
   const logger =
     options.logger === false
       ? false
-      : config.logPretty
-        ? {
-            level: config.logLevel,
-            transport: {
-              target: 'pino-pretty',
-              options: { colorize: true, translateTime: 'SYS:standard' },
-            },
-          }
-        : { level: config.logLevel };
+      : {
+          ...loggingOptions('ws-gateway', config.logLevel),
+          ...(config.logPretty
+            ? {
+                transport: {
+                  target: 'pino-pretty',
+                  options: { colorize: true, translateTime: 'SYS:standard' },
+                },
+              }
+            : {}),
+        };
 
-  const app = Fastify({ logger, trustProxy: false });
+  const app = Fastify({
+    logger,
+    trustProxy: false,
+    disableRequestLogging: true,
+  });
+  registerRequestLogging(app);
   const authenticator =
     options.authenticator ?? new JwtAuthenticator(config.jwt);
   const postClient =
@@ -101,6 +156,7 @@ export async function buildApp(
   const connections = new ConnectionManager(
     config.websocket.heartbeatIntervalMs,
     config.websocket.heartbeatTimeoutMs,
+    app.log,
   );
   const subscriptions = new SubscriptionManager(
     config.websocket.maxRoomsPerSocket,
@@ -159,6 +215,11 @@ export async function buildApp(
       preValidation: async (request, reply) => {
         const origin = request.headers.origin;
         if (origin && !config.websocket.allowedOrigins.includes(origin)) {
+          requestFailure(
+            request,
+            'WS_ORIGIN_FORBIDDEN',
+            'WebSocket origin is not allowed.',
+          );
           return reply.code(403).send({
             code: 'WS_ORIGIN_FORBIDDEN',
             message: 'The WebSocket origin is not allowed.',
@@ -170,6 +231,12 @@ export async function buildApp(
           (request as AuthenticatedRequest).authenticatedUser = user;
         } catch (error) {
           if (error instanceof AuthenticationError) {
+            requestFailure(
+              request,
+              error.code,
+              'WebSocket authentication failed.',
+              error,
+            );
             return reply
               .code(401)
               .send({ code: 'WS_UNAUTHORIZED', message: error.message });
@@ -182,6 +249,16 @@ export async function buildApp(
       const { userId } = (request as AuthenticatedRequest).authenticatedUser;
       const session = connections.register(socket, userId);
       subscriptions.register(socket);
+      socketLogs.set(socket, request.log);
+      request.log.info(
+        {
+          event: 'websocket.connected',
+          domain: 'realtime',
+          outcome: 'success',
+          connectionId: session.connectionId,
+        },
+        'WebSocket connected.',
+      );
 
       send(socket, {
         version: protocolVersion,
@@ -195,132 +272,115 @@ export async function buildApp(
       // 같은 연결의 join → 조회/작성 순서가 네트워크 요청 중에도 뒤바뀌지 않게 한다.
       socket.on('message', (raw: RawData) => {
         messageQueue = messageQueue
-          .then(async () => {
-            const command = parseClientCommand(raw.toString());
+          .then(() =>
+            withLogContext(gatewayContext(request), async () => {
+              const command = parseClientCommand(raw.toString());
 
-            if (bus && !bus.ready()) {
-              send(
-                socket,
-                commandError(
-                  'WS_REALTIME_UNAVAILABLE',
-                  'Reconnect and reload board state.',
-                  command.requestId,
-                ),
-              );
-              return;
-            }
-
-            if (command.type === 'board.join') {
-              // 인가 요청은 영속 참여를 기록하므로 Room 용량부터 확인한다.
-              if (!subscriptions.canJoin(socket, command.payload.boardId)) {
+              if (bus && !bus.ready()) {
                 send(
                   socket,
                   commandError(
-                    'WS_ROOM_LIMIT_REACHED',
-                    'The connection has reached its board subscription limit.',
+                    'WS_REALTIME_UNAVAILABLE',
+                    'Reconnect and reload board state.',
                     command.requestId,
                   ),
                 );
                 return;
               }
 
-              const ticket = subscriptions.beginJoin(command.payload.boardId);
-              let allowed: boolean;
-              try {
-                allowed = await boardAccessAuthorizer.canJoin({
-                  userId,
-                  boardId: command.payload.boardId,
-                });
-              } catch (error) {
-                request.log.error({ err: error }, 'board authorization failed');
-                send(
-                  socket,
-                  commandError(
-                    'WS_BOARD_AUTHORIZATION_UNAVAILABLE',
-                    'Board authorization is temporarily unavailable.',
-                    command.requestId,
-                  ),
-                );
-                return;
-              } finally {
-                subscriptions.endJoin(command.payload.boardId, ticket);
-              }
+              if (command.type === 'board.join') {
+                // 인가 요청은 영속 참여를 기록하므로 Room 용량부터 확인한다.
+                if (!subscriptions.canJoin(socket, command.payload.boardId)) {
+                  send(
+                    socket,
+                    commandError(
+                      'WS_ROOM_LIMIT_REACHED',
+                      'The connection has reached its board subscription limit.',
+                      command.requestId,
+                    ),
+                  );
+                  return;
+                }
 
-              if (!ticket.valid) {
-                send(
-                  socket,
-                  commandError(
-                    'WS_BOARD_JOIN_FORBIDDEN',
-                    'The board closed during authorization.',
-                    command.requestId,
-                  ),
-                );
-                return;
-              }
-              if (!allowed) {
-                send(
-                  socket,
-                  commandError(
-                    'WS_BOARD_JOIN_FORBIDDEN',
-                    'The user cannot join this board.',
-                    command.requestId,
-                  ),
-                );
-                return;
-              }
+                const ticket = subscriptions.beginJoin(command.payload.boardId);
+                let allowed: boolean;
+                try {
+                  allowed = await boardAccessAuthorizer.canJoin({
+                    userId,
+                    boardId: command.payload.boardId,
+                  });
+                } catch (error) {
+                  request.log.error(
+                    {
+                      event: 'websocket.authorization.failed',
+                      domain: 'realtime',
+                      outcome: 'failure',
+                      connectionId: session.connectionId,
+                      error: safeError(
+                        error,
+                        'WS_BOARD_AUTHORIZATION_UNAVAILABLE',
+                        'Board authorization failed.',
+                      ),
+                    },
+                    'Board authorization failed.',
+                  );
+                  send(
+                    socket,
+                    commandError(
+                      'WS_BOARD_AUTHORIZATION_UNAVAILABLE',
+                      'Board authorization is temporarily unavailable.',
+                      command.requestId,
+                    ),
+                  );
+                  return;
+                } finally {
+                  subscriptions.endJoin(command.payload.boardId, ticket);
+                }
 
-              // 인가 중 연결이 끊겼다면 Room을 다시 만들지 않는다. 다른 연결의 영속 참여는 유지한다.
-              if (socket.readyState !== WebSocket.OPEN) return;
-              const result = subscriptions.join(
-                socket,
-                command.payload.boardId,
-              );
-              if (result === 'room-limit-reached') {
-                send(
+                if (!ticket.valid) {
+                  send(
+                    socket,
+                    commandError(
+                      'WS_BOARD_JOIN_FORBIDDEN',
+                      'The board closed during authorization.',
+                      command.requestId,
+                    ),
+                  );
+                  return;
+                }
+                if (!allowed) {
+                  send(
+                    socket,
+                    commandError(
+                      'WS_BOARD_JOIN_FORBIDDEN',
+                      'The user cannot join this board.',
+                      command.requestId,
+                    ),
+                  );
+                  return;
+                }
+
+                // 인가 중 연결이 끊겼다면 Room을 다시 만들지 않는다. 다른 연결의 영속 참여는 유지한다.
+                if (socket.readyState !== WebSocket.OPEN) return;
+                const result = subscriptions.join(
                   socket,
-                  commandError(
-                    'WS_ROOM_LIMIT_REACHED',
-                    'The connection has reached its board subscription limit.',
-                    command.requestId,
-                  ),
+                  command.payload.boardId,
                 );
-                return;
-              }
-            } else if (command.type === 'board.leave') {
-              subscriptions.leave(socket, command.payload.boardId);
-            } else {
-              // room 참여 전에 영속 데이터 조회나 작성을 수행하지 않는다.
-              if (
-                !subscriptions
-                  .roomsForSocket(socket)
-                  .has(command.payload.boardId)
-              ) {
-                send(
-                  socket,
-                  commandError(
-                    'WS_BOARD_NOT_JOINED',
-                    'Join the board first.',
-                    command.requestId,
-                  ),
-                );
-                return;
-              }
-              try {
-                const result =
-                  command.type === 'post.get'
-                    ? await postClient.detail(command.payload.boardId)
-                    : command.type === 'comment.list'
-                      ? await postClient.comments(
-                          command.payload.boardId,
-                          command.payload.cursor,
-                          command.payload.limit,
-                        )
-                      : await postClient.createComment(
-                          command.payload.boardId,
-                          userId,
-                          command.payload.content!,
-                          command.payload.mutationId!,
-                        );
+                if (result === 'room-limit-reached') {
+                  send(
+                    socket,
+                    commandError(
+                      'WS_ROOM_LIMIT_REACHED',
+                      'The connection has reached its board subscription limit.',
+                      command.requestId,
+                    ),
+                  );
+                  return;
+                }
+              } else if (command.type === 'board.leave') {
+                subscriptions.leave(socket, command.payload.boardId);
+              } else {
+                // room 참여 전에 영속 데이터 조회나 작성을 수행하지 않는다.
                 if (
                   !subscriptions
                     .roomsForSocket(socket)
@@ -330,47 +390,108 @@ export async function buildApp(
                     socket,
                     commandError(
                       'WS_BOARD_NOT_JOINED',
-                      'The board subscription ended.',
+                      'Join the board first.',
                       command.requestId,
                     ),
                   );
                   return;
                 }
-                send(socket, {
-                  version: protocolVersion,
-                  type: 'command.result',
-                  requestId: command.requestId,
-                  result,
-                  timestamp: new Date().toISOString(),
-                });
-              } catch (error) {
-                const code =
-                  error instanceof PostServiceError && error.status < 500
-                    ? 'WS_POST_REJECTED'
-                    : 'WS_POST_UNAVAILABLE';
-                send(
-                  socket,
-                  commandError(
-                    code,
+                try {
+                  const result =
+                    command.type === 'post.get'
+                      ? await postClient.detail(command.payload.boardId)
+                      : command.type === 'comment.list'
+                        ? await postClient.comments(
+                            command.payload.boardId,
+                            command.payload.cursor,
+                            command.payload.limit,
+                          )
+                        : await postClient.createComment(
+                            command.payload.boardId,
+                            userId,
+                            command.payload.content!,
+                            command.payload.mutationId!,
+                          );
+                  if (
+                    !subscriptions
+                      .roomsForSocket(socket)
+                      .has(command.payload.boardId)
+                  ) {
+                    send(
+                      socket,
+                      commandError(
+                        'WS_BOARD_NOT_JOINED',
+                        'The board subscription ended.',
+                        command.requestId,
+                      ),
+                    );
+                    return;
+                  }
+                  send(socket, {
+                    version: protocolVersion,
+                    type: 'command.result',
+                    requestId: command.requestId,
+                    result,
+                    timestamp: new Date().toISOString(),
+                  });
+                } catch (error) {
+                  request.log.warn(
+                    {
+                      event: 'websocket.command.failed',
+                      domain: 'realtime',
+                      outcome: 'failure',
+                      connectionId: session.connectionId,
+                      error: safeError(
+                        error,
+                        error instanceof PostServiceError && error.status < 500
+                          ? 'WS_POST_REJECTED'
+                          : 'WS_POST_UNAVAILABLE',
+                        'Post operation failed.',
+                      ),
+                    },
+                    'Post operation failed.',
+                  );
+                  const code =
                     error instanceof PostServiceError && error.status < 500
-                      ? error.message
-                      : 'Post Service is temporarily unavailable.',
-                    command.requestId,
-                  ),
-                );
+                      ? 'WS_POST_REJECTED'
+                      : 'WS_POST_UNAVAILABLE';
+                  send(
+                    socket,
+                    commandError(
+                      code,
+                      error instanceof PostServiceError && error.status < 500
+                        ? error.message
+                        : 'Post Service is temporarily unavailable.',
+                      command.requestId,
+                    ),
+                  );
+                }
+                return;
               }
-              return;
-            }
 
-            send(socket, {
-              version: protocolVersion,
-              type: 'command.ack',
-              requestId: command.requestId,
-              timestamp: new Date().toISOString(),
-            });
-          })
+              send(socket, {
+                version: protocolVersion,
+                type: 'command.ack',
+                requestId: command.requestId,
+                timestamp: new Date().toISOString(),
+              });
+            }),
+          )
           .catch((error: unknown) => {
             if (error instanceof ProtocolError) {
+              request.log.warn(
+                {
+                  event: 'websocket.command.rejected',
+                  domain: 'realtime',
+                  outcome: 'failure',
+                  error: safeError(
+                    error,
+                    error.code,
+                    'Invalid WebSocket command.',
+                  ),
+                },
+                'Invalid WebSocket command.',
+              );
               send(
                 socket,
                 commandError(error.code, error.message, error.requestId),
@@ -378,7 +499,20 @@ export async function buildApp(
               return;
             }
 
-            request.log.error({ err: error }, 'websocket command failed');
+            request.log.error(
+              {
+                event: 'websocket.command.failed',
+                domain: 'realtime',
+                outcome: 'failure',
+                connectionId: session.connectionId,
+                error: safeError(
+                  error,
+                  'WS_INTERNAL_ERROR',
+                  'WebSocket command failed.',
+                ),
+              },
+              'WebSocket command failed.',
+            );
             send(
               socket,
               commandError(
@@ -389,7 +523,33 @@ export async function buildApp(
           });
       });
 
-      socket.once('close', () => {
+      socket.on('error', (error) => {
+        request.log.warn(
+          {
+            event: 'websocket.connection.failed',
+            domain: 'realtime',
+            outcome: 'failure',
+            connectionId: session.connectionId,
+            error: safeError(
+              error,
+              'WS_CONNECTION_ERROR',
+              'WebSocket transport failed.',
+            ),
+          },
+          'WebSocket transport failed.',
+        );
+      });
+      socket.once('close', (closeCode) => {
+        request.log.info(
+          {
+            event: 'websocket.disconnected',
+            domain: 'realtime',
+            outcome: 'success',
+            connectionId: session.connectionId,
+            closeCode,
+          },
+          'WebSocket disconnected.',
+        );
         subscriptions.remove(socket);
         connections.remove(socket);
       });

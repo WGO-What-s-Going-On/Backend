@@ -1,11 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { createLogger } from '../../observability/logging.js';
+import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import { MediaService } from './media.service.js';
 
 @Injectable()
 export class MediaCleanupWorker {
-  private readonly logger = new Logger(MediaCleanupWorker.name);
+  private readonly logger = createLogger('post-service', 'media');
   private timer?: NodeJS.Timeout;
   private running: Promise<void> | undefined;
   private stopped = false;
@@ -18,8 +19,15 @@ export class MediaCleanupWorker {
   onModuleInit() {
     if (!this.media.storage.config.enabled) return;
     this.timer = setInterval(() => {
-      void this.runOnce().catch(() =>
-        this.logger.warn('Media cleanup failed; retrying next interval'),
+      void this.runOnce().catch((error) =>
+        this.logger.failure(
+          'media.cleanup_poll',
+          error,
+          'MEDIA_CLEANUP_POLL_FAILED',
+          'Media cleanup scan failed',
+          {},
+          true,
+        ),
       );
     }, this.media.storage.config.cleanupMs);
     this.timer.unref();
@@ -99,13 +107,33 @@ export class MediaCleanupWorker {
       try {
         // GCS 삭제는 멱등하다. 실패 시 기록을 남겨 재시도하고 여러 worker도 같은 키만 지운다.
         await this.media.storage.remove(row);
-        await records.deleteOne({ mediaId: row.mediaId, status: 'DELETING' });
-      } catch {
+        const deleted = await records.deleteOne({
+          mediaId: row.mediaId,
+          status: 'DELETING',
+        });
+        if (deleted.deletedCount === 1)
+          this.logger.success(
+            'media.deleted',
+            'Media object and record deleted',
+            { mediaId: row.mediaId, postId: row.postId },
+          );
+        else
+          this.logger.skipped('media.deleted', 'ALREADY_REMOVED', {
+            mediaId: row.mediaId,
+          });
+      } catch (error) {
         await records.updateOne(
           { mediaId: row.mediaId, status: 'DELETING' },
           { $set: { cleanupAt: new Date(Date.now() + 300000) } },
         );
-        this.logger.warn('Media object cleanup failed; retained for retry');
+        this.logger.failure(
+          'media.cleanup',
+          error,
+          'MEDIA_CLEANUP_FAILED',
+          'Media cleanup failed and scheduled for retry',
+          { mediaId: row.mediaId, postId: row.postId },
+          true,
+        );
       }
     }
   }

@@ -1,9 +1,5 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { createLogger } from '../../observability/logging.js';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import { MongooseVote } from './mongoose-vote.js';
@@ -11,7 +7,7 @@ import { eventWorkerConfig } from './worker-config.js';
 
 @Injectable()
 export class VoteWorker implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(VoteWorker.name);
+  private readonly logger = createLogger('post-service', 'vote');
   private timer?: NodeJS.Timeout;
   private running: Promise<void> | undefined;
   private stopped = false;
@@ -24,7 +20,14 @@ export class VoteWorker implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     const poll = () =>
       void this.runOnce().catch((error) =>
-        this.logger.warn(`Vote selection failed: ${String(error)}`),
+        this.logger.failure(
+          'vote.poll',
+          error,
+          'VOTE_POLL_FAILED',
+          'Vote scan failed',
+          {},
+          true,
+        ),
       );
     this.timer = setInterval(poll, eventWorkerConfig().expirationPollMs);
     this.timer.unref();
@@ -60,7 +63,14 @@ export class VoteWorker implements OnModuleInit, OnModuleDestroy {
       try {
         await this.votes.selectDue(post.postId);
       } catch (error) {
-        this.logger.warn(`Vote ${post.postId}: ${String(error)}`);
+        this.logger.failure(
+          'vote.selection',
+          error,
+          'VOTE_SELECTION_FAILED',
+          'Vote candidate selection failed',
+          { postId: post.postId },
+          true,
+        );
       }
     }
   }

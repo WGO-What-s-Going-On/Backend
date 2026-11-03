@@ -1,3 +1,4 @@
+import { safeError } from './observability/logging.js';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -88,7 +89,19 @@ export async function registerDocs(
         : JSON.parse(await readFile(config.docs.file, 'utf8'));
       return reply.header('Cache-Control', 'no-store').send(document);
     } catch (error) {
-      request.log.warn({ err: error }, 'Gateway OpenAPI artifact unavailable');
+      request.log.warn(
+        {
+          event: 'documentation.load.failed',
+          domain: 'gateway',
+          outcome: 'failure',
+          error: safeError(
+            error,
+            'OPENAPI_UNAVAILABLE',
+            'Gateway OpenAPI artifact unavailable.',
+          ),
+        },
+        'Gateway OpenAPI artifact unavailable',
+      );
       return reply.code(503).send({
         code: 'GATEWAY_DOCS_UNAVAILABLE',
         message: config.docs.live

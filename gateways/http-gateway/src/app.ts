@@ -1,3 +1,9 @@
+import {
+  loggingOptions,
+  registerRequestLogging,
+  requestFailure,
+  gatewayContext,
+} from './logging.js';
 import { randomUUID } from 'node:crypto';
 
 import cors from '@fastify/cors';
@@ -50,23 +56,28 @@ export async function buildApp(
   const logger =
     options.logger === false
       ? false
-      : config.logPretty
-        ? {
-            level: config.logLevel,
-            transport: {
-              target: 'pino-pretty',
-              options: { colorize: true, translateTime: 'SYS:standard' },
-            },
-          }
-        : { level: config.logLevel };
+      : {
+          ...loggingOptions('http-gateway', config.logLevel),
+          ...(config.logPretty
+            ? {
+                transport: {
+                  target: 'pino-pretty',
+                  options: { colorize: true, translateTime: 'SYS:standard' },
+                },
+              }
+            : {}),
+        };
 
   const app = Fastify({
     logger,
+    disableRequestLogging: true,
     bodyLimit: config.bodyLimitBytes,
     trustProxy: false,
     requestIdHeader: false,
     genReqId: () => randomUUID(),
   });
+
+  registerRequestLogging(app);
 
   app.addHook('onSend', async (request, reply) => {
     reply.header('x-request-id', request.id);
@@ -172,7 +183,12 @@ export async function buildApp(
       const statusCode =
         error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
 
-      request.log.error({ err: error, statusCode }, 'gateway request failed');
+      requestFailure(
+        request,
+        errorCode(statusCode, error.code),
+        'Gateway request failed.',
+        error,
+      );
 
       return reply.code(statusCode).send({
         code: errorCode(statusCode, error.code),
@@ -205,6 +221,7 @@ export async function buildApp(
         rewriteRequestHeaders: (request, headers) => ({
           ...headers,
           'x-request-id': request.id,
+          'x-correlation-id': gatewayContext(request).correlationId,
         }),
         onError: (reply, { error }) => {
           const timeoutCodes = new Set([
@@ -218,9 +235,11 @@ export async function buildApp(
             ? 504
             : 502;
 
-          reply.request.log.error(
-            { err: error, upstream: route.service },
-            'upstream request failed',
+          requestFailure(
+            reply.request,
+            statusCode === 504 ? 'GATEWAY_TIMEOUT' : 'GATEWAY_BAD_UPSTREAM',
+            'Upstream request failed.',
+            error,
           );
           reply.code(statusCode).send({
             code:

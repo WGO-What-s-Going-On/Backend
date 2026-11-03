@@ -7,6 +7,8 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
 import { UserProfiles } from '../src/post/infrastructure/user-profiles.js';
 import { LOCATION_AUTHORIZATION } from '../src/post/application/ports.js';
+import { ExpirationWorker } from '../src/post/infrastructure/expiration.worker.js';
+import { VoteWorker } from '../src/post/infrastructure/vote.worker.js';
 import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
 import { SemanticWorker } from '../src/post/semantic/worker.js';
 import { MongooseVote } from '../src/post/infrastructure/mongoose-vote.js';
@@ -42,6 +44,11 @@ suite('Comment edit HTTP and Mongo transactions', () => {
       .useValue({ names: async () => new Map([[777, 'author']]) })
       .overrideProvider(OutboxWorker)
       .useValue({ wake() {} })
+      // Timer-driven writes must not race with this suite's fault injection.
+      .overrideProvider(ExpirationWorker)
+      .useValue({})
+      .overrideProvider(VoteWorker)
+      .useValue({})
       .overrideProvider(SemanticWorker)
       .useValue({})
       .compile();
@@ -236,24 +243,44 @@ suite('Comment edit HTTP and Mongo transactions', () => {
   });
   it('rolls the edit back if the outbox cannot be written', async () => {
     const f = await fixture();
-    const fail = vi
-      .spyOn(outbox, 'create')
-      .mockRejectedValueOnce(new Error('outbox unavailable'));
-    await request(app.getHttpServer())
-      .patch(f.path)
-      .set(headers)
-      .send({ content: 'revised' })
-      .expect(500);
-    fail.mockRestore();
-    expect(
-      (await comments.findOne({ commentId: f.commentId }).lean())?.content,
-    ).toBe('original');
-    expect(
-      await outbox.countDocuments({
-        aggregateId: f.postId,
-        eventType: 'PostCommentUpdated',
-      }),
-    ).toBe(0);
+    const create = outbox.create.bind(outbox);
+    let rejectedWrites = 0;
+    const fail = vi.spyOn(outbox, 'create').mockImplementation((...args) => {
+      const documents = Array.isArray(args[0]) ? args[0] : [args[0]];
+      if (
+        documents.some(
+          (document) =>
+            document.aggregateId === f.postId &&
+            document.eventType === 'PostCommentUpdated',
+        )
+      ) {
+        rejectedWrites++;
+        return Promise.reject(new Error('outbox unavailable'));
+      }
+      return create(...args);
+    });
+    try {
+      // An unrelated write must not consume the edit's injected failure.
+      await fixture();
+      expect(rejectedWrites).toBe(0);
+      await request(app.getHttpServer())
+        .patch(f.path)
+        .set(headers)
+        .send({ content: 'revised' })
+        .expect(500);
+      expect(rejectedWrites).toBeGreaterThan(0);
+      expect(
+        (await comments.findOne({ commentId: f.commentId }).lean())?.content,
+      ).toBe('original');
+      expect(
+        await outbox.countDocuments({
+          aggregateId: f.postId,
+          eventType: 'PostCommentUpdated',
+        }),
+      ).toBe(0);
+    } finally {
+      fail.mockRestore();
+    }
   });
   it('rejects an old moderation decision and applies only the reviewed version', async () => {
     const f = await fixture();

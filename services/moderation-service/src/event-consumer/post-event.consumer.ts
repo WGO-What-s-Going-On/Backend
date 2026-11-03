@@ -1,7 +1,11 @@
 import {
+  createLogger,
+  requestContext,
+  withLogContext,
+} from '../observability/logging.js';
+import {
   Inject,
   Injectable,
-  Logger,
   OnModuleDestroy,
   OnModuleInit,
   Optional,
@@ -21,7 +25,7 @@ type Entry = { id: string; message: Record<string, string> };
 
 @Injectable()
 export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(PostEventConsumer.name);
+  private readonly logger = createLogger('moderation-service', 'events');
   private readonly consumer = `moderation-${randomUUID()}`;
   private readonly stream: string;
   private readonly group: string;
@@ -51,12 +55,14 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
         commandOptions: { timeout: 3000 },
         socket: { connectTimeout: 2000 },
       });
-    this.redis.on('error', () =>
-      this.logger.warn(
-        JSON.stringify({
-          event: 'moderation_redis_error',
-          service: 'moderation-service',
-        }),
+    this.redis.on('error', (error) =>
+      this.logger.failure(
+        'moderation_redis_error',
+        error,
+        'MODERATION_REDIS_ERROR',
+        'moderation redis error',
+        {},
+        true,
       ),
     );
     this.stopped = !url && !redis;
@@ -91,13 +97,45 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
   }
 
   async process(entry: Entry): Promise<void> {
+    let correlationId: unknown;
+    try {
+      const envelope: unknown = JSON.parse(entry.message.data ?? '{}');
+      if (
+        envelope &&
+        typeof envelope === 'object' &&
+        'correlationId' in envelope
+      )
+        correlationId = envelope.correlationId;
+    } catch {
+      /* The domain parser below classifies malformed deliveries. */
+    }
+    return withLogContext(
+      requestContext({
+        'x-correlation-id': correlationId ?? entry.message.eventId,
+      }),
+      () => this.processEntry(entry),
+    );
+  }
+  private async processEntry(entry: Entry): Promise<void> {
     try {
       const event = parsePostEvent(entry.message);
       if (event) {
         const owner = randomUUID();
         const claim = await this.claim(event.eventId, owner);
         // 처리 중인 원본이 실패할 수 있으므로 완료 전 중복은 pending으로 남긴다.
-        if (claim === 'busy') return;
+        if (claim === 'busy') {
+          this.logger.skipped('moderation_event_busy', 'LEASE_UNAVAILABLE', {
+            eventId: event.eventId,
+            streamId: entry.id,
+          });
+          return;
+        }
+        if (claim === 'done')
+          this.logger.skipped(
+            'moderation_event_duplicate',
+            'ALREADY_PROCESSED',
+            { eventId: event.eventId, streamId: entry.id },
+          );
         if (claim === 'acquired') {
           let renewal = Promise.resolve();
           const heartbeat = setInterval(() => {
@@ -111,32 +149,81 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
                   },
                 );
               })
-              .catch(() => undefined);
+              .catch((error) =>
+                this.logger.failure(
+                  'moderation_lease_renewal_failed',
+                  error,
+                  'LEASE_RENEWAL_FAILED',
+                  'Moderation processing lease renewal failed',
+                  { eventId: event.eventId, streamId: entry.id },
+                  true,
+                ),
+              );
           }, 10_000);
           heartbeat.unref();
           try {
             await this.processor.process(event);
-            if (!(await this.complete(event.eventId, owner))) return;
+            if (!(await this.complete(event.eventId, owner))) {
+              this.logger.skipped('moderation_event_lease_lost', 'LEASE_LOST', {
+                eventId: event.eventId,
+              });
+              return;
+            }
+            this.logger.success(
+              'moderation_event_processed',
+              'Moderation event processing committed',
+              {
+                eventId: event.eventId,
+                eventType: event.eventType,
+                streamId: entry.id,
+              },
+            );
           } catch (error) {
-            if (!(await this.release(event.eventId, owner))) return;
+            if (!(await this.release(event.eventId, owner))) {
+              this.logger.failure(
+                'moderation_event_lease_lost',
+                error,
+                'LEASE_LOST',
+                'Moderation processing failed after ownership changed',
+                { eventId: event.eventId, streamId: entry.id },
+                true,
+              );
+              return;
+            }
             throw error;
           } finally {
             clearInterval(heartbeat);
             await renewal;
           }
         }
-      }
+      } else
+        this.logger.skipped('moderation_event_ignored', 'UNSUPPORTED_EVENT', {
+          streamId: entry.id,
+          eventId: entry.message.eventId,
+        });
       try {
         await this.redis.xAck(this.stream, this.group, entry.id);
-      } catch {
+        this.logger.success(
+          'moderation_event_acknowledged',
+          'Moderation delivery acknowledged',
+          {
+            streamId: entry.id,
+            stream: this.stream,
+            consumerGroup: this.group,
+          },
+        );
+      } catch (error) {
         // A committed result remains success even when transport ACK fails.
-        this.logger.warn(
-          JSON.stringify({
-            event: 'moderation_ack_failed',
-            service: 'moderation-service',
+        this.logger.failure(
+          'moderation_ack_failed',
+          error,
+          'MODERATION_ACK_FAILED',
+          'moderation ack failed',
+          {
             streamId: entry.id,
             eventId: entry.message.eventId,
-          }),
+          },
+          true,
         );
       }
     } catch (error) {
@@ -148,19 +235,22 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
         1,
       );
       const attempts = pending[0]?.deliveriesCounter ?? 1;
-      this.logger.warn(
-        JSON.stringify({
-          event: 'moderation_event_retry',
-          service: 'moderation-service',
+      const invalid =
+        error instanceof Error && error.message.startsWith('Invalid');
+      const retryable = !invalid && attempts < 5;
+      this.logger.failure(
+        'moderation_event_failed',
+        error,
+        invalid ? 'INVALID_EVENT' : 'MODERATION_PROCESSING_FAILED',
+        'Moderation event processing failed',
+        {
           streamId: entry.id,
           eventId: entry.message.eventId,
-          attempts,
-        }),
+          attempt: attempts,
+        },
+        retryable,
       );
-      if (
-        (error instanceof Error && error.message.startsWith('Invalid')) ||
-        attempts >= 5
-      ) {
+      if (invalid || attempts >= 5) {
         await this.redis.xAdd(this.deadStream, '*', {
           streamId: entry.id,
           eventId: entry.message.eventId ?? '',
@@ -168,14 +258,14 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
           data: entry.message.data ?? '',
         });
         await this.redis.xAck(this.stream, this.group, entry.id);
-        this.logger.warn(
-          JSON.stringify({
-            event: 'moderation_event_dead_lettered',
-            service: 'moderation-service',
+        this.logger.success(
+          'moderation_event_dead_lettered',
+          'moderation event dead lettered',
+          {
             streamId: entry.id,
             eventId: entry.message.eventId,
-            attempts,
-          }),
+            attempt: attempts,
+          },
         );
       }
     }
@@ -227,11 +317,13 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
         await this.pollOnce();
       } catch (error) {
         if (!this.stopped) {
-          this.logger.warn(
-            JSON.stringify({
-              event: 'moderation_consumer_poll_failed',
-              service: 'moderation-service',
-            }),
+          this.logger.failure(
+            'moderation_consumer_poll_failed',
+            error,
+            'MODERATION_CONSUMER_POLL_FAILED',
+            'moderation consumer poll failed',
+            {},
+            true,
           );
           await new Promise((resolve) => setTimeout(resolve, 500));
         }

@@ -1,4 +1,5 @@
-import { Inject, Injectable, Optional, Logger } from '@nestjs/common';
+import { createLogger } from '../observability/logging.js';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 
@@ -12,7 +13,7 @@ export const OPENAI_CLIENT = Symbol('OPENAI_CLIENT');
 
 @Injectable()
 export class OpenAiModerationAdapter implements ModerationProvider {
-  private readonly logger = new Logger(OpenAiModerationAdapter.name);
+  private readonly logger = createLogger('moderation-service', 'content');
   private readonly client: OpenAI | undefined;
 
   constructor(
@@ -72,12 +73,12 @@ export class OpenAiModerationAdapter implements ModerationProvider {
           'Invalid OpenAI moderation response',
           false,
         );
-      this.logger.log(
-        JSON.stringify({
-          event: 'openai_moderation_completed',
-          service: 'moderation-service',
+      this.logger.success(
+        'openai_moderation_completed',
+        'openai moderation completed',
+        {
           durationMs: Math.round(performance.now() - started),
-        }),
+        },
       );
       return {
         flagged: result.flagged,
@@ -89,12 +90,14 @@ export class OpenAiModerationAdapter implements ModerationProvider {
         model: response.model,
       };
     } catch (error) {
-      this.logger.warn(
-        JSON.stringify({
-          event: 'openai_moderation_failed',
-          service: 'moderation-service',
+      this.logger.failure(
+        'openai_moderation_failed',
+        error,
+        'OPENAI_MODERATION_FAILED',
+        'openai moderation failed',
+        {
           durationMs: Math.round(performance.now() - started),
-        }),
+        },
       );
       if (error instanceof ModerationProviderError) throw error;
       const candidate = (error as { status?: unknown }).status;
