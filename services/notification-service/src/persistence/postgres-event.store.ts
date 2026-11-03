@@ -30,6 +30,9 @@ interface Preferences {
   replies: boolean;
   reactions: boolean;
   lifecycle: boolean;
+  rewards: boolean;
+  votes: boolean;
+  moderation: boolean;
 }
 interface ProcessedEvent {
   recipient: string | null;
@@ -42,7 +45,8 @@ interface ProcessedEvent {
   };
 }
 export interface Delivery {
-  postId: string;
+  postId: string | null;
+  scopeId?: string;
   key: string;
   status: 'PENDING' | 'SENDING' | 'SENT' | 'CANCELED' | 'FAILED';
   message: PushMessage;
@@ -52,7 +56,8 @@ export interface Delivery {
   attempts: number;
 }
 interface DeliveryRow {
-  post_id: string;
+  post_id: string | null;
+  scope_id: string;
   key: string;
   status: Delivery['status'];
   message: PushMessage;
@@ -63,6 +68,7 @@ interface DeliveryRow {
 }
 const deliveryFromRow = (row: DeliveryRow): Delivery => ({
   postId: row.post_id,
+  scopeId: row.scope_id,
   key: row.key,
   status: row.status,
   message: row.message,
@@ -122,6 +128,9 @@ export class PostgresEventStore {
       replies: true,
       reactions: true,
       lifecycle: true,
+      rewards: true,
+      votes: true,
+      moderation: true,
       ...row?.settings,
     };
   }
@@ -159,14 +168,25 @@ export class PostgresEventStore {
   }
   async allowed(
     userId: string,
-    postId: string,
+    postId: string | null,
     type: string,
     client: Pool | PoolClient = this.database.pool,
   ) {
     const preferences = await this.preferences(userId, client);
-    const board = await this.boardPreference(userId, postId, client);
-    const key =
-      type === 'PostCommentCreated' || type === 'POST_COMMENTED'
+    const board = postId
+      ? await this.boardPreference(userId, postId, client)
+      : { enabled: true };
+    const key: keyof Preferences = [
+      'nearby',
+      'replies',
+      'reactions',
+      'lifecycle',
+      'rewards',
+      'votes',
+      'moderation',
+    ].includes(type)
+      ? (type as keyof Preferences)
+      : type === 'PostCommentCreated' || type === 'POST_COMMENTED'
         ? 'replies'
         : type === 'PostReactionCreated' || type === 'POST_REACTED'
           ? 'reactions'
@@ -401,6 +421,11 @@ export class PostgresEventStore {
           },
         ],
       );
+      await client.query(
+        `INSERT INTO notification_event_inbox(source_stream,event_id,details) VALUES('post:events',$1,$2)
+        ON CONFLICT DO NOTHING`,
+        [event.eventId, { eventType: event.eventType }],
+      );
       return recipient;
     });
   }
@@ -421,11 +446,19 @@ export class PostgresEventStore {
     now = new Date(),
   ): Promise<Delivery | undefined> {
     return this.database.transaction(async (client) => {
-      const meta = await this.lockPost(client, delivery.postId);
+      const meta = delivery.postId
+        ? await this.lockPost(client, delivery.postId)
+        : undefined;
+      const scopeId = delivery.scopeId ?? `post:${delivery.postId}`;
+      if (!meta)
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+          [scopeId],
+        );
       const current = (
         await client.query<DeliveryRow>(
-          'SELECT * FROM notification_deliveries WHERE post_id=$1 AND key=$2 FOR UPDATE',
-          [delivery.postId, delivery.key],
+          'SELECT * FROM notification_deliveries WHERE scope_id=$1 AND key=$2 FOR UPDATE',
+          [scopeId, delivery.key],
         )
       ).rows[0];
       if (
@@ -446,22 +479,22 @@ export class PostgresEventStore {
           ).rows[0]
         : undefined;
       const cancel =
-        meta.closed ||
+        (meta?.closed && current.message.data?.allowTerminal !== 'true') ||
         !notification ||
         notification.count <= 0 ||
         !!notification.deleted_at ||
         Number(notification.expires_at) <= now.getTime() / 1000;
       if (cancel) {
         await client.query(
-          "UPDATE notification_deliveries SET status='CANCELED',lease_id=NULL,lease_until=NULL WHERE post_id=$1 AND key=$2",
-          [delivery.postId, delivery.key],
+          "UPDATE notification_deliveries SET status='CANCELED',lease_id=NULL,lease_until=NULL WHERE scope_id=$1 AND key=$2",
+          [scopeId, delivery.key],
         );
         return undefined;
       }
       const result = await client.query<DeliveryRow>(
         `UPDATE notification_deliveries SET status='SENDING',lease_id=$3,lease_until=$4,attempts=attempts+1
-        WHERE post_id=$1 AND key=$2 RETURNING *`,
-        [delivery.postId, delivery.key, randomUUID(), now.getTime() + 60000],
+        WHERE scope_id=$1 AND key=$2 RETURNING *`,
+        [scopeId, delivery.key, randomUUID(), now.getTime() + 60000],
       );
       const row = result.rows[0];
       if (!row) throw new BusyDeliveryError();
@@ -480,9 +513,9 @@ export class PostgresEventStore {
     };
     const result = await this.database.pool.query(
       `UPDATE notification_deliveries SET status=$4,message=$5,next_attempt_at=$6,lease_id=NULL,lease_until=NULL
-      WHERE post_id=$1 AND key=$2 AND status='SENDING' AND lease_id=$3`,
+      WHERE scope_id=$1 AND key=$2 AND status='SENDING' AND lease_id=$3`,
       [
-        delivery.postId,
+        delivery.scopeId ?? `post:${delivery.postId}`,
         delivery.key,
         delivery.leaseId ?? null,
         status,
