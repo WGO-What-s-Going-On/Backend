@@ -207,8 +207,7 @@ describe('extended Post facts with PostgreSQL', () => {
     await store.apply(update(6, null));
     await store.apply(reply('deleted'));
     expect(await items()).toHaveLength(1);
-    const pending = (await store.deliveries(postId))[0]!;
-    expect(await store.acquire(pending)).toBeUndefined();
+    expect(await store.deliveries(postId)).toHaveLength(0);
   });
   it('fails closed on unavailable block authority and checks again before FCM', async () => {
     const allowed = vi.fn().mockResolvedValue(false),

@@ -95,7 +95,7 @@ Post·Map·Notification·Moderation은 서비스 서명과 JWT의 `userId`가 �
 차단은 User가 관계를 소유한다. 프론트는 차단 목록으로 표시할 작성자 콘텐츠를 숨긴다.
 이 API는 차단 대상의 서비스 전체 접근권을 박탈하는 제재 API가 아니다.
 신고 원본·이벤트 journal은 Redis `moderation:reports:v1:records` HASH, 복구 대상은 `moderation:reports:v1:pending` SET에 보관한다. 기존 `moderation:report:<hash>` 데이터는 보존하며 자동 이관하지 않는다. REPORT_CREATED/REPORT_WITHDRAWN은 기존 moderation:report-events로 발행한다. 자동으로 삭제·제재하지 않는다.
-신규 신고에는 대상 존재·상태 검증이 필수지만 최신 Post는 Moderation 호출자를 인증하지 못하므로 **신규 접수는 503으로 닫혀 있다**. [필요한 연동 계약](../../services/moderation-service/contracts/gateway-handoff.md)을 완료해야 운영 접수가 가능하다. 테스트 어댑터로 검증한 로컬 생성 성공과 구분한다.
+신규 신고는 Moderation 전용 ES256으로 Post의 읽기 전용 대상 검증을 통과해야 한다. [대상 검증 계약](../../services/moderation-service/contracts/reports.md)의 별도 키·URL이 미설정이면503이다. 접수·취소 알림은 본인 알림함에만 기록하고 검토 완료를 뜻하지 않는다. REVIEWED 관리자 명령/완료 생산자는 아직 없으므로 처리 결과 알림을 만들지 않는다. 실제 운영 키·GCP 연동 검증과 로컬 테스트는 구분한다.
 운영 Redis 영속성·백업·용량·보존 정책은 원본 데이터까지 포함해야 한다. 차단은 기존 User PostgreSQL 관계와 Outbox를 함께 커밋한다.
 
 작성자 종료 시 투표 결과를 확정하며 재개해도 이미 확정된 투표를 재시작하지 않는다.

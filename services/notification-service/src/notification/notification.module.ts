@@ -20,6 +20,7 @@ import { NotificationBlockChecker } from './block-checker.js';
 import { NotificationEventWriter } from '../persistence/notification-event.writer.js';
 import { UserEventHandler } from '../event-consumer/user-event.handler.js';
 import { NotificationStreamWorkers } from '../event-consumer/notification-stream.workers.js';
+import { ModerationEventHandler } from '../event-consumer/moderation-event.handler.js';
 
 @Module({
   controllers: [NotificationController, NotificationReadinessController],
@@ -49,6 +50,7 @@ import { NotificationStreamWorkers } from '../event-consumer/notification-stream
     NotificationBlockChecker,
     NotificationEventWriter,
     UserEventHandler,
+    ModerationEventHandler,
     NotificationStreamWorkers,
     PostEventHandler,
     PostEventConsumer,

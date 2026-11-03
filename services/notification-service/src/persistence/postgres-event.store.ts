@@ -2,6 +2,7 @@ import { Injectable, Optional } from '@nestjs/common';
 import { NotificationBlockChecker } from '../notification/block-checker.js';
 import { NotificationEventWriter } from './notification-event.writer.js';
 import { projectExtendedPost } from './extended-post.notifications.js';
+import { confirmedPostNotifications } from './confirmed-post.notifications.js';
 import type { Pool, PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import type { PostEvent } from '../event-consumer/post-event.js';
@@ -276,6 +277,7 @@ export class PostgresEventStore {
       ).rows[0];
       if (processed) return processed.recipient ?? undefined;
       const recipient = event.postAuthorId ?? meta.author_id ?? undefined;
+      const previousPost = { ...meta };
       const terminal =
         event.eventType === 'PostDeleted' || event.eventType === 'PostExpired';
       if (terminal) {
@@ -304,6 +306,13 @@ export class PostgresEventStore {
         meta,
         new NotificationEventWriter(this.database),
         allowedRecipients,
+        now,
+      );
+      await confirmedPostNotifications(
+        client,
+        event,
+        new NotificationEventWriter(this.database),
+        previousPost,
         now,
       );
       if (
@@ -538,9 +547,9 @@ export class PostgresEventStore {
           [scopeId, delivery.key],
         )
       ).rows[0];
+      if (!current || !['PENDING', 'SENDING'].includes(current.status))
+        return undefined;
       if (
-        !current ||
-        !['PENDING', 'SENDING'].includes(current.status) ||
         Number(current.next_attempt_at) > now.getTime() ||
         (current.status === 'SENDING' &&
           Number(current.lease_until) > now.getTime())
@@ -556,6 +565,9 @@ export class PostgresEventStore {
           ).rows[0]
         : undefined;
       const cancel =
+        (current.message.data?.type === 'BOARD_STALE' &&
+          Date.parse(current.message.data.scheduledCloseAt ?? '') <=
+            now.getTime()) ||
         ((meta?.closed || meta?.paused) &&
           current.message.data?.allowTerminal !== 'true') ||
         !notification ||

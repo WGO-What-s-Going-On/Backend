@@ -185,3 +185,56 @@ export function verifiedWsUser(
   verifyWsService(authorization);
   return validatedUser(userId);
 }
+
+export function verifiedModerationService(authorization: unknown): void {
+  try {
+    if (typeof authorization !== 'string') throw new Error();
+    const parts = /^Bearer (\S+)$/.exec(authorization)?.[1]?.split('.');
+    if (parts?.length !== 3) throw new Error();
+    const [h = '', p = '', s = ''] = parts,
+      header = JSON.parse(Buffer.from(h, 'base64url').toString()),
+      claims = JSON.parse(Buffer.from(p, 'base64url').toString());
+    const jwks = JSON.parse(process.env.POST_MODERATION_TRUSTED_JWKS ?? ''),
+      keys = jwks.keys?.filter(
+        (key: Record<string, unknown>) =>
+          key.kid === header.kid && key.iss === 'wgo-moderation-service',
+      );
+    const now = Math.floor(Date.now() / 1000),
+      key = keys?.[0];
+    if (
+      keys?.length !== 1 ||
+      !key ||
+      key.kty !== 'EC' ||
+      key.crv !== 'P-256' ||
+      key.alg !== 'ES256' ||
+      'd' in key ||
+      !header.kid ||
+      header.alg !== 'ES256' ||
+      header.typ !== 'wgo-service+jwt' ||
+      claims.iss !== 'wgo-moderation-service' ||
+      claims.sub !== 'moderation-service' ||
+      claims.aud !== 'wgo-post-service' ||
+      !Number.isInteger(claims.iat) ||
+      !Number.isInteger(claims.exp) ||
+      claims.iat < 0 ||
+      claims.iat > now + 5 ||
+      claims.exp <= now ||
+      claims.exp <= claims.iat ||
+      claims.exp - claims.iat > 30 ||
+      (claims.nbf !== undefined &&
+        (!Number.isInteger(claims.nbf) || claims.nbf > now)) ||
+      !verify(
+        'sha256',
+        Buffer.from(`${h}.${p}`),
+        {
+          key: createPublicKey({ key, format: 'jwk' }),
+          dsaEncoding: 'ieee-p1363',
+        },
+        Buffer.from(s, 'base64url'),
+      )
+    )
+      throw new Error();
+  } catch {
+    throw new UnauthorizedException('Invalid Moderation service identity');
+  }
+}

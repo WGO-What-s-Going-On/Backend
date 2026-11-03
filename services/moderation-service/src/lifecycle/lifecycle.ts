@@ -6,6 +6,7 @@ export type LifecycleEventType =
 
 export interface LifecycleProjection {
   postId: string;
+  postAuthorId?: string;
   state: LifecycleState;
   createdAt: string;
   lastMeaningfulActivityAt: string;
@@ -56,7 +57,13 @@ export interface LifecycleEvent {
   producer: 'moderation-service';
   correlationId: string;
   occurredAt: string;
-  payload: { postId: string; state: LifecycleState };
+  payload: {
+    postId: string;
+    state: LifecycleState;
+    version?: number;
+    postAuthorId?: string;
+    scheduledCloseAt?: string | null;
+  };
 }
 
 export interface LifecycleDecision {

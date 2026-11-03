@@ -268,6 +268,12 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
     expect((await items())[0]?.count).toBe(1);
     expect((await items())[0]?.commentId).toBeUndefined();
     expect(send.mock.calls[0]?.[0].data.commentId).toBeUndefined();
+    expect(
+      send.mock.calls.some(
+        (call) =>
+          call[0].data.type === 'CONTENT_REMOVED' && call[0].userId === '2',
+      ),
+    ).toBe(true);
     expect(await store.processedEvent(postId, removed.eventId)).toMatchObject({
       reason: 'MODERATION_VIOLATION',
       actorType: 'MODERATION',
@@ -284,7 +290,7 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
         }),
       ),
     );
-    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledTimes(2);
     const unseen = parsed(
       wire('PostCommentDeleted', { commentId: 'comment_late' }),
     );
@@ -301,7 +307,7 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
   });
 
   it.each(['PostDeleted', 'PostExpired'] as const)(
-    'stops queued and late activities after %s without creating close notifications',
+    'stops queued and late activities after %s and announces only confirmed expiry',
     async (type) => {
       const first = parsed(wire('PostCommentCreated'));
       const postId = first.aggregateId;
@@ -313,9 +319,9 @@ describe('real Redis + PostgreSQL + mock FCM', () => {
       await handler.handle(
         parsed(wire('PostCreated', { postId, postVersion: 1 })),
       );
-      expect(send).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledTimes(type === 'PostExpired' ? 1 : 0);
       expect((await items())[0]?.count).toBe(1);
-      expect(await items()).toHaveLength(1);
+      expect(await items()).toHaveLength(type === 'PostExpired' ? 2 : 1);
       expect(await store.deliveries(postId)).toHaveLength(0);
       expect(await store.postState(postId)).toMatchObject({
         closed: true,
