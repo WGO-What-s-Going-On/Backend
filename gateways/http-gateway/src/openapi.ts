@@ -245,10 +245,15 @@ export async function mergeDocuments(
               operation.responses['401']['x-gateway-response'] = unauthorized;
             } else operation.responses['401'] = unauthorized;
           }
-          operation.responses['503'] ??= gatewayResponse(
+          const unavailable = gatewayResponse(
             'Authentication is not configured or service unavailable.',
             'GATEWAY_UPSTREAM_UNAVAILABLE',
           );
+          if (operation.responses['503']) {
+            operation.responses['503'].description +=
+              ` Also possible at Gateway: ${unavailable.description}`;
+            operation.responses['503']['x-gateway-response'] = unavailable;
+          } else operation.responses['503'] = unavailable;
         }
       }
     }
