@@ -15,6 +15,7 @@ export type EventType =
   | 'PostCommentReactionCreated'
   | 'PostCommentReactionRemoved'
   | 'PostVoteWon'
+  | 'PostVoteCandidateSelected'
   | 'PostUpdated'
   | 'PostCreated'
   | 'PostCommentCreated'
@@ -34,6 +35,14 @@ export interface VoteWin {
   winnerAuthorId: number;
   votes: number;
   closedAt: Date;
+}
+
+export interface VoteCandidateSelection {
+  postId: string;
+  commentId: string;
+  authorId: number;
+  scoreAtSelection: number;
+  selectedAt: Date;
 }
 
 export interface OutboxEvent {

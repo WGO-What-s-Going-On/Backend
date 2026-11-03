@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import type { ClientSession, Connection, Model } from 'mongoose';
 import { LocationAuthorization } from '../application/ports.js';
+import type { VoteCandidateSelection } from '../application/ports.js';
+import { event } from '../application/event.js';
 import { LOCATION_AUTHORIZATION } from '../application/ports.js';
 import { Inject } from '@nestjs/common';
 import { PostNotFoundError } from '../domain/post.js';
@@ -18,6 +20,7 @@ export class MongooseVote {
     @InjectModel('Post') private readonly posts: Model<any>,
     @InjectModel('Comment') private readonly comments: Model<any>,
     @InjectModel('VoteSelection') private readonly selections: Model<any>,
+    @InjectModel('Outbox') private readonly outbox: Model<any>,
     @Inject(LOCATION_AUTHORIZATION)
     private readonly authorization: LocationAuthorization,
   ) {}
@@ -102,7 +105,7 @@ export class MongooseVote {
           Number(comment.reactionCounts?.AGREE ?? 0),
         votes: 0,
       }));
-      await this.posts.updateOne(
+      const opened = await this.posts.updateOne(
         { postId, 'vote.status': 'PENDING' },
         {
           $set: {
@@ -117,6 +120,36 @@ export class MongooseVote {
         },
         { session },
       );
+      if (opened.matchedCount !== 1)
+        throw new Error('Vote changed during candidate selection');
+      // 후보 상태만 커밋되면 재시도에서 선정 이벤트를 복구할 수 없다.
+      for (const comment of ranked) {
+        const candidate: VoteCandidateSelection = {
+          postId,
+          commentId: comment.commentId,
+          authorId: comment.authorId,
+          scoreAtSelection:
+            Number(comment.reactionCounts?.HELPFUL ?? 0) +
+            Number(comment.reactionCounts?.AGREE ?? 0),
+          selectedAt: now,
+        };
+        await this.outbox.create(
+          [
+            {
+              ...event(
+                postId,
+                'PostVoteCandidateSelected',
+                { candidate, activityVersion: 1 },
+                now,
+              ),
+              status: 'PENDING',
+              nextAttemptAt: now,
+              createdAt: now,
+            },
+          ],
+          { session },
+        );
+      }
     });
   }
 

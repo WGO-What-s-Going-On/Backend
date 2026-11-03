@@ -46,6 +46,7 @@ export function serializePostEvent(row: Record<string, any>): string {
       PostCommentReactionCreated: 'commentReaction',
       PostCommentReactionRemoved: 'commentReaction',
       PostVoteWon: 'vote',
+      PostVoteCandidateSelected: 'candidate',
       PostUpdated: 'post',
       PostCreated: 'post',
       PostDeleted: 'post',
@@ -101,10 +102,20 @@ export function serializePostEvent(row: Record<string, any>): string {
         value.activityVersion !== 1)
     )
       throw new Error('Invalid vote result');
+    if (
+      key === 'candidate' &&
+      (!id(target.commentId, 'comment') ||
+        !user(target.authorId) ||
+        !Number.isSafeInteger(target.scoreAtSelection) ||
+        target.scoreAtSelection < 0 ||
+        value.activityVersion !== 1)
+    )
+      throw new Error('Invalid vote candidate');
     const requiredDates: Record<string, string[]> = {
       PostCommentReactionCreated: ['createdAt'],
       PostCommentReactionRemoved: ['createdAt', 'removedAt'],
       PostVoteWon: ['closedAt'],
+      PostVoteCandidateSelected: ['selectedAt'],
       PostUpdated: [],
       PostCreated: [],
       PostDeleted: ['deletedAt'],

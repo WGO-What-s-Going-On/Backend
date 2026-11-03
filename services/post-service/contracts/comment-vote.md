@@ -2,7 +2,7 @@
 
 Post Service의 MongoDB가 투표의 원본이다. 새 게시물은 생성 트랜잭션에서 `voteAt = createdAt + 30분`과 `PENDING` 상태를 기록한다. 이전 게시물에는 투표를 소급 적용하지 않으며 조회 시 `NONE`이다. 단독 승자 최초 확정 시 `PostVoteWon`을 같은 트랜잭션의 Outbox에 저장한다. [이벤트 계약](post-events.md#14-댓글-공감투표-승리-2026-10-30)을 따른다.
 
-워커는 `voteAt` 이후 처음 처리하는 시점의 활성 댓글을 `HELPFUL + AGREE` 내림차순, 작성 시각 오름차순, `commentId` 오름차순으로 정렬한다. 상위 두 댓글의 ID, 본문, 선정 당시 점수와 시각을 고정한다. 활성 댓글이 둘 미만이면 `NONE`이다. 워커 장애 뒤에는 복구 후 첫 처리 시점의 점수를 사용한다.
+워커는 `voteAt` 이후 처음 처리하는 시점의 활성 댓글을 `HELPFUL + AGREE` 내림차순, 작성 시각 오름차순, `commentId` 오름차순으로 정렬한다. 상위 두 댓글의 ID, 본문, 선정 당시 점수와 시각을 고정한다. 최초 `PENDING → OPEN` 전환 시 후보 댓글마다 `PostVoteCandidateSelected`를 한 건씩 같은 트랜잭션의 Outbox에 저장한다. 이벤트에는 댓글 작성자와 선정 당시 점수·시각을 포함하며 본문은 포함하지 않는다. [후보 선정 이벤트 계약](post-events.md#투표-후보-선정-이벤트)을 따른다. 활성 댓글이 둘 미만이면 `NONE`이다. 워커 장애 뒤에는 복구 후 첫 처리 시점의 점수를 사용한다.
 
 `GET /api/v1/posts/{postId}/vote`는 `{ status, candidates, selectedAt, closedAt, winner, mySelection }`을 반환한다. `status`는 `PENDING`, `OPEN`, `CLOSED`, `CANCELLED`, `NONE` 중 하나다. 후보는 `{ commentId, content, scoreAtSelection, votes }` 형태다. `winner`는 확정된 후보 스냅샷 또는 `null`이다. 종료·삭제 후에도 이 조회는 공개된다. 로컬·테스트에서 `X-User-Id`를 주면 해당 사용자의 선택을 반환한다.
 
