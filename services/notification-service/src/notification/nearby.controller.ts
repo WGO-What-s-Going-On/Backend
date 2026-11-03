@@ -8,13 +8,26 @@ import {
   Put,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBody, ApiOperation, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBody,
+  ApiOperation,
+  ApiOkResponse,
+  ApiTags,
+  ApiNoContentResponse,
+  ApiServiceUnavailableResponse,
+} from '@nestjs/swagger';
+import {
+  ApiNotificationAuth,
+  nearbySchema,
+  notificationErrorSchema,
+} from './notification.openapi.js';
 import { GatewayAuthGuard } from '../gateway-auth.js';
 import { requireUserId } from './notification.controller.js';
 import { NearbySubscriptionService } from './nearby-subscription.service.js';
 
 @UseGuards(GatewayAuthGuard)
 @ApiTags('Notifications')
+@ApiNotificationAuth()
 @Controller('api/v1/notifications/nearby-subscription')
 export class NearbyController {
   constructor(private readonly subscriptions: NearbySubscriptionService) {}
@@ -24,16 +37,8 @@ export class NearbyController {
       'Read my explicit nearby subscription without returning coordinates',
   })
   @ApiOkResponse({
-    schema: {
-      type: 'object',
-      properties: {
-        featureEnabled: { type: 'boolean' },
-        enabled: { type: 'boolean' },
-        locationConsent: { type: 'boolean' },
-        expiresAt: { type: 'string', nullable: true, format: 'date-time' },
-        radiusM: { type: 'integer', enum: [150] },
-      },
-    },
+    description: 'Current subscription. Coordinates are never returned.',
+    schema: nearbySchema,
   })
   get(@Headers('x-user-id') id: unknown) {
     return this.subscriptions.get(requireUserId(id));
@@ -43,9 +48,19 @@ export class NearbyController {
     summary:
       'Opt in separately to nearby alerts and location use; maximum location TTL 15 minutes',
     description:
-      'No participation, terms consent or stored home region is reused as location consent. Feature defaults OFF. Renew with a fresh measured location.',
+      'No participation, terms consent or stored home region is reused as location consent. Feature defaults OFF. Renew with a fresh measured location. capturedAt must be UTC ending in Z, newer than 15 minutes ago and no more than 30 seconds in the future. Expiry is the earlier of now + expiresInSeconds and capturedAt + 15 minutes. Send only {"enabled":false} to withdraw, even when the feature is disabled.',
+  })
+  @ApiOkResponse({
+    description: 'Saved subscription state. Coordinates are never returned.',
+    schema: nearbySchema,
+  })
+  @ApiServiceUnavailableResponse({
+    description:
+      'Nearby notifications are disabled on the server (enable requests only).',
+    schema: notificationErrorSchema,
   })
   @ApiBody({
+    required: true,
     schema: {
       oneOf: [
         {
@@ -88,6 +103,10 @@ export class NearbyController {
   @HttpCode(204)
   @ApiOperation({
     summary: 'Withdraw nearby/location consent and cancel queued nearby pushes',
+  })
+  @ApiNoContentResponse({
+    description:
+      'Consent withdrawn and queued nearby pushes canceled. Empty response body.',
   })
   remove(@Headers('x-user-id') id: unknown) {
     return this.subscriptions.remove(requireUserId(id));
