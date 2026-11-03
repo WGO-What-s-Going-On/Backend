@@ -1,4 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { NotificationBlockChecker } from '../notification/block-checker.js';
+import { NotificationEventWriter } from './notification-event.writer.js';
+import { projectExtendedPost } from './extended-post.notifications.js';
 import type { Pool, PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import type { PostEvent } from '../event-consumer/post-event.js';
@@ -15,6 +18,7 @@ interface PostState {
   revision: number;
   author_id: string | null;
   closed: boolean;
+  paused: boolean;
   post_version: number;
   terminal_type: string | null;
 }
@@ -85,7 +89,10 @@ export class BusyDeliveryError extends Error {
 
 @Injectable()
 export class PostgresEventStore {
-  constructor(private readonly database: PostgresDatabase) {}
+  constructor(
+    private readonly database: PostgresDatabase,
+    @Optional() private readonly blocks?: NotificationBlockChecker,
+  ) {}
 
   async postState(postId: string): Promise<PostState | undefined> {
     return (
@@ -213,6 +220,50 @@ export class PostgresEventStore {
   }
 
   async apply(event: PostEvent, now = new Date()): Promise<string | undefined> {
+    let allowedRecipients: Set<string> | undefined;
+    if (
+      event.eventType === 'PostCommentCreated' &&
+      event.parentCommentId &&
+      !event.parentCommentAuthorId
+    ) {
+      const parent = (
+        await this.database.pool.query(
+          'SELECT author_id FROM notification_comment_states WHERE post_id=$1 AND comment_id=$2',
+          [event.aggregateId, event.parentCommentId],
+        )
+      ).rows[0];
+      if (!parent?.author_id)
+        throw new Error(
+          'Parent comment author unavailable; recipient reconciliation required',
+        );
+      event = { ...event, parentCommentAuthorId: parent.author_id };
+    }
+    if (
+      this.blocks &&
+      [
+        'PostCommentCreated',
+        'PostReactionCreated',
+        'PostCommentReactionCreated',
+      ].includes(event.eventType)
+    ) {
+      const owner =
+        event.postAuthorId ??
+        (await this.postState(event.aggregateId))?.author_id;
+      const recipients =
+        event.eventType === 'PostCommentReactionCreated'
+          ? [event.commentAuthorId]
+          : [owner, event.parentCommentAuthorId];
+      allowedRecipients = new Set<string>();
+      // Network authorization is outside the transaction; delivery checks it again before sending.
+      for (const recipient of new Set(recipients))
+        if (
+          recipient &&
+          event.actorId &&
+          recipient !== event.actorId &&
+          (await this.blocks.allowed(recipient, event.actorId))
+        )
+          allowedRecipients.add(recipient);
+    }
     return this.database.transaction(async (client) => {
       const postId = event.aggregateId;
       // 동일 post의 중복 처리와 묶음 갱신은 이 행 잠금과 같은 transaction 안에서 직렬화한다.
@@ -239,7 +290,29 @@ export class PostgresEventStore {
       ) {
         meta.post_version = Math.max(meta.post_version, event.postVersion);
       }
-      if (event.activityKey && !meta.closed) {
+      if (
+        event.eventType === 'PostUpdated' &&
+        !meta.closed &&
+        (event.postVersion ?? 0) > meta.post_version
+      ) {
+        meta.post_version = event.postVersion!;
+        meta.paused = event.closedAt !== null;
+      }
+      const extended = await projectExtendedPost(
+        client,
+        event,
+        meta,
+        new NotificationEventWriter(this.database),
+        allowedRecipients,
+        now,
+      );
+      if (
+        !extended &&
+        event.activityKey &&
+        !meta.closed &&
+        !meta.paused &&
+        event.eventType !== 'PostCommentUpdated'
+      ) {
         const previous = (
           await client.query<Activity>(
             'SELECT * FROM notification_activities WHERE post_id=$1 AND activity_key=$2',
@@ -256,6 +329,8 @@ export class PostgresEventStore {
           if (
             active &&
             recipient !== event.actorId &&
+            (!allowedRecipients ||
+              (!!recipient && allowedRecipients.has(recipient))) &&
             (!recipient ||
               (await this.allowed(recipient, postId, event.eventType, client)))
           ) {
@@ -338,6 +413,7 @@ export class PostgresEventStore {
                 data: {
                   notificationId,
                   type,
+                  ...(event.actorId ? { actorId: event.actorId } : {}),
                   ...(event.commentId ? { commentId: event.commentId } : {}),
                 },
               };
@@ -397,13 +473,14 @@ export class PostgresEventStore {
         }
       }
       await client.query(
-        `UPDATE notification_posts SET revision=revision+1,author_id=$2,closed=$3,post_version=$4,terminal_type=$5 WHERE post_id=$1`,
+        `UPDATE notification_posts SET revision=revision+1,author_id=$2,closed=$3,post_version=$4,terminal_type=$5,paused=$6 WHERE post_id=$1`,
         [
           postId,
           recipient ?? null,
           meta.closed,
           meta.post_version,
           meta.terminal_type,
+          meta.paused,
         ],
       );
       await client.query(
@@ -479,7 +556,8 @@ export class PostgresEventStore {
           ).rows[0]
         : undefined;
       const cancel =
-        (meta?.closed && current.message.data?.allowTerminal !== 'true') ||
+        ((meta?.closed || meta?.paused) &&
+          current.message.data?.allowTerminal !== 'true') ||
         !notification ||
         notification.count <= 0 ||
         !!notification.deleted_at ||

@@ -14,6 +14,7 @@ import {
 } from '../persistence/postgres-event.store.js';
 import { NotificationState } from '../redis/notification-state.js';
 import type { PostEvent } from './post-event.js';
+import { NotificationBlockChecker } from '../notification/block-checker.js';
 
 @Injectable()
 export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
@@ -27,6 +28,7 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
     private readonly state: NotificationState,
     @Inject(PUSH_SENDER) private readonly push: PushSender,
     @Optional() private readonly config?: ConfigService,
+    @Optional() private readonly blocks?: NotificationBlockChecker,
   ) {}
   onModuleInit(): void {
     if (!this.config?.get<string>('redis.url')) return;
@@ -73,6 +75,15 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
         }
         let result;
         try {
+          const actorId = delivery.message.data?.actorId;
+          if (
+            actorId &&
+            this.blocks &&
+            !(await this.blocks.allowed(delivery.message.userId, actorId))
+          ) {
+            await this.store.finish(delivery, 'CANCELED');
+            continue;
+          }
           result = await this.push.send(delivery.message);
         } catch (error) {
           // 응답을 잃으면 성공 여부는 알 수 없다. notificationId를 유지하고 at-least-once로 재시도한다.

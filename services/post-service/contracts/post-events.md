@@ -743,3 +743,6 @@ pnpm post:operations moderate-comment post_<UUID> comment_<UUID> decision-456 2
 CLI는 누락된 비삭제 게시물을 한 번에 최대 1,000개 처리하며 기존 지역은 덮어쓰지 않는다.
 실패 전 완료된 변경은 유지된다. 좌표가 없는 게시물은 운영자가 확인해야 한다.
 코드 배포만으로 과거 게시물이나 과거 이벤트가 자동 보정되지는 않는다.
+# Notification 답글 문맥 확장
+
+`PostCommentCreated.comment.parentCommentId`가 있으면 새 생산자는 최상위 부모를 검증하고 fence한 동일 MongoDB 트랜잭션에서 읽은 `parentCommentAuthorId`(양의 안전한 정수)를 top-level에 추가한다. 부모 없음에는 필드를 넣지 않는다. 기존 v1 envelope와 과거 Outbox의 필드 누락은 호환된다. Notification은 검증된 부모 작성자만 사용하며 과거 문맥 누락은 관찰된 부모 fact로 재조정하거나 Pending/DLQ로 보낸다. 사용자 신원을 공개 API 응답에 추가하는 계약은 아니다.

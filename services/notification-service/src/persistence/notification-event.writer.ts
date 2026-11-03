@@ -21,6 +21,7 @@ export interface EventNotification {
   metadata?: Record<string, unknown>;
   actionPath?: string;
   allowTerminal?: boolean;
+  bundleKey?: string;
 }
 @Injectable()
 export class NotificationEventWriter {
@@ -76,7 +77,30 @@ export class NotificationEventWriter {
       ).rows[0]?.enabled === false
     )
       return null;
-    const notificationId = `${now.toISOString()}_${input.eventId}_${input.type}_${input.userId}`;
+    let notificationId = `${now.toISOString()}_${input.eventId}_${input.type}_${input.userId}`;
+    let bundled = false;
+    if (input.bundleKey && input.postId) {
+      // The caller holds the post row lock, including when a new window is created.
+      const previous = (
+        await client.query(
+          `SELECT n.notification_id FROM notification_bundle_windows w
+        JOIN notifications n ON n.user_id=w.recipient AND n.notification_id=w.notification_id
+        WHERE w.post_id=$1 AND w.recipient=$2 AND w.type=$3 AND w.until_ms>$4
+        AND n.count>0 AND n.deleted_at IS NULL AND n.expires_at>$5`,
+          [
+            input.postId,
+            input.userId,
+            input.bundleKey,
+            now.getTime(),
+            Math.floor(now.getTime() / 1000),
+          ],
+        )
+      ).rows[0];
+      if (previous) {
+        notificationId = previous.notification_id;
+        bundled = true;
+      }
+    }
     const claimed = await client.query(
       `INSERT INTO notification_business_keys(source_stream,business_key,recipient,notification_id)
       VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING notification_id`,
@@ -92,6 +116,13 @@ export class NotificationEventWriter {
       return old
         ? { notificationId: old.notification_id, created: false }
         : null;
+    }
+    if (bundled) {
+      await client.query(
+        'UPDATE notifications SET count=count+1 WHERE user_id=$1 AND notification_id=$2',
+        [input.userId, notificationId],
+      );
+      return { notificationId, created: true };
     }
     const notification: Notification = {
       notificationId,
@@ -114,6 +145,18 @@ export class NotificationEventWriter {
     };
     if (!(await insertNotification(client, notification)))
       throw new Error('Notification identity conflict');
+    if (input.bundleKey && input.postId)
+      await client.query(
+        `INSERT INTO notification_bundle_windows(post_id,recipient,type,notification_id,until_ms)
+      VALUES($1,$2,$3,$4,$5) ON CONFLICT(post_id,recipient,type) DO UPDATE SET notification_id=EXCLUDED.notification_id,until_ms=EXCLUDED.until_ms`,
+        [
+          input.postId,
+          input.userId,
+          input.bundleKey,
+          notificationId,
+          now.getTime() + 120000,
+        ],
+      );
     if (input.push) {
       const data: Record<string, string> = {
         notificationId,

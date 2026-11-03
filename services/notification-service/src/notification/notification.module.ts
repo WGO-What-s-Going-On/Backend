@@ -16,6 +16,7 @@ import { PostEventHandler } from '../event-consumer/post-event.handler.js';
 import { PostgresEventStore } from '../persistence/postgres-event.store.js';
 import { NOTIFICATION_REPOSITORY } from './notification.repository.js';
 import { NotificationService } from './notification.service.js';
+import { NotificationBlockChecker } from './block-checker.js';
 
 @Module({
   controllers: [NotificationController, NotificationReadinessController],
@@ -42,6 +43,7 @@ import { NotificationService } from './notification.service.js';
         ),
     },
     PostgresEventStore,
+    NotificationBlockChecker,
     PostEventHandler,
     PostEventConsumer,
   ],

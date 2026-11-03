@@ -44,3 +44,8 @@ Gateway allowlist·동적 DELETE·통합 Swagger를 이 로컬 통합에 반영�
 기존 숫자 cursor는 오름차순 continuation으로 해석하고 다음 opaque cursor에 direction=ASC를 보존한다. 새로운 첫 페이지는 내림차순이며 다음 cursor에 DESC를 기록한다. limit 기본30/최대100, 관계 조회는 항상 현재 소유자 조건을 적용한다.
 
 최신 Gateway의 GET/PUT/본문 DELETE를 유지하고 신규 POST/경로 DELETE allowlist·문서 노출을 추가했다. [배포 인계](../../moderation-service/contracts/gateway-handoff.md)를 따른다.
+# Notification 전용 내부 조회
+
+`POST /internal/notifications/blocks/check`, 본문 `{recipientId:"1",actorIds:["2"]}`(1..100개). 응답 200 `{recipientId,recipientActive,actors:[{actorId,blocked}]}`. 양방향 차단 또는 비활성 actor는 blocked=true다. 미존재 사용자·일부 actor 누락은 401이며 불완전한 결과를 unblocked로 간주하지 않는다. 프로필·차단 목록·사유는 반환하지 않는다. User 소유 DB만 조회하고 상태·칭호·랭킹을 변경하지 않는다.
+
+별도 ES256 서비스 JWT: issuer `wgo-notification-service`, subject `notification-service`, audience `wgo-user-service`, typ `wgo-service+jwt`, 최대 수명 30초. User는 `USER_NOTIFICATION_TRUSTED_JWKS`의 공개키만 신뢰한다. Notification의 `NOTIFICATION_SERVICE_PRIVATE_JWK`와 `NOTIFICATION_USER_BLOCKS_URL`을 설정한다. Gateway 사용자 헤더/키로 이 작업을 호출할 수 없다. 기존 Gateway trusted JWKS도 유지한다. 수신자 선택과 FCM 직전 조회하며 권위 조회 장애에는 발송하지 않고 재시도한다. 새 그룹 이후의 block 이벤트만으로 전체 차단 상태를 추정하지 않는다.
