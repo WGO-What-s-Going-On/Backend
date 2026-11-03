@@ -282,3 +282,16 @@ GKE의 MongoDB는 인증과 TLS를 켠 단일 노드 replica set으로 실행한
 모델은 기존 glibc 기반 이미지에 고정 revision과 checksum으로 포함한다. GKE node와 같은 아키텍처로 이미지를 빌드한 뒤 `node dist/post/semantic/model-smoke.js`를 실행한다. 이 검증은 실제 로컬 ONNX 모델을 warmup하고 384차원 정규화 벡터와 반복 추론 일치를 확인한다. 외부 모델 다운로드는 실행하지 않는다. `pnpm semantic:model:test`는 장문과 기준 pipeline 일치까지 검증한다.
 
 `pnpm storage:smoke`는 설정된 MongoDB에서 transaction commit·rollback을 확인하고 ES의 임시 인덱스에서 384차원 벡터 쓰기·검색을 확인한다. 전용 staging 계정으로 실행한다. 임시 collection과 index를 만들고 삭제하며 운영 데이터를 사용하지 않는다. 실제 GKE 인증서·권한·DNS와 Pod 교체 검증은 이 명령과 별도로 실행한다.
+
+## 게시물 행정동 저장
+
+게시물 생성은 위치 인가 뒤 Map `ResolveRegion`을 항상 호출한다. Map의
+`KAKAO_LOCAL_REST_API_KEY`와 gRPC 연결을 배포 전에 준비해야 한다.
+행정동 조회 실패나 잘못된 응답은 게시물과 Outbox를 저장하지 않고 503으로 반환한다.
+`POST_REGION_ENABLED`는 제거되었으며 기존 설정값과 관계없이 이 규칙을 적용한다.
+이 코드가 배포되기 전 실행 중인 구버전의 동작은 바뀌지 않는다.
+
+기존 게시물의 `region`은 선택 필드로 읽고 신규 저장 경로는 행정동을 필수로 받는다.
+과거 누락 게시물은 셸 환경 변수를 설정한 뒤 `pnpm build`와 `pnpm region:backfill 100`을
+실행해 별도로 보정한다. 이 명령은 운영 데이터를 변경하며 성공한 행의 변경은 실패 후에도 유지한다.
+코드 변경만으로 backfill을 실행하거나 이미 저장된 투표 이벤트를 수정하지 않는다.

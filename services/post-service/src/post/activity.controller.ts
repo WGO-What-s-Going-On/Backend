@@ -56,8 +56,6 @@ export class Activities {
       throw new BadRequestException(
         '10-digit administrative regionCode required',
       );
-    if (process.env.POST_REGION_ENABLED !== 'true')
-      throw new ServiceUnavailableException('Region ranking is not configured');
     const winnerPipeline = [
       {
         $match: {
@@ -346,8 +344,6 @@ export class ActivityController {
       Math.abs(Number(lon)) > 180
     )
       throw new BadRequestException('Invalid coordinates');
-    if (!this.location.resolveRegion)
-      throw new ServiceUnavailableException('Region resolution unavailable');
     return this.location.resolveRegion(Number(lat), Number(lon));
   }
   @Get('activity')

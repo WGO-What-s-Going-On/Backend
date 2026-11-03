@@ -3,9 +3,9 @@
 기준일: 2026-10-06. Post Service가 Redis Streams로 발행하는 활동 이벤트와
 Notification·User Service 연동을 위한 확장안을 기록한다.
 
-**현재 계약**은 코드에서 실제 발행하는 13개 이벤트와 Post의 상태 변경·Outbox 복구다.
+**현재 계약**은 코드에서 실제 발행하는 15개 이벤트와 Post의 상태 변경·Outbox 복구다.
 **확장 제안**은 대댓글 등 선택 기능과 Notification·User의 후속 구현을 의미한다.
-댓글 공감 생성·취소와 투표 승리도 같은 MongoDB 트랜잭션의 Outbox로 발행한다.
+댓글 공감 생성·취소와 투표 후보 선정·승리도 같은 MongoDB 트랜잭션의 Outbox로 발행한다.
 Post는 소비자의 알림·경험치·칭호 처리를 구현하지 않는다.
 
 ## 1. 책임과 이벤트 흐름
@@ -61,7 +61,7 @@ Redis Stream ID는 전달 위치이며, 도메인 이벤트 식별자인 `eventI
 | `aggregateId` | string, `post_<UUID>` | 생성·취소·삭제·만료 이벤트 모두 게시물 ID |
 | `correlationId` | string, `req_<UUID>` | 현재 이벤트 생성 시 새로 생성. 요청의 ID 전파는 미구현 |
 | `occurredAt` | string, ISO-8601 UTC | 해당 command에서 생성한 사건 시각. Redis 발행·소비·DB 커밋 시각이 아님 |
-| `post` / `comment` / `reaction` / `participant` / `commentReaction` / `vote` | object | 이벤트별 데이터. 해당 이벤트의 객체 하나 포함 |
+| `post` / `comment` / `reaction` / `participant` / `commentReaction` / `vote` / `candidate` | object | 이벤트별 데이터. 해당 이벤트의 객체 하나 포함 |
 
 **Outbox 내부의 `payload`와 Redis wire format을 구분한다.** Outbox에는
 `payload: { comment: ... }`처럼 저장하지만 Worker는 이를 envelope 최상위에
@@ -77,7 +77,7 @@ Redis Stream ID는 전달 위치이며, 도메인 이벤트 식별자인 `eventI
 
 | 서비스 | 확인된 상태 |
 | --- | --- |
-| Post | 게시물 수정·댓글 공감·승리를 포함한 13종을 MongoDB Outbox에 저장하고 `post:events`로 발행 |
+| Post | 게시물·댓글 수정, 댓글 공감, 투표 후보 선정·승리를 포함한 15종을 MongoDB Outbox에 저장하고 `post:events`로 발행 |
 | Map | `post-map` 그룹에서 `PostCreated` 소비. `PostExpired`, `PostDeleted`로 비활성 상태 적용 |
 | Realtime Gateway | `post-realtime` 그룹에서 네 현재 이벤트를 소비하고 연결된 보드에 전파 |
 | Post Semantic Worker | 설정된 독립 그룹에서 `PostCreated` 소비. `PostExpired`, `PostDeleted`도 원본 재확인 후 처리 |
@@ -635,7 +635,7 @@ Post 조회가 원본 공개 상태를 다시 검증한다. WS는 postVersion으
 | --- | --- |
 | PostCommentReactionCreated | `commentReaction: {postId, commentId, userId, type, createdAt}`, `commentAuthorId`, `activityVersion` |
 | PostCommentReactionRemoved | `commentReaction: {postId, commentId, userId, type, createdAt, removedAt}`, `commentAuthorId`, `activityVersion` |
-| PostVoteWon | `vote: {postId, resultId, commentId, winnerAuthorId, votes, closedAt}`, `activityVersion: 1` |
+| PostVoteWon | `vote: {postId, resultId, commentId, winnerAuthorId, votes, closedAt, regionCode}`, `activityVersion: 1` |
 
 - 공감 종류는 HELPFUL/AGREE/DIFFERENT. 댓글 작성자 `commentAuthorId`가 지급 대상이며
   반응한 `userId`나 게시물 작성자가 아니다. User 정책이 종류별 지급량과 자기 공감 제외를 결정한다.
@@ -678,3 +678,68 @@ pnpm post:operations moderate-comment post_<UUID> comment_<UUID> decision-456 2
 
 버전을 생략한 기존 명령은 버전 1만 대상으로 한다. 원본의 현재 버전과 다르면
 삭제하지 않고 실패한다. 버전 확인·삭제·Outbox 저장은 같은 트랜잭션에서 수행한다.
+
+## 투표 후보 선정 이벤트
+
+`PostVoteCandidateSelected` v1은 `PENDING` 투표가 처음 `OPEN`으로 전환될 때
+선정된 댓글마다 한 건씩, 총 두 건 발행한다. 후보 두 개와 두 Outbox 레코드는
+같은 MongoDB 트랜잭션에 저장된다. 공통 envelope와 `post:events` 전송 형식은 유지한다.
+다음 데이터는 `data`의 최상위에 위치한다.
+
+```json
+{
+  "candidate": {
+    "postId": "post_22222222-2222-4222-8222-222222222222",
+    "commentId": "comment_44444444-4444-4444-8444-444444444444",
+    "authorId": 456,
+    "scoreAtSelection": 5,
+    "selectedAt": "2026-11-03T03:00:00.000Z",
+    "regionCode": "1159053000"
+  },
+  "activityVersion": 1
+}
+```
+
+모든 필드는 필수다. `postId`와 `commentId`는 기존 접두사 UUID 문자열이고
+`candidate.postId = aggregateId`다. `authorId`는 후보 댓글 작성자의 양의 안전 정수 ID다.
+`scoreAtSelection`은 후보 확정 시 HELPFUL + AGREE의 합인 0 이상의 안전 정수다.
+투표 득표수나 지급 점수가 아니다. `selectedAt`은 확정 시각의 ISO-8601 UTC 문자열이다.
+`activityVersion`은 불변 선정 사실의 버전인 `1`이다. `regionCode`는 아래 공통 지역 계약을 따른다. 댓글 본문, 보상량과 칭호는 포함하지 않는다.
+
+- 활성 댓글이 둘 미만이거나 선정 시각 전이면 발행하지 않는다. 삭제·종료·만료된 게시물에도 발행하지 않는다.
+- 반복 호출과 동시 워커는 이미 확정된 후보에 새 이벤트를 만들지 않는다. Outbox 저장 실패 시 후보 상태와 이벤트를 모두 롤백한다.
+- 같은 작성자가 후보 댓글 두 개를 작성했어도 댓글별로 두 건 발행한다. 사용자당 보상 횟수는 User 정책이다.
+- 전달은 at-least-once다. 소비자는 `eventId`로 중복 전달을 제거하고 `candidate:postId:commentId`를 선정 실적의 업무 키로 사용한다.
+  이 키는 승리 실적의 `vote:resultId`와 구분한다. 같은 업무 키에 다른 작성자가 도착하면 격리한다.
+- 두 후보 이벤트의 도착 순서와 동시 도착은 보장하지 않는다. 이후 `PostVoteWon`, `PostDeleted`, `PostCommentDeleted`보다 늦게 도착할 수도 있다.
+  삭제 상태를 보존하여 늦은 선정 이벤트가 회수된 실적을 되살리지 않도록 처리한다.
+- 후보 선정은 승리와 별개의 과거 사실이다. 이후 투표 취소나 댓글·게시물 삭제는 이미 발생한 선정 사실을 지우지 않는다.
+  보상 지급·회수와 칭호 변경은 User가 결정한다. 이번 변경은 후보 선정 이벤트 생산만 구현한다.
+- 기존 OPEN 투표나 과거 선정 기록은 자동 소급 발행하지 않는다.
+- 새 타입을 처리할 User 등 소비자의 파서와 저장소를 먼저 배포한다. 새 타입을 거부하는 구버전 소비자는 DLQ로 보낼 수 있다.
+  현재 Map, Realtime, Semantic, Moderation 소비자는 이 미지원 타입을 무시한다.
+
+`test/vote-candidate-events.integration.test.ts`는 전용 MongoDB
+`wgo_vote_candidate_events_integration`과 Redis DB 10에서 실제 선정·롤백·발행을 검증한다.
+
+## 투표 이벤트의 행정동 코드
+
+신규 `PostVoteCandidateSelected`는 `candidate.regionCode`, 신규 `PostVoteWon`은
+`vote.regionCode`를 항상 포함한다. 값은 10자리 숫자 문자열 또는 `null`이다.
+사용자의 거주지가 아니라 각 사건 확정 트랜잭션에서 읽은 게시물의 `region.code`다.
+추가 Map 호출 없이 후보·승리 상태와 같은 스냅샷을 Outbox에 저장한다.
+다른 이벤트의 데이터와 `schemaVersion: 1`은 유지한다.
+
+- 새 게시물은 생성 위치 인가 뒤 행정동을 반드시 조회·저장한다. 지역 조회 실패 시 생성하지 않는다.
+- 과거 게시물의 지역이 없으면 새 투표 이벤트는 `regionCode: null`이다. 임의 지역이나 사용자 소속 지역으로 대체하지 않는다.
+- 이전 버전이 저장한 Outbox에는 필드가 없을 수 있다. 직렬화는 누락을 허용하고 기존 메시지를 그대로 재발행한다.
+  소비자는 누락과 `null`을 지역 미확인으로 취급한다. 전역 실적은 처리하고 지역 집계에서는 제외한다.
+- 명시된 지역 값은 `null` 또는 10자리 숫자 문자열이어야 한다. 다른 값은 기존 Outbox 실패·격리 경로를 따른다.
+- 후보 선정 뒤 게시물 지역을 backfill하면 후보 이벤트는 `null`, 이후 승리 이벤트는 코드가 있을 수 있다.
+  이미 저장된 이벤트는 발행·재시도 시 지역을 다시 조회하거나 덮어쓰지 않는다.
+- 필드를 엄격히 제한하는 소비자는 `regionCode`의 추가와 과거 누락을 먼저 지원한 뒤 생산자를 배포한다.
+
+기존 게시물은 `pnpm build` 후 `pnpm region:backfill 100`으로 별도 보정한다.
+CLI는 누락된 비삭제 게시물을 한 번에 최대 1,000개 처리하며 기존 지역은 덮어쓰지 않는다.
+실패 전 완료된 변경은 유지된다. 좌표가 없는 게시물은 운영자가 확인해야 한다.
+코드 배포만으로 과거 게시물이나 과거 이벤트가 자동 보정되지는 않는다.

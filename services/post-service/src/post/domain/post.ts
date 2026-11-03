@@ -26,8 +26,15 @@ export interface PostInput {
   radiusM: number;
 }
 
+export interface PostRegion {
+  code: string;
+  name: string;
+}
+
+export type NewPostRecord = PostRecord & { region: PostRegion };
+
 export interface PostRecord {
-  region?: { code: string; name: string };
+  region?: PostRegion;
   closedAt?: Date | null;
   anonymous?: boolean;
   mediaIds?: string[];

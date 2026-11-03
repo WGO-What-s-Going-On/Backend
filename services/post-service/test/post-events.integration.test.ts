@@ -71,6 +71,10 @@ suite('post activity event contracts', () => {
       .overrideProvider(LOCATION_AUTHORIZATION)
       .useValue({
         assertCanCreate: async () => {},
+        resolveRegion: async () => ({
+          code: '1159053000',
+          name: '서울특별시 동작구 상도1동',
+        }),
         assertCanJoin: async () => {},
       })
       .overrideProvider(OutboxWorker)
@@ -736,6 +740,10 @@ suite('post activity event contracts', () => {
         kind === 'comment'
           ? new CreateComment(uow, store, partition, {
               assertCanCreate: async () => {},
+              resolveRegion: async () => ({
+                code: '1159053000',
+                name: '서울특별시 동작구 상도1동',
+              }),
               assertCanJoin: async () => {},
             }).execute(id, 'late', 456)
           : kind === 'reaction'
@@ -756,6 +764,10 @@ suite('post activity event contracts', () => {
                   store,
                   {
                     assertCanCreate: async () => {},
+                    resolveRegion: async () => ({
+                      code: '1159053000',
+                      name: '서울특별시 동작구 상도1동',
+                    }),
                     assertCanJoin: async () => {},
                   },
                   partition,

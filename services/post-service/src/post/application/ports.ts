@@ -5,7 +5,9 @@ import type {
   CommentReactionRecord,
   CommentReactionType,
   ParticipantRecord,
+  NewPostRecord,
   PostRecord,
+  PostRegion,
   PostState,
   ReactionRecord,
   StoredPostReactionType,
@@ -15,6 +17,7 @@ export type EventType =
   | 'PostCommentReactionCreated'
   | 'PostCommentReactionRemoved'
   | 'PostVoteWon'
+  | 'PostVoteCandidateSelected'
   | 'PostUpdated'
   | 'PostCreated'
   | 'PostCommentCreated'
@@ -34,6 +37,16 @@ export interface VoteWin {
   winnerAuthorId: number;
   votes: number;
   closedAt: Date;
+  regionCode: string | null;
+}
+
+export interface VoteCandidateSelection {
+  postId: string;
+  commentId: string;
+  authorId: number;
+  scoreAtSelection: number;
+  selectedAt: Date;
+  regionCode: string | null;
 }
 
 export interface OutboxEvent {
@@ -145,7 +158,7 @@ export interface PostCommands {
   ): Promise<void>;
   setClosed(postId: string, closedAt: Date | null, now: Date): Promise<void>;
   recordModerationEvent(input: ModerationLifecycleEvent): Promise<boolean>;
-  insertPost(post: PostRecord): Promise<void>;
+  insertPost(post: NewPostRecord): Promise<void>;
   insertComment(
     comment: CommentRecord & { bucketId: number },
     mutationId?: string,
@@ -236,10 +249,7 @@ export interface PostUnitOfWork {
 }
 
 export interface LocationAuthorization {
-  resolveRegion?(
-    latitude: number,
-    longitude: number,
-  ): Promise<{ code: string; name: string }>;
+  resolveRegion(latitude: number, longitude: number): Promise<PostRegion>;
   assertCanCreate(
     userId: number,
     latitude: number,

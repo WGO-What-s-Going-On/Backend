@@ -138,8 +138,9 @@ Swagger에 목록 응답 스키마가 포함된다.
 - `GET /posts/me/ranking?regionCode=<10자리 코드>` → regionCode, items(상위100), myRank|null, myScore.
   전역 칭호가 천리안인 사용자만 포함하며 해당 행정동 게시글에서 받은 대표 의견 점수 순이다.
   동점은 userId 오름차순으로 정한다. 한 사람이 여러 동에서 활동하면 각 동에 등장할 수 있다.
-- `POST_REGION_ENABLED=true`와 Map `KAKAO_LOCAL_REST_API_KEY`가 필요하다.
-  신규 글의 위치 인가 뒤 행정동을 기록한다. 활성화 후 지역 판정 실패는 생성 실패로 반환하며 추측하지 않는다.
+- 신규 글은 위치 인가 뒤 Map `ResolveRegion`으로 행정동을 항상 조회·저장한다.
+  Map에 `KAKAO_LOCAL_REST_API_KEY`가 필요하며, 조회 실패나 잘못된 응답은 게시물·Outbox 저장 없이 503으로 반환한다.
+  `POST_REGION_ENABLED`는 더 이상 사용하지 않는다. 미설정·false여도 생성과 지역 랭킹을 비활성화하지 않는다.
 - 기존 글은 Post에서 `pnpm build` 후 `pnpm region:backfill 100`을 반복한다.
   한번에 최대 1,000개, 이미 기록된 지역은 덮어쓰지 않는다. 운영 데이터 변경은 별도 실행 단계다.
 - 지역 후보 1,000명 및 각 DB 집계 2초 제한. 초과 시 잘못된 순위를 반환하지 않고 503.
