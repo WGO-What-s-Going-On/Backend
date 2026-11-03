@@ -49,7 +49,7 @@ Post의 기본 수신·적용 계약은 [Post 이벤트 문서](../../post-servi
 3. 중복·역순 결정의 CAS와 원본 변경 + 확정 event/outbox의 원자성.
 4. Post 상태 적용 성공/거부 이벤트, postVersion, 원인 결정 ID와 수신자에게 공개 가능한 종료 예정/확정 시각.
 
-기존 output v1에는 decision version/ENDED 근거가 없다. 외부 합의 없이 필수 payload를 바꾸지 않고 내부 projection에만 저장했다. 신규 소비자가 역순 결정을 처리하려면 이 확장 합의가 선행되어야 한다.
+output v1에는 Notification 연동을 위해 선택적인 projection version/postAuthorId/scheduledCloseAt을 추가했다. 필수 envelope는 유지하며 ENDED snapshot/원본 expected Post version은 이 확장에 포함하지 않는다. Notification은 version으로 역순을 제어하고 실제 종료는 Post 적용 이벤트로만 확정한다. 상세 계약은 [Notification 이벤트](../../notification-service/EVENT_CONTRACTS.md)를 따른다.
 
 ## ENDED 집계의 완결성 경계
 
@@ -63,9 +63,9 @@ Post의 기본 수신·적용 계약은 [Post 이벤트 문서](../../post-servi
 
 ## Notification
 
-별도 Notification 브랜치도 post:events 9종을 소비하고 작성자 댓글/공감 알림을 처리한다. BOARD_STALE/BOARD_CLOSED 소비자는 없다. ParticipantJoined는 알림 수신 동의가 아니다.
+Notification은 Post 확장 활동과 User/Moderation 전용 stream/group을 소비한다. STALE/REACTIVATED는 실제 버전·예정 시각과 확인된 작성자를 사용하며 BOARD_CLOSED는 receipt/대기 경고 취소만 수행한다. ParticipantJoined는 알림 수신 동의가 아니다.
 
-종료 예정/종료 알림에는 Post가 실제 상태를 적용한 뒤 발행한 확정 이벤트와 상태 버전, 예정/확정 시각, 중복 키·취소/복귀 정책이 필요하다. 작성자와 알림에 동의한 참여자 목록을 조회하거나 재구성하는 인가된 계약도 필요하다. Moderation의 판단만으로 Push를 직접 보내거나 수신자를 추측하지 않는다.
+실제 종료는 PostExpired/PostUpdated의 적용 상태와 버전으로 알린다. 수신자는 확인된 작성자로 한정하며 동의한 참여자 목록 계약은 없다. 제재는 PostDeleted/PostCommentDeleted의 실제 MODERATION 삭제 적용만 사용하고 AI flagged나 신고 접수로 조치 완료를 추정하지 않는다. [현재 매트릭스](../../notification-service/NOTIFICATION_MATRIX.md)와 [운영 절차](../../notification-service/OPERATIONS.md)를 참조한다.
 
 ## Map / Realtime
 
@@ -104,7 +104,7 @@ WGO-ARCH-06이며 이번 lifecycle Consumer 구현의 완료 범위에 포함하
 댓글 검사 결과 producer와 동일 ID 복구/재발행은 구현했다.
 [콘텐츠 이벤트 계약](content-moderation-events.md)을 따른다. 결과 소비자의 검토/제재
 정책과 Post 본문 인가, contentVersion, 결정 적용/거부 피드백은 여전히 미완료다.
-Lifecycle v1 payload는 유지하고 사유·버전은 내부 projection/로그에서만 확인한다.
+Lifecycle v1의 필수 shape는 유지하며 version/작성자/실제 예정 시각만 선택 필드로 추가했다. 사유와 ENDED 근거는 내부 projection/로그에서 확인한다.
 예정 ID의 bounded lease 스케줄, CLOSED 압축, 실제 XADD 실패 복구와 migration CLI는
 [운영 문서](operations.md)를 따른다. 활성 단일 JSON 성장과 운영 영속성은 남은 과제다.
-Notification 완료 브랜치는 별도 dev 기반 PR이며 이 브랜치로 합치지 않았다.
+Notification의 최신 통합 결과와 실제 GCP 미검증 범위는 [완료 보고서](../../notification-service/COMPLETION_REPORT.md)를 따른다.

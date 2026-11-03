@@ -207,4 +207,62 @@ describe('durable stream cutoff, ACK outage, DLQ replay and identity fencing', (
       (await h.database.pool.query('SELECT * FROM notifications')).rowCount,
     ).toBe(1);
   });
+  it('retains historical Post projections but does not alert newly supported facts when a legacy group is replayed', async () => {
+    const candidate = (postId: string) => {
+      const f = wire('PostCreated', { postId }),
+        v = JSON.parse(f.data);
+      return {
+        ...f,
+        eventType: 'PostVoteCandidateSelected',
+        data: JSON.stringify({
+          ...v,
+          eventType: 'PostVoteCandidateSelected',
+          postAuthorId: 1,
+          activityVersion: 1,
+          candidate: {
+            postId,
+            commentId: `comment_${randomUUID()}`,
+            authorId: 2,
+            scoreAtSelection: 0,
+            selectedAt: new Date().toISOString(),
+            regionCode: null,
+          },
+        }),
+      };
+    };
+    await h.redis.xGroupCreate('post:events', 'post-notification', '0-0', {
+      MKSTREAM: true,
+    });
+    await h.redis.xAdd('post:events', '*', candidate('post_past'));
+    const consumer = new PostEventConsumer(
+      h.config,
+      post,
+      undefined,
+      h.database,
+    );
+    consumers.push(consumer);
+    await consumer.worker!.initialize();
+    const cutoff = consumer.worker!.featureStartId;
+    await consumer.pollOnce();
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      (await h.database.pool.query('SELECT * FROM notification_activities'))
+        .rowCount,
+    ).toBe(1);
+    expect(
+      (
+        await h.database.pool.query(
+          'SELECT details FROM notification_event_inbox',
+        )
+      ).rows[0].details.suppressed,
+    ).toBe(true);
+    await h.redis.xAdd('post:events', '*', candidate('post_fresh'));
+    await consumer.pollOnce();
+    expect(send).toHaveBeenCalledOnce();
+    await h.redis.xGroupDestroy('post:events', 'post-notification');
+    await consumer.worker!.initialize();
+    await consumer.pollOnce();
+    expect(consumer.worker!.featureStartId).toBe(cutoff);
+    expect(send).toHaveBeenCalledOnce();
+  });
 });

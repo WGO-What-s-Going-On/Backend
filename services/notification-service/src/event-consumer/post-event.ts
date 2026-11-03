@@ -40,6 +40,8 @@ export interface PostEvent {
   closedAt?: string | null;
   latitude?: number;
   longitude?: number;
+  // Set by the consumer's durable rollout boundary, never read from producer JSON.
+  suppressNotifications?: boolean;
 }
 const supported = new Set<SupportedPostEventType>([
   'PostCreated',

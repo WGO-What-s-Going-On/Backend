@@ -34,13 +34,11 @@ describe('FirebasePushAdapter', () => {
       new MemorySubscriptions(),
     );
     await subscriptions.upsert('1', 'test-token', 'web');
-    const sendEachForMulticast = vi
-      .fn()
-      .mockResolvedValue({
-        successCount: 1,
-        failureCount: 0,
-        responses: [{ success: true }],
-      });
+    const sendEachForMulticast = vi.fn().mockResolvedValue({
+      successCount: 1,
+      failureCount: 0,
+      responses: [{ success: true }],
+    });
     const adapter = new FirebasePushAdapter(
       new ConfigService(),
       subscriptions,
@@ -63,6 +61,9 @@ describe('FirebasePushAdapter', () => {
       notificationId: 'n',
       type: 'NEARBY_POST_CREATED',
     });
+    expect(
+      sendEachForMulticast.mock.calls[0]?.[0].webpush.notification.tag,
+    ).toBe('n');
     expect(sendEachForMulticast.mock.calls[0]?.[0]).not.toHaveProperty(
       'authorizationActorId',
     );

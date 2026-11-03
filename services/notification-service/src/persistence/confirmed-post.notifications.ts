@@ -64,7 +64,11 @@ export async function confirmedPostNotifications(
   const expired =
     event.eventType === 'PostExpired' && !previous.closed && !previous.paused;
   const toggled = update && previous.paused !== (event.closedAt !== null);
-  if ((expired || toggled) && event.postAuthorId) {
+  if (
+    (expired || toggled) &&
+    event.postAuthorId &&
+    !event.suppressNotifications
+  ) {
     const closed = expired || event.closedAt !== null;
     await writer.write(
       client,

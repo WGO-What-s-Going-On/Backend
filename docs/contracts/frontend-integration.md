@@ -84,7 +84,7 @@ Post·Map·Notification·Moderation은 서비스 서명과 JWT의 `userId`가 �
 | --- | --- | --- |
 | PATCH /posts/{postId} | title 및/또는 content | 작성자만, 활성·미종료 글만. 204. 위치·카테고리는 수정하지 않음 |
 | PUT /posts/{postId}/closed | `{closed:true|false}` | 작성자만, 멱등 204. 자동 만료·삭제·제재된 글의 재개는 거절 |
-| POST /moderation/reports | `{targetType:"POST"|"COMMENT",postId,commentId?,reason,description?}` | 201. enum 사유, description 최대 2,000자. 운영 대상 검증 계약 미지원 시 503 |
+| POST /moderation/reports | `{targetType:"POST"|"COMMENT",postId,commentId?,reason,description?}` | 201. enum 사유, description 최대 2,000자. 전용 대상 검증 키/URL 미설정·조회 장애는503 |
 | DELETE /moderation/reports/{reportId} | 없음 | 본인 PENDING만 취소, 200. 중복 취소는 최초 결과 |
 | POST /users/me/blocks | `{blockedUserId:"123"}` | 자기 차단 금지, ACTIVE/SUSPENDED 대상만, 멱등 204 |
 | DELETE /users/me/blocks/{blockedUserId} | 없음 | 멱등 204 |

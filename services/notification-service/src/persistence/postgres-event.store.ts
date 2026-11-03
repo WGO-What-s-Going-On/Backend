@@ -271,6 +271,7 @@ export class PostgresEventStore {
     }
     if (
       this.blocks &&
+      !event.suppressNotifications &&
       [
         'PostCommentCreated',
         'PostReactionCreated',
@@ -316,6 +317,12 @@ export class PostgresEventStore {
         throw new Error('Invalid Post event identity conflict');
       // 동일 post의 중복 처리와 묶음 갱신은 이 행 잠금과 같은 transaction 안에서 직렬화한다.
       const meta = await this.lockPost(client, postId);
+      if (
+        meta.author_id &&
+        event.postAuthorId &&
+        meta.author_id !== event.postAuthorId
+      )
+        throw new Error('Invalid immutable Post author conflict');
       const processed = (
         await client.query<{ recipient: string | null }>(
           'SELECT recipient FROM notification_processed_events WHERE post_id=$1 AND event_id=$2',
@@ -569,7 +576,14 @@ export class PostgresEventStore {
       await client.query(
         `INSERT INTO notification_event_inbox(source_stream,event_id,details) VALUES('post:events',$1,$2)
         ON CONFLICT DO NOTHING`,
-        [event.eventId, { eventType: event.eventType, aggregateId: postId }],
+        [
+          event.eventId,
+          {
+            eventType: event.eventType,
+            aggregateId: postId,
+            ...(event.suppressNotifications ? { suppressed: true } : {}),
+          },
+        ],
       );
       return recipient;
     });

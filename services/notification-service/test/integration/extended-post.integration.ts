@@ -116,6 +116,30 @@ describe('extended Post facts with PostgreSQL', () => {
     await store.apply(missing);
     expect(await items()).toHaveLength(1);
   });
+  it('rejects conflicting immutable Post, parent and comment identities without committing receipts', async () => {
+    await store.apply(
+      parsePostEvent(
+        wire('PostCommentCreated', { postId, commentId: 'parent', actor: 3 })
+          .data,
+      )!,
+    );
+    const badPost = reply('bad-post');
+    badPost.postAuthorId = '9';
+    await expect(store.apply(badPost)).rejects.toThrow('immutable Post author');
+    await expect(store.apply(reply('bad-parent', 4))).rejects.toThrow(
+      'parent author conflict',
+    );
+    const badReaction = reaction();
+    badReaction.commentAuthorId = '4';
+    await expect(store.apply(badReaction)).rejects.toThrow(
+      'immutable comment author',
+    );
+    expect(
+      (await h.database.pool.query('SELECT * FROM notification_event_inbox'))
+        .rowCount,
+    ).toBe(1);
+    expect(await items()).toHaveLength(0);
+  });
   it.each(['HELPFUL', 'AGREE', 'DIFFERENT'])(
     'versions %s create/remove/recreate and excludes self',
     async (kind) => {

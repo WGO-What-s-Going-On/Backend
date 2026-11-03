@@ -18,6 +18,8 @@
 
 group이 유실되면 DB의 최초 cutoff로 재생해 Inbox/기존 Post marker로 중복을 막는다. 이전부터 존재한 group의 시작 checkpoint는0-0으로 보존해 오래된 PEL을 건너뛰지 않는다. 단순 Redis 재시작에서 group/PEL이 보존되면 그대로 재개한다. stream 원문 자체가 유실되면 PostgreSQL Inbox가 생산자 원문 복원을 대신하지 않는다. 승인된 생산자 Outbox 재발행 또는 Redis 백업 복구가 필요하며 원본 eventId를 유지한다.
 
+기존 Post Consumer는 과거 미지원 댓글 공감/투표/PostUpdated를 receipt 없이 ACK했으므로 `post-notification/features-v2`라는 **DB 경계 행**도 최초 준비 시 stream tail로 고정한다. Redis consumer group은 추가하지 않는다. 복구 시 이 경계 이전의 신규 유형은 상태·취소·버전과 receipt만 반영하고 새 알림/Push를 만들지 않는다. 원래 지원하던9종의 미완료 PEL은 계속 처리한다. 이 구분으로 기존 Pending 보존과 과거 신규 알림 폭주 방지를 함께 유지한다. 과거 답글의 부모 문맥이 없는 경우 Post 소유 원본에서 부모/자식의 현재 삭제 상태와 작성자 문맥을 확인·재조정한 뒤 원본 ID로 제한 재처리한다.
+
 DLQ 한 건은 먼저 다음 명령으로 검증한다. 기본은 dry-run이다.
 
 ```sh

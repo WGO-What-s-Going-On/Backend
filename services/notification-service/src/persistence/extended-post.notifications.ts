@@ -54,6 +54,26 @@ export async function projectExtendedPost(
     'PostCommentUpdated',
     'PostCommentDeleted',
   ].includes(type);
+  if (commentId && event.commentAuthorId) {
+    const known = (
+      await client.query(
+        'SELECT author_id FROM notification_comment_states WHERE post_id=$1 AND comment_id=$2',
+        [postId, commentId],
+      )
+    ).rows[0];
+    if (known?.author_id && known.author_id !== event.commentAuthorId)
+      throw new Error('Invalid immutable comment author conflict');
+  }
+  if (event.parentCommentId && event.parentCommentAuthorId) {
+    const parent = (
+      await client.query(
+        'SELECT author_id FROM notification_comment_states WHERE post_id=$1 AND comment_id=$2',
+        [postId, event.parentCommentId],
+      )
+    ).rows[0];
+    if (parent?.author_id && parent.author_id !== event.parentCommentAuthorId)
+      throw new Error('Invalid parent author conflict');
+  }
   if (commentEvent && commentId) {
     await client.query(
       `INSERT INTO notification_comment_states(post_id,comment_id,version,deleted,author_id,parent_comment_id)
@@ -152,6 +172,7 @@ export async function projectExtendedPost(
     if (!active) {
       if (previous) await subtractFact(client, previous);
     } else if (
+      !event.suppressNotifications &&
       (!social || recipient !== event.actorId) &&
       (!social || !allowed || allowed.has(recipient))
     ) {

@@ -26,7 +26,15 @@ try {
   for (const [stream, group] of Object.entries(groups)) {
     const consumer = new DurableStreamConsumer(
       database,
-      { stream, group, dead: deadStreams[stream]!, url: process.env.REDIS_URL },
+      {
+        stream,
+        group,
+        dead: deadStreams[stream]!,
+        url: process.env.REDIS_URL,
+        ...(stream === 'post:events'
+          ? { featureCutoffKey: 'post-notification/features-v2' }
+          : {}),
+      },
       async () => {
         throw new Error('Prepare must never consume');
       },

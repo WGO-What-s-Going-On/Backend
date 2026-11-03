@@ -38,12 +38,37 @@ export class PostEventConsumer implements OnModuleInit, OnModuleDestroy {
         stream: 'post:events',
         group: 'post-notification',
         dead: 'notification:post:dead',
+        featureCutoffKey: 'post-notification/features-v2',
         pendingIdleMs: config.get<number>('redis.pendingIdleMs') ?? 30000,
         blockMs: config.get<number>('redis.blockMs') ?? 1000,
       },
-      async (fields) => {
+      async (fields, streamId) => {
         if (!fields.data) throw new Error('Invalid post event: missing data');
         const event = parsePostEvent(fields.data, fields);
+        const boundary = this.worker?.featureStartId;
+        // Older consumers ACKed these types without a receipt. A lost legacy
+        // group must not turn that history into a new push campaign.
+        if (
+          event &&
+          streamId &&
+          boundary &&
+          [
+            'PostUpdated',
+            'PostCommentReactionCreated',
+            'PostCommentReactionRemoved',
+            'PostVoteCandidateSelected',
+            'PostVoteWon',
+          ].includes(event.eventType)
+        ) {
+          const [ms = '0', seq = '0'] = streamId.split('-'),
+            [cutoffMs = '0', cutoffSeq = '0'] = boundary.split('-');
+          if (
+            BigInt(ms) < BigInt(cutoffMs) ||
+            (BigInt(ms) === BigInt(cutoffMs) &&
+              BigInt(seq) <= BigInt(cutoffSeq))
+          )
+            event.suppressNotifications = true;
+        }
         if (event) await handler.handle(event);
         else await handler.ignore(fields);
       },

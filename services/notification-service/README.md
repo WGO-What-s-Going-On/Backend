@@ -41,15 +41,19 @@ Stream은 `post:events`, group은 `post-notification`, DLQ는 `notification:post
 
 | 이벤트 | 처리 |
 | --- | --- |
-| PostCreated | 작성자 projection 저장. 주변 조회·동의 계약이 없어 Push 없음 |
-| PostCommentCreated | 작성자 댓글 알림과 묶음 처리 |
+| PostCreated | 작성자 projection 저장. 명시적 위치 구독에만 주변 fanout 예약, 기능 기본 OFF |
+| PostCommentCreated | 게시글 작성자 댓글/답글과 확인된 부모 작성자 답글, 중복 수신자 제거 |
+| PostCommentUpdated | 버전/정상 처리 기록. 편집 자체의 추가 Push 없음 |
+| PostCommentReactionCreated/Removed | 댓글 작성자 수신, HELPFUL/AGREE/DIFFERENT 묶음·버전·취소 |
+| PostVoteCandidateSelected/PostVoteWon | 별도 사실로 후보/승리 작성자 수신. 후보는 게시글·사용자당 한 제품 알림 |
+| PostUpdated | 실제 수동 닫힘/재열림과 postVersion, 경고·미전송 작업 취소 |
 | PostReactionCreated | 4종 공감·legacy LIKE 알림과 묶음 처리. ENDED로 게시물 종료하지 않음 |
 | PostParticipantJoined | 인식·ACK. 참여를 알림 구독 동의로 해석하지 않음 |
 | PostReactionRemoved | activityVersion 기반 기여 제거, 역순·중복·재등록 처리 |
 | PostCommentDeleted | 기여 제거·숨김·미전송 취소. USER/MODERATION 및 reason 감사 기록 |
-| PostDeleted | terminal postVersion 반영, 후속 활동·미전송 Push 차단 |
+| PostDeleted | terminal postVersion 반영, 후속 활동·미전송 Push 차단. 확정 MODERATION 삭제는 작성자 안내 |
 | PostParticipantLeft | 인식·ACK. 참여 알림 없음 |
-| PostExpired | 만료 tombstone과 후속 전송 차단. BOARD_CLOSED로 해석하지 않음 |
+| PostExpired | 실제 적용된 종료 안내, 만료 tombstone과 후속 전송 차단. Moderation 판단만으로 대체하지 않음 |
 
 과거 생성 v1의 postAuthorId/activityVersion/postVersion 누락을 허용합니다. 수신자는 이벤트의 postAuthorId, 또는 실제 소비한 PostCreated 등에서 저장한 작성자 projection으로만 결정합니다. 둘 다 없으면 보류하여 pending/retry 후 DLQ에 원본과 사유를 남깁니다. 인가되지 않은 Post API를 호출하거나 수신자를 추측하지 않습니다. 재처리는 작성자 projection 확보 후 운영자가 DLQ 원본의 동일 eventId를 재발행하는 방식으로 가능합니다.
 

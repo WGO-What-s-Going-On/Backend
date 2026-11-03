@@ -15,6 +15,7 @@ export class DurableStreamConsumer {
   private stopped = false;
   private running?: Promise<void>;
   private cursor = '0-0';
+  featureStartId: string | undefined;
   constructor(
     readonly database: PostgresDatabase,
     readonly options: {
@@ -23,10 +24,14 @@ export class DurableStreamConsumer {
       dead: string;
       url: string;
       startId?: string;
+      featureCutoffKey?: string;
       pendingIdleMs?: number;
       blockMs?: number;
     },
-    readonly handle: (fields: Record<string, string>) => Promise<void>,
+    readonly handle: (
+      fields: Record<string, string>,
+      streamId?: string,
+    ) => Promise<void>,
     redis?: ReturnType<typeof createClient>,
   ) {
     this.redis =
@@ -45,6 +50,14 @@ export class DurableStreamConsumer {
     if (this.redis.isOpen && !this.redis.isReady) await this.redis.disconnect();
     if (!this.redis.isOpen) await this.redis.connect();
     let last = '0-0';
+    let generated = '0-0';
+    try {
+      generated = (await this.redis.xInfoStream(this.options.stream))[
+        'last-generated-id'
+      ];
+    } catch (error) {
+      if (!String(error).includes('no such key')) throw error;
+    }
     if (this.options.startId !== undefined) {
       if (!/^\d+-\d+$/.test(this.options.startId))
         throw new Error('Invalid explicit stream replay start');
@@ -56,9 +69,7 @@ export class DurableStreamConsumer {
         // against durable receipts instead of skipping unfinished work.
         last = groups.some((group) => group.name === this.options.group)
           ? '0-0'
-          : (await this.redis.xInfoStream(this.options.stream))[
-              'last-generated-id'
-            ];
+          : generated;
       } catch (e) {
         if (!String(e).includes('no such key')) throw e;
       }
@@ -73,6 +84,18 @@ export class DurableStreamConsumer {
         [this.options.stream, this.options.group],
       )
     ).rows[0];
+    if (this.options.featureCutoffKey) {
+      await this.database.pool.query(
+        'INSERT INTO notification_stream_starts VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+        [this.options.stream, this.options.featureCutoffKey, generated],
+      );
+      this.featureStartId = (
+        await this.database.pool.query(
+          'SELECT start_id FROM notification_stream_starts WHERE source_stream=$1 AND consumer_group=$2',
+          [this.options.stream, this.options.featureCutoffKey],
+        )
+      ).rows[0].start_id;
+    }
     try {
       await this.redis.xGroupCreate(
         this.options.stream,
@@ -95,7 +118,7 @@ export class DurableStreamConsumer {
   }
   async process(entry: StreamEntry) {
     try {
-      await this.handle(entry.message);
+      await this.handle(entry.message, entry.id);
     } catch (e) {
       if (e instanceof BusyDeliveryError) return;
       const pending = await this.redis.xPendingRange(
