@@ -18,7 +18,7 @@ export class NextTitleResult {
 }
 export class RegionalTitleResult {
   @ApiProperty() regionCode!: string;
-  @ApiProperty() regionName!: string;
+  @ApiProperty({ type: String, nullable: true }) regionName!: string | null;
   @ApiProperty({ type: String, nullable: true }) rankingDate!: string | null;
   @ApiProperty({ type: String }) score!: string;
   @ApiProperty({ type: String, nullable: true }) rank!: string | null;
@@ -29,9 +29,16 @@ export class RegionalTitleResult {
     type: String,
     nullable: true,
     description:
-      'Additional selections to exceed the saved cutoff while all other results stay fixed; not a prediction.',
+      'Deprecated alias of additionalPointsForGuaranteedEntry; this is a point deficit, not a guaranteed number of candidate events.',
   })
   additionalSelectionsForGuaranteedEntry!: string | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      'Points needed to exceed the saved cutoff with all other results fixed. Candidate +1 per post/user; winner +2. Not a prediction.',
+  })
+  additionalPointsForGuaranteedEntry!: string | null;
   @ApiProperty() selected!: boolean;
   @ApiProperty() eligible!: boolean;
   @ApiProperty() entryPossible!: boolean;
@@ -46,6 +53,7 @@ export class RegionalTitleReadinessResult {
       'DISABLED',
       'CONTRACT_UNAVAILABLE',
       'INCOMPLETE_SOURCE_DATA',
+      'READY_WITH_EXCLUSIONS',
       'READY',
     ],
   })

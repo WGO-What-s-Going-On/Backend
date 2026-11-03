@@ -1,3 +1,4 @@
+import { ApplyRegionalTitlePolicyV21793651000000 } from '../src/database/migrations/1793651000000-ApplyRegionalTitlePolicyV2.js';
 import { StoreVoteActivitySnapshots1793650000000 } from '../src/database/migrations/1793650000000-StoreVoteActivitySnapshots.js';
 import 'reflect-metadata';
 import { beforeAll, afterAll, beforeEach, describe, it, expect } from 'vitest';
@@ -76,6 +77,7 @@ function vote(
     resultId: postId,
     commentId: comment(),
     occurredAt: closedAt,
+    regionCode: R1,
     postRegion: { code: R1, name: '상도1동', type: 'H', version: 1 },
   };
 }
@@ -110,6 +112,7 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
         CompleteActivityRewards1793360000000,
         ActivateWgoTitles1793400000000,
         StoreVoteActivitySnapshots1793650000000,
+        ApplyRegionalTitlePolicyV21793651000000,
       ],
     });
     await db.initialize();
@@ -217,9 +220,9 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
       region,
     }));
     await db.query(
-      `INSERT INTO user_activities(activity_key,post_id,kind,actor_id,beneficiary_id,reaction_type,version,active,event_id,correlation_id,comment_id,result_id,occurred_at,source_time_verified)
-      SELECT key,"postId",'VOTE_WIN',"actorId"::bigint,"beneficiaryId"::bigint,NULL,1,true,"eventId",'bulk-vote-fixture',"commentId","resultId","occurredAt"::timestamptz,true
-      FROM jsonb_to_recordset($1) AS x(key text,"postId" text,"actorId" text,"beneficiaryId" text,"eventId" text,"commentId" text,"resultId" text,"occurredAt" text)`,
+      `INSERT INTO user_activities(activity_key,post_id,kind,actor_id,beneficiary_id,reaction_type,version,active,event_id,correlation_id,comment_id,result_id,occurred_at,source_time_verified,source_region_code,source_region_state,source_region_event_id)
+      SELECT key,"postId",'VOTE_WIN',"actorId"::bigint,"beneficiaryId"::bigint,NULL,1,true,"eventId",'bulk-vote-fixture',"commentId","resultId","occurredAt"::timestamptz,true,region,'KNOWN',"eventId"
+      FROM jsonb_to_recordset($1) AS x(region text,key text,"postId" text,"actorId" text,"beneficiaryId" text,"eventId" text,"commentId" text,"resultId" text,"occurredAt" text)`,
       [JSON.stringify(rows)],
     );
     await db.query(
@@ -231,11 +234,11 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
       await service.refreshUserTitles(String(offset + i));
     return rows;
   }
-  it('defaults confirmed titles ON independently of default-OFF credits and an unavailable region contract', async () => {
+  it('defaults confirmed titles and the actual vote region contract ON independently of default-OFF credits', async () => {
     expect(loadTitleSettings({})).toEqual({
       enabled: true,
       regionalRankingEnabled: true,
-      regionContract: 'none',
+      regionContract: 'vote-region-v1',
     });
     const ordinary = new ActivityService(db, new RewardEngine(DISABLED_POLICY));
     for (let i = 0; i < 10; i++) await ordinary.record(activity('COMMENT'));
@@ -243,8 +246,8 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
     expect(result.rewardsEnabled).toBe(false);
     expect(await has('NEWS_SOURCE')).toBe(true);
     expect(result.titles.regionalRanking).toMatchObject({
-      ready: false,
-      status: 'CONTRACT_UNAVAILABLE',
+      ready: true,
+      status: 'READY',
     });
     expect(
       (await db.query('SELECT count(*) FROM credit_ledger'))[0].count,
@@ -485,7 +488,7 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
           [run],
         )
       )[0].score,
-    ).toBe('1');
+    ).toBe('2');
     const tomorrow = new Date(NOW.getTime() + 86400000);
     await ranker.recompute(R1, tomorrow);
     expect(
@@ -529,6 +532,7 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
     )[0].run_id;
     await service.record({
       ...vote('2'),
+      regionCode: R2,
       postRegion: { code: R2, name: '상도2동', type: 'H', version: 1 },
     });
     await ranker.recompute(R2, NOW);
@@ -629,7 +633,7 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
       '1',
     );
   });
-  it('revises activity regions without moving them on user profile changes, and preserves old snapshots', async () => {
+  it('audits post region corrections without relocating immutable event scores or old snapshots', async () => {
     const rows = await competitors(10);
     const original = await ranker.recompute(R1, NOW),
       v = rows[0]!;
@@ -694,19 +698,20 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
       )[0].count,
     ).toBe('2');
   });
-  it('fails closed for incomplete attribution/timestamps while leaving the first three titles operational', async () => {
+  it('excludes unknown attribution/timestamps without suppressing unrelated known regional scores', async () => {
     const rows = await competitors(10);
-    await db.query('DELETE FROM reward_post_regions WHERE post_id=$1', [
-      rows[0]!.postId,
-    ]);
+    await db.query(
+      "UPDATE user_activities SET source_region_state='MISSING',source_region_code=NULL WHERE activity_key=$1",
+      [rows[0]!.key],
+    );
     await ranker.recompute(R1, NOW);
-    expect(await history('CLAIRVOYANT', 'GRANTED')).toBe('0');
+    expect(await history('CLAIRVOYANT', 'GRANTED')).toBe('1');
     expect(await has('CORRESPONDENT')).toBe(true);
     expect(
       (await titles.progress(db.manager, '1', NOW)).regionalRanking,
     ).toMatchObject({
-      ready: false,
-      status: 'INCOMPLETE_SOURCE_DATA',
+      ready: true,
+      status: 'READY_WITH_EXCLUSIONS',
       missingRegionResults: '1',
     });
     await db.query(
@@ -718,12 +723,12 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
         .unverifiedTimeResults,
     ).toBe('1');
   });
-  it('consumes the proposed Post region contract only when explicitly configured and publishes title metadata to real Redis', async () => {
+  it('consumes actual Post vote region snapshots and publishes title metadata to real Redis', async () => {
     const consumer = new PostRewardsConsumer(
       new ConfigService({
         redis: { url: redisUrl },
         rewards: {
-          regionContract: 'post-region-v1',
+          regionContract: 'vote-region-v1',
           pendingIdleMs: 1,
           maxAttempts: 2,
         },
@@ -750,6 +755,7 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
             winnerAuthorId: 1,
             votes: 2,
             closedAt: a.occurredAt,
+            regionCode: a.regionCode,
           },
           postRegion: a.postRegion,
         };
@@ -759,6 +765,7 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
         data: JSON.stringify(value),
       };
       expect(parsePostEvent(fields)!.postRegion).toBeUndefined();
+      expect(parsePostEvent(fields)!.regionCode).toBe(R1);
       await redis.xadd(POST_STREAM, '*', ...Object.entries(fields).flat());
       await consumer.pollOnce();
     }

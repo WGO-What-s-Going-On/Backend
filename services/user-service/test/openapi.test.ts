@@ -205,6 +205,17 @@ describe('User OpenAPI contract', () => {
         .enum,
     ).toContain('CONTRACT_UNAVAILABLE');
     expect(
+      doc.components.schemas.RegionalTitleReadinessResult.properties.status
+        .enum,
+    ).toContain('READY_WITH_EXCLUSIONS');
+    expect(
+      doc.components.schemas.RegionalTitleResult.properties.regionName.nullable,
+    ).toBe(true);
+    expect(
+      doc.components.schemas.RegionalTitleResult.properties
+        .additionalPointsForGuaranteedEntry.nullable,
+    ).toBe(true);
+    expect(
       doc.components.schemas.BadgeHistoryItemResult.properties.regionCode
         .nullable,
     ).toBe(true);

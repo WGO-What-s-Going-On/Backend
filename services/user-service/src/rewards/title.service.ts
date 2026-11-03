@@ -1,6 +1,7 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import { BADGE_CATALOG } from './badge-catalog.js';
+import { REGIONAL_SCORE_CTES } from './regional-score.js';
 import {
   ConflictingRewardEvent,
   InvalidRewardEvent,
@@ -53,7 +54,7 @@ export interface TitleProgress {
 }
 export interface RegionalProgress {
   regionCode: string;
-  regionName: string;
+  regionName: string | null;
   rankingDate: string | null;
   score: string;
   rank: string | null;
@@ -61,6 +62,7 @@ export interface RegionalProgress {
   slots: string;
   cutoffScore: string | null;
   additionalSelectionsForGuaranteedEntry: string | null;
+  additionalPointsForGuaranteedEntry: string | null;
   selected: boolean;
   eligible: boolean;
   entryPossible: boolean;
@@ -389,13 +391,11 @@ export class TitleService {
   }
   async completeness(m: EntityManager, start: Date, end: Date) {
     const [r] = await m.query(
-      `SELECT count(*) FILTER(WHERE r.post_id IS NULL)::text AS missing,
+      `SELECT count(*) FILTER(WHERE a.source_region_state<>'KNOWN')::text AS missing,
       count(*) FILTER(WHERE NOT a.source_time_verified)::text AS unverified
       FROM reward_title_valid_activities a JOIN users u ON u.id=a.beneficiary_id AND u.status='ACTIVE'
       JOIN user_title_progress t ON t.user_id=u.id AND t.representative_wins>=$3
-      LEFT JOIN reward_post_regions r ON r.post_id=a.post_id
-      WHERE a.kind='VOTE_WIN' AND (NOT a.source_time_verified OR (a.occurred_at>=$1 AND a.occurred_at<$2))
-      AND (r.post_id IS NULL OR r.region_code IS NOT NULL)`,
+      WHERE a.kind IN ('VOTE_CANDIDATE','VOTE_WIN') AND (NOT a.source_time_verified OR (a.occurred_at>=$1 AND a.occurred_at<$2))`,
       [start, end, TITLE_POLICY.representativeWins],
     );
     return r as { missing: string; unverified: string };
@@ -418,40 +418,45 @@ export class TitleService {
     const ready =
       this.settings.enabled &&
       this.settings.regionalRankingEnabled &&
-      this.settings.regionContract === 'post-region-v1' &&
-      completeness.missing === '0' &&
-      completeness.unverified === '0';
+      this.settings.regionContract !== 'none';
+    const exclusions =
+      completeness.missing !== '0' || completeness.unverified !== '0';
     const regions: RegionalProgress[] = await m.query(
-      `WITH contributions AS (
-      SELECT r.region_code,max(r.region_name) AS region_name,count(DISTINCT a.result_id)::text AS score
-      FROM reward_title_valid_activities a JOIN reward_post_regions r ON r.post_id=a.post_id
-      WHERE a.kind='VOTE_WIN' AND a.beneficiary_id=$1 AND a.source_time_verified AND r.region_code IS NOT NULL
-      AND a.occurred_at>=$2 AND a.occurred_at<$3 GROUP BY r.region_code)
-      SELECT c.region_code AS "regionCode",c.region_name AS "regionName",run.ranking_date::text AS "rankingDate",COALESCE(e.score::text,c.score) AS score,
+      `WITH ${REGIONAL_SCORE_CTES},region_list AS (
+        SELECT region_code FROM regional_totals WHERE user_id=$3
+        UNION SELECT region_code FROM user_regional_badges WHERE user_id=$3 AND revoked_at IS NULL)
+      SELECT c.region_code AS "regionCode",NULL::text AS "regionName",run.ranking_date::text AS "rankingDate",COALESCE(e.score,t.score,0)::text AS score,
         e.rank,COALESCE(run.competitors,0)::text AS competitors,COALESCE(run.slots,0)::text AS slots,
         COALESCE(g.revoked_at IS NULL AND g.user_id IS NOT NULL,false) AS selected,
         cutoff.score AS "cutoffScore",
         CASE WHEN NOT $4::boolean OR cutoff.score IS NULL THEN NULL
           WHEN COALESCE(g.revoked_at IS NULL AND g.user_id IS NOT NULL,false) THEN '0'
-          ELSE GREATEST(cutoff.score+1-COALESCE(e.score,c.score::bigint),0)::text END AS "additionalSelectionsForGuaranteedEntry",
-        ($4::boolean) AS eligible,($4::boolean AND $6::boolean AND COALESCE(run.slots,0)>0 AND run.suppressed_reason IS NULL
-          AND run.ranking_date=$5::date AND run.input_revision=state.input_revision) AS "entryPossible",
-        COALESCE(run.ranking_date=$5::date AND run.input_revision=state.input_revision,false) AS "upToDate",run.id AS "runId"
-      FROM contributions c LEFT JOIN regional_ranking_heads h ON h.region_code=c.region_code
-      LEFT JOIN regional_ranking_runs run ON run.id=h.run_id LEFT JOIN regional_ranking_entries e ON e.run_id=run.id AND e.user_id=$1
-      LEFT JOIN user_regional_badges g ON g.user_id=$1 AND g.region_code=c.region_code
+          ELSE GREATEST(cutoff.score+1-COALESCE(e.score,t.score,0),0)::text END AS "additionalSelectionsForGuaranteedEntry",
+        ($4::boolean AND COALESCE(t.score,0)>0) AS eligible,($4::boolean AND COALESCE(t.score,0)>0 AND $6::boolean AND COALESCE(run.slots,0)>0 AND run.suppressed_reason IS NULL
+          AND run.ranking_date=$5::date AND run.input_revision=state.input_revision AND run.policy_version=$7) AS "entryPossible",
+        COALESCE(run.ranking_date=$5::date AND run.input_revision=state.input_revision AND run.policy_version=$7,false) AS "upToDate",run.id AS "runId"
+      FROM region_list c LEFT JOIN regional_totals t ON t.region_code=c.region_code AND t.user_id=$3
+      LEFT JOIN regional_ranking_heads h ON h.region_code=c.region_code
+      LEFT JOIN regional_ranking_runs run ON run.id=h.run_id LEFT JOIN regional_ranking_entries e ON e.run_id=run.id AND e.user_id=$3
+      LEFT JOIN user_regional_badges g ON g.user_id=$3 AND g.region_code=c.region_code
       LEFT JOIN regional_ranking_entries cutoff ON cutoff.run_id=run.id AND cutoff.rank=run.slots
       CROSS JOIN regional_ranking_state state
       ORDER BY c.region_code`,
       [
-        userId,
         window.start,
         window.end,
-        p?.status === 'ACTIVE' && BigInt(p?.representative_wins ?? 0) >= 5n,
+        userId,
+        p?.status === 'ACTIVE' &&
+          BigInt(p?.representative_wins ?? 0) >=
+            BigInt(TITLE_POLICY.representativeWins),
         window.date,
         ready,
+        TITLE_POLICY.version,
       ],
     );
+    for (const r of regions)
+      r.additionalPointsForGuaranteedEntry =
+        r.additionalSelectionsForGuaranteedEntry;
     const progress = [
       String(p?.participation ?? 0),
       String(p?.reporter_comments ?? 0),
@@ -512,7 +517,9 @@ export class TitleService {
             : this.settings.regionContract === 'none'
               ? 'CONTRACT_UNAVAILABLE'
               : ready
-                ? 'READY'
+                ? exclusions
+                  ? 'READY_WITH_EXCLUSIONS'
+                  : 'READY'
                 : 'INCOMPLETE_SOURCE_DATA',
         missingRegionResults: completeness.missing,
         unverifiedTimeResults: completeness.unverified,

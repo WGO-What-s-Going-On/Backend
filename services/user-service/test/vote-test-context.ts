@@ -1,3 +1,4 @@
+import { ApplyRegionalTitlePolicyV21793651000000 } from '../src/database/migrations/1793651000000-ApplyRegionalTitlePolicyV2.js';
 import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
@@ -89,7 +90,12 @@ export async function voteTestDatabase(
       AddActivityRewards1792190000000,
       CompleteActivityRewards1793360000000,
       ActivateWgoTitles1793400000000,
-      ...(migrateSnapshots ? [StoreVoteActivitySnapshots1793650000000] : []),
+      ...(migrateSnapshots
+        ? [
+            StoreVoteActivitySnapshots1793650000000,
+            ApplyRegionalTitlePolicyV21793651000000,
+          ]
+        : []),
     ],
   });
   await db.initialize();

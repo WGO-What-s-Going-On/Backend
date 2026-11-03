@@ -2,6 +2,7 @@ import { ActivateWgoTitles1793400000000 } from './migrations/1793400000000-Activ
 import { CompleteActivityRewards1793360000000 } from './migrations/1793360000000-CompleteActivityRewards.js';
 import 'reflect-metadata';
 import { StoreVoteActivitySnapshots1793650000000 } from './migrations/1793650000000-StoreVoteActivitySnapshots.js';
+import { ApplyRegionalTitlePolicyV21793651000000 } from './migrations/1793651000000-ApplyRegionalTitlePolicyV2.js';
 import { AddProfileImageUploads1793570000000 } from './migrations/1793570000000-AddProfileImageUploads.js';
 import { AddPrivateRealName1793200000000 } from './migrations/1793200000000-AddPrivateRealName.js';
 
@@ -40,6 +41,7 @@ export default new DataSource({
     CompleteActivityRewards1793360000000,
     ActivateWgoTitles1793400000000,
     StoreVoteActivitySnapshots1793650000000,
+    ApplyRegionalTitlePolicyV21793651000000,
   ],
   synchronize: false,
   poolSize: database.poolSize,

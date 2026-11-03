@@ -20,7 +20,7 @@ describe('Confirmed title settings and proposed region boundary', () => {
     ).toEqual({
       enabled: true,
       regionalRankingEnabled: false,
-      regionContract: 'none',
+      regionContract: 'vote-region-v1',
     });
     expect(
       loadTitleSettings({

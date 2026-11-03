@@ -1,3 +1,4 @@
+import { ApplyRegionalTitlePolicyV21793651000000 } from '../src/database/migrations/1793651000000-ApplyRegionalTitlePolicyV2.js';
 import { StoreVoteActivitySnapshots1793650000000 } from '../src/database/migrations/1793650000000-StoreVoteActivitySnapshots.js';
 import { ActivateWgoTitles1793400000000 } from '../src/database/migrations/1793400000000-ActivateWgoTitles.js';
 import { APP_GUARD } from '@nestjs/core';
@@ -144,6 +145,7 @@ describe('Rewards PostgreSQL / Redis integration', () => {
         CompleteActivityRewards1793360000000,
         ActivateWgoTitles1793400000000,
         StoreVoteActivitySnapshots1793650000000,
+        ApplyRegionalTitlePolicyV21793651000000,
       ],
     });
     await db.initialize();
@@ -1436,7 +1438,7 @@ describe('Rewards PostgreSQL / Redis integration', () => {
             expect(result.json().credits).toBe('10');
             expect(result.json().titles).toMatchObject({
               enabled: true,
-              policyVersion: 'wgo-titles-v1',
+              policyVersion: 'wgo-titles-v2',
             });
           }
         }

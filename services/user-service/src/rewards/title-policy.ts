@@ -1,11 +1,12 @@
+import type { RegionContract } from './post-event.js';
 export const TITLE_SETTINGS = Symbol('TITLE_SETTINGS');
 export interface TitleSettings {
   enabled: boolean;
   regionalRankingEnabled: boolean;
-  regionContract: 'none' | 'post-region-v1';
+  regionContract: RegionContract;
 }
 export const TITLE_POLICY = {
-  version: 'wgo-titles-v1',
+  version: 'wgo-titles-v2',
   participation: 10,
   agreesPerComment: 10,
   reporterComments: 10,
@@ -18,6 +19,15 @@ export const TITLE_POLICY = {
   retainExpired: true,
   excludeDeleted: true,
   excludeInactiveAccounts: true,
+  regionalScoring: {
+    candidate: 1,
+    winner: 2,
+    candidateLimit: 'post-user',
+    regionSource: 'event-snapshot',
+    unknownRegion: 'exclude',
+    candidateTime: 'selectedAt',
+    winnerTime: 'closedAt',
+  },
 } as const;
 export const TITLE_CODES = [
   'NEWS_SOURCE',
@@ -35,8 +45,12 @@ export function loadTitleSettings(
       throw new Error(`${key} must be true or false`);
     return value === 'true';
   };
-  const contract = env.USER_TITLE_REGION_CONTRACT ?? 'none';
-  if (contract !== 'none' && contract !== 'post-region-v1')
+  const contract = env.USER_TITLE_REGION_CONTRACT ?? 'vote-region-v1';
+  if (
+    contract !== 'none' &&
+    contract !== 'post-region-v1' &&
+    contract !== 'vote-region-v1'
+  )
     throw new Error('Unsupported User title region contract');
   return {
     enabled: flag('USER_TITLES_ENABLED', true),
