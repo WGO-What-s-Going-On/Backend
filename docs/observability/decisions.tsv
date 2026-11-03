@@ -1,0 +1,7 @@
+ts	phase	decision	why	evidence	result
+2026-11-04T01:18:00+09:00	design	Share canonical source with checked service copies	Seven independent Docker contexts cannot import outside roots without packaging migration	Existing Dockerfiles and tsconfigs; compared two designs	No runtime dependency or build context change
+2026-11-04T01:18:00+09:00	design	Log committed domain outcomes and delivery separately	Driver retry callbacks and ACK failures must not create false successes	Post transaction and stream consumer implementations	Commit outcomes emitted after successful transaction return
+2026-11-04T01:18:00+09:00	design	Allowlisted metadata and safe failure descriptions	Provider messages can contain credentials or private content	Existing HTTP query and provider error paths	Raw body, token, coordinates and provider messages excluded
+2026-11-04T01:25:00+09:00	review	Suppress DEBUG by default and reuse terminal retry predicate	Empty polls must not fill INFO logs; terminal DLQ is not retryable	Independent review and new output assertions	Fixed and tested
+2026-11-04T01:25:00+09:00	review	Exclude notificationId metadata	Existing composite ID contains recipient user ID	Notification event writer inspected	Field removed from output allowlist and callsites
+2026-11-04T01:25:00+09:00	verify	Run selected CI entrypoints and build all images	Shared runtime affects all services and both contract suites	Seven ci-run verify commands, two contract suites, 84 pipeline tests, seven Docker builds	Passed; task containers removed

@@ -1,3 +1,4 @@
+import { safeError } from '../observability/logging.js';
 import { randomUUID } from 'node:crypto';
 
 import { WebSocket } from 'ws';
@@ -20,6 +21,7 @@ export class ConnectionManager {
   constructor(
     readonly heartbeatIntervalMs: number,
     readonly heartbeatTimeoutMs: number,
+    private readonly log?: { warn(value: unknown): void },
   ) {}
 
   register(socket: WebSocket, userId: string): ConnectionSession {
@@ -63,6 +65,18 @@ export class ConnectionManager {
         socket.ping();
         session.heartbeatTimeout = setTimeout(() => {
           session.heartbeatTimeout = undefined;
+          this.log?.warn({
+            event: 'websocket.heartbeat.timeout',
+            message: 'WebSocket heartbeat timed out.',
+            domain: 'realtime',
+            outcome: 'failure',
+            connectionId: session.connectionId,
+            error: safeError(
+              undefined,
+              'WS_HEARTBEAT_TIMEOUT',
+              'WebSocket heartbeat timed out.',
+            ),
+          });
           socket.terminate();
         }, this.heartbeatTimeoutMs);
       }

@@ -1,6 +1,6 @@
+import { createLogger } from '../observability/logging.js';
 import {
   Injectable,
-  Logger,
   type OnApplicationBootstrap,
   type OnModuleDestroy,
 } from '@nestjs/common';
@@ -15,7 +15,7 @@ import { REGIONAL_SCORE_CTES } from './regional-score.js';
 export class RegionalRankingWorker
   implements OnApplicationBootstrap, OnModuleDestroy
 {
-  private readonly logger = new Logger(RegionalRankingWorker.name);
+  private readonly logger = createLogger('user-service', 'ranking');
   private timer?: NodeJS.Timeout;
   private running: Promise<void> | undefined;
   private stopping = false;
@@ -40,9 +40,14 @@ export class RegionalRankingWorker
   run(now = new Date()): Promise<void> {
     if (!this.ready || this.stopping) return Promise.resolve();
     this.running ??= this.batch(now)
-      .catch(() => {
-        this.logger.warn(
-          'Regional title ranking failed; durable checkpoints will be retried',
+      .catch((error) => {
+        this.logger.failure(
+          'regional_ranking_failed',
+          error,
+          'REGIONAL_RANKING_FAILED',
+          'Regional ranking failed; durable checkpoints will be retried',
+          {},
+          true,
         );
       })
       .finally(() => {
@@ -66,7 +71,18 @@ export class RegionalRankingWorker
     );
     for (const r of regions) {
       if (this.stopping) break;
-      await this.recompute(r.region_code, now);
+      const runId = await this.recompute(r.region_code, now);
+      if (runId)
+        this.logger.success(
+          'regional_ranking_completed',
+          'Regional ranking snapshot committed',
+          { eventId: runId },
+        );
+      else
+        this.logger.skipped(
+          'regional_ranking_skipped',
+          'LOCK_UNAVAILABLE_OR_DISABLED',
+        );
     }
   }
   async recompute(

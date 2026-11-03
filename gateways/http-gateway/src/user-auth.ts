@@ -1,3 +1,4 @@
+import { requestFailure } from './logging.js';
 import { importJWK, jwtVerify, SignJWT } from 'jose';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
@@ -161,7 +162,20 @@ export async function userAuthentication(
           throw new Error();
         request.headers['x-user-id'] = payload.sub;
         request.headers['x-session-id'] = payload.sid;
-      } catch {
+      } catch (error) {
+        const code = !request.headers.authorization
+          ? 'AUTH_TOKEN_MISSING'
+          : error instanceof Error &&
+              'code' in error &&
+              error.code === 'ERR_JWT_EXPIRED'
+            ? 'AUTH_TOKEN_EXPIRED'
+            : 'AUTH_TOKEN_INVALID';
+        requestFailure(
+          request,
+          code,
+          'Access token authentication failed.',
+          error,
+        );
         return fail(
           401,
           'GATEWAY_UNAUTHORIZED',

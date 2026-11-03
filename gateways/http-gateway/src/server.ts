@@ -1,3 +1,4 @@
+import { safeError } from './observability/logging.js';
 import { loadEnvFile } from 'node:process';
 
 import { buildApp } from './app.js';
@@ -12,8 +13,11 @@ try {
 const config = loadConfig();
 const app = await buildApp({ config });
 
-const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
-  app.log.info({ signal }, 'shutting down HTTP gateway');
+const shutdown = async (_signal: NodeJS.Signals): Promise<void> => {
+  app.log.info(
+    { event: 'service.stopping', domain: 'lifecycle', outcome: 'success' },
+    'shutting down HTTP gateway',
+  );
   await app.close();
   process.exit(0);
 };
@@ -22,10 +26,25 @@ process.once('SIGINT', () => void shutdown('SIGINT'));
 process.once('SIGTERM', () => void shutdown('SIGTERM'));
 
 try {
-  const address = await app.listen({ host: config.host, port: config.port });
-  app.log.info({ address }, 'HTTP gateway started');
+  await app.listen({ host: config.host, port: config.port });
+  app.log.info(
+    { event: 'service.started', domain: 'lifecycle', outcome: 'success' },
+    'HTTP gateway started',
+  );
 } catch (error) {
-  app.log.fatal(error, 'failed to start HTTP gateway');
+  app.log.fatal(
+    {
+      event: 'service.start.failed',
+      domain: 'lifecycle',
+      outcome: 'failure',
+      error: safeError(
+        error,
+        'SERVICE_START_FAILED',
+        'Gateway startup failed.',
+      ),
+    },
+    'failed to start HTTP gateway',
+  );
   await app.close();
   process.exit(1);
 }

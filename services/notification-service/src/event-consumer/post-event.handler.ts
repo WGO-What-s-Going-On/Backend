@@ -1,7 +1,7 @@
+import { createLogger } from '../observability/logging.js';
 import {
   Inject,
   Injectable,
-  Logger,
   OnModuleDestroy,
   OnModuleInit,
   Optional,
@@ -18,7 +18,7 @@ import { NotificationBlockChecker } from '../notification/block-checker.js';
 
 @Injectable()
 export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(PostEventHandler.name);
+  private readonly logger = createLogger('notification-service', 'push');
   private timer?: NodeJS.Timeout;
   private running = false;
   private stopped = false;
@@ -34,13 +34,27 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
     if (!this.config?.get<string>('redis.url')) return;
     this.timer = setInterval(() => {
       if (!this.stopped)
-        void this.drain().catch(() =>
-          this.logger.warn('Push delivery retry failed'),
+        void this.drain().catch((error) =>
+          this.logger.failure(
+            'push_recovery_failed',
+            error,
+            'PUSH_RECOVERY_FAILED',
+            'Push delivery retry failed',
+            {},
+            true,
+          ),
         );
     }, 30_000);
     this.timer.unref();
-    void this.drain().catch(() =>
-      this.logger.warn('Push delivery recovery failed'),
+    void this.drain().catch((error) =>
+      this.logger.failure(
+        'push_recovery_failed',
+        error,
+        'PUSH_RECOVERY_FAILED',
+        'Push delivery recovery failed',
+        {},
+        true,
+      ),
     );
   }
   async onModuleDestroy(): Promise<void> {
@@ -64,7 +78,10 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
     for (const pending of await this.store.deliveries(postId)) {
       try {
         const delivery = await this.store.acquire(pending);
-        if (!delivery) continue;
+        if (!delivery) {
+          this.logger.skipped('push_delivery_skipped', 'LEASE_UNAVAILABLE');
+          continue;
+        }
         if (
           this.store.allowed &&
           !(await this.store.allowed(
@@ -76,6 +93,14 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
           ))
         ) {
           await this.store.finish(delivery, 'CANCELED');
+          this.logger.skipped(
+            'push_delivery_canceled',
+            'DELIVERY_NOT_ALLOWED',
+            {
+              attempt: delivery.attempts,
+              postId: delivery.postId,
+            },
+          );
           continue;
         }
         let result;
@@ -89,6 +114,14 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
             !(await this.blocks.allowed(delivery.message.userId, actorId))
           ) {
             await this.store.finish(delivery, 'CANCELED');
+            this.logger.skipped(
+              'push_delivery_canceled',
+              'DELIVERY_NOT_ALLOWED',
+              {
+                attempt: delivery.attempts,
+                postId: delivery.postId,
+              },
+            );
             continue;
           }
           result = await this.push.send(delivery.message);
@@ -112,7 +145,38 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
           delivery,
           result.failed > result.invalidTokens.length ? 'FAILED' : 'SENT',
         );
+        if (result.failed > result.invalidTokens.length)
+          this.logger.failure(
+            'push_delivery_failed',
+            undefined,
+            'PUSH_PERMANENT_FAILURE',
+            'Push delivery completed with permanent failures',
+            {
+              attempt: delivery.attempts,
+              postId: delivery.postId,
+              failed: result.failed,
+            },
+            false,
+          );
+        else
+          this.logger.success('push_delivery_sent', 'Push delivery completed', {
+            attempt: delivery.attempts,
+            postId: delivery.postId,
+            failed: result.failed,
+          });
       } catch (error) {
+        if (!(error instanceof BusyDeliveryError))
+          this.logger.failure(
+            'push_delivery_deferred',
+            error,
+            'PUSH_DELIVERY_FAILED',
+            'Push delivery failed; durable state retained',
+            {
+              postId,
+              attempt: pending.attempts,
+            },
+            true,
+          );
         failure ??= error;
       }
     }
@@ -120,6 +184,9 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
   }
   async ignore(fields: Record<string, string>) {
     await this.store.recordIgnored(fields);
+    this.logger.skipped('notification_event_ignored', 'UNSUPPORTED_EVENT', {
+      eventId: fields.eventId,
+    });
   }
   async drain(): Promise<void> {
     if (this.running) return this.draining;
@@ -127,7 +194,14 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
     this.draining = this.dispatch()
       .catch((error) => {
         if (!(error instanceof BusyDeliveryError))
-          this.logger.warn('Push retry remains pending');
+          this.logger.failure(
+            'push_recovery_failed',
+            error,
+            'PUSH_RECOVERY_FAILED',
+            'Push retry remains pending',
+            {},
+            true,
+          );
       })
       .finally(() => {
         this.running = false;

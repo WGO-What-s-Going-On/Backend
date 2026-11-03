@@ -1,3 +1,4 @@
+import { getLogContext } from '../../observability/logging.js';
 import { randomUUID } from 'node:crypto';
 import type { EventType, OutboxEvent } from './ports.js';
 
@@ -13,7 +14,7 @@ export function event(
     eventType,
     schemaVersion: 1,
     producer: 'post-service',
-    correlationId: `req_${randomUUID()}`,
+    correlationId: getLogContext().correlationId ?? `req_${randomUUID()}`,
     occurredAt: now,
     payload,
   };

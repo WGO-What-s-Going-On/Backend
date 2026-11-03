@@ -1,6 +1,6 @@
+import { createLogger } from '../observability/logging.js';
 import {
   Injectable,
-  Logger,
   type OnApplicationBootstrap,
   type OnModuleDestroy,
 } from '@nestjs/common';
@@ -12,7 +12,7 @@ import { ReportStore } from './report.store.js';
 export class ReportOutboxWorker
   implements OnApplicationBootstrap, OnModuleDestroy
 {
-  private readonly logger = new Logger(ReportOutboxWorker.name);
+  private readonly logger = createLogger('moderation-service', 'reports');
   private timer?: NodeJS.Timeout;
   private running: Promise<void> | undefined;
   private stopping = false;
@@ -30,9 +30,14 @@ export class ReportOutboxWorker
   publishPending(): Promise<void> {
     if (this.stopping) return Promise.resolve();
     this.running ??= this.publishBatch()
-      .catch(() => {
-        this.logger.warn(
-          'Report publication unavailable; Redis journal retained for retry',
+      .catch((error) => {
+        this.logger.failure(
+          'report_recovery_failed',
+          error,
+          'REPORT_RECOVERY_FAILED',
+          'Report publication failed; journal retained for retry',
+          {},
+          true,
         );
       })
       .finally(() => {
@@ -51,9 +56,18 @@ export class ReportOutboxWorker
       if (this.stopping) break;
       try {
         await this.store.recover(digest);
-      } catch {
-        this.logger.warn(
-          'Report event publication failed; pending journal retained',
+        this.logger.success(
+          'report_journal_reconciled',
+          'Report journal recovery completed',
+        );
+      } catch (error) {
+        this.logger.failure(
+          'report_publication_failed',
+          error,
+          'REPORT_PUBLICATION_FAILED',
+          'Report event publication failed; journal retained',
+          {},
+          true,
         );
       }
     }

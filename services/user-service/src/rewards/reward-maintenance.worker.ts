@@ -1,8 +1,8 @@
+import { createLogger } from '../observability/logging.js';
 import { TitleService } from './title.service.js';
 import {
   Injectable,
   Optional,
-  Logger,
   type OnApplicationBootstrap,
   type OnModuleDestroy,
 } from '@nestjs/common';
@@ -16,7 +16,7 @@ import { RewardEngine } from './reward-engine.js';
 export class RewardMaintenanceWorker
   implements OnApplicationBootstrap, OnModuleDestroy
 {
-  private readonly logger = new Logger(RewardMaintenanceWorker.name);
+  private readonly logger = createLogger('user-service', 'rewards');
   private timer?: NodeJS.Timeout;
   private running: Promise<void> | undefined;
   private stopping = false;
@@ -39,8 +39,15 @@ export class RewardMaintenanceWorker
     )
       return Promise.resolve();
     this.running ??= this.batch()
-      .catch(() => {
-        this.logger.warn('Reward reconciliation failed; retry on next scan');
+      .catch((error) => {
+        this.logger.failure(
+          'reward_maintenance_failed',
+          error,
+          'REWARD_MAINTENANCE_FAILED',
+          'Reward reconciliation failed; retry on next scan',
+          {},
+          true,
+        );
       })
       .finally(() => {
         this.running = undefined;
@@ -57,6 +64,7 @@ export class RewardMaintenanceWorker
       [this.before],
     );
     this.before = users.at(-1)?.id ?? '0';
+    let processed = 0;
     for (const user of users) {
       if (this.stopping) break;
       const [held] = await this.db.query(
@@ -66,7 +74,14 @@ export class RewardMaintenanceWorker
       if (user.status !== 'ACTIVE' || held)
         await this.activities.reconcileUser(user.id, randomUUID());
       await this.activities.refreshUserTitles(user.id);
+      processed++;
     }
+    if (processed)
+      this.logger.success(
+        'reward_maintenance_completed',
+        'Reward and title reconciliation completed',
+        { count: processed },
+      );
   }
   async onModuleDestroy(): Promise<void> {
     this.stopping = true;

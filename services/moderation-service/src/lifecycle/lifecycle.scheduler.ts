@@ -1,7 +1,7 @@
+import { createLogger } from '../observability/logging.js';
 import {
   Inject,
   Injectable,
-  Logger,
   OnModuleDestroy,
   OnModuleInit,
   Optional,
@@ -15,7 +15,7 @@ const INTERVAL_MS = 1000;
 
 @Injectable()
 export class LifecycleScheduler implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(LifecycleScheduler.name);
+  private readonly logger = createLogger('moderation-service', 'lifecycle');
   private timer?: NodeJS.Timeout;
   private running = false;
   private stopped = false;
@@ -31,12 +31,14 @@ export class LifecycleScheduler implements OnModuleInit, OnModuleDestroy {
     if (this.config && !this.config.get<string>('redis.url')) return;
     this.timer = setInterval(
       () =>
-        void this.scan().catch(() =>
-          this.logger.warn(
-            JSON.stringify({
-              event: 'lifecycle_scan_failed',
-              service: 'moderation-service',
-            }),
+        void this.scan().catch((error) =>
+          this.logger.failure(
+            'lifecycle_scan_failed',
+            error,
+            'LIFECYCLE_SCAN_FAILED',
+            'lifecycle scan failed',
+            {},
+            true,
           ),
         ),
       INTERVAL_MS,
@@ -69,25 +71,28 @@ export class LifecycleScheduler implements OnModuleInit, OnModuleDestroy {
         try {
           await this.lifecycle.evaluate(postId, now);
           evaluated++;
-        } catch {
-          this.logger.warn(
-            JSON.stringify({
-              event: 'lifecycle_evaluation_failed',
-              service: 'moderation-service',
+        } catch (error) {
+          this.logger.failure(
+            'lifecycle_evaluation_failed',
+            error,
+            'LIFECYCLE_EVALUATION_FAILED',
+            'lifecycle evaluation failed',
+            {
               postId,
-            }),
+            },
+            true,
           );
         }
       }
     } finally {
       if (evaluated)
-        this.logger.log(
-          JSON.stringify({
-            event: 'lifecycle_scan_completed',
-            service: 'moderation-service',
-            evaluated,
+        this.logger.success(
+          'lifecycle_scan_completed',
+          'lifecycle scan completed',
+          {
+            count: evaluated,
             durationMs: Math.round(performance.now() - started),
-          }),
+          },
         );
     }
   }

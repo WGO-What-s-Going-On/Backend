@@ -1,9 +1,9 @@
+import { createLogger } from '../../observability/logging.js';
 import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -26,7 +26,7 @@ const RECHECK_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class ProfileImageService {
-  private readonly logger = new Logger(ProfileImageService.name);
+  private readonly logger = createLogger('user-service', 'profile-image');
   constructor(
     @InjectDataSource() readonly database: DataSource,
     readonly storage: GcsProfileImageStorage,
@@ -185,7 +185,7 @@ export class ProfileImageService {
       .getMany();
     for (const row of rows) {
       try {
-        await this.database.transaction(async (manager) => {
+        const cleaned = await this.database.transaction(async (manager) => {
           await manager.getRepository(UserEntity).findOne({
             where: { id: row.ownerId },
             lock: { mode: 'pessimistic_write' },
@@ -220,13 +220,31 @@ export class ProfileImageService {
                 : RECHECK_MS),
           );
           await manager.getRepository(ProfileImageUploadEntity).save(upload);
+          return true;
         });
-      } catch {
+        if (cleaned)
+          this.logger.success(
+            'profile_cleanup_completed',
+            'Profile image cleanup reconciled',
+            { uploadId: row.id },
+          );
+        else
+          this.logger.skipped('profile_cleanup_skipped', 'NOT_DUE', {
+            uploadId: row.id,
+          });
+      } catch (error) {
         // One inaccessible object must not starve later cleanup records.
         await this.database
           .getRepository(ProfileImageUploadEntity)
           .update(row.id, { cleanupAt: new Date(Date.now() + 60000) });
-        this.logger.warn('Profile image cleanup deferred; retained for retry');
+        this.logger.failure(
+          'profile_cleanup_deferred',
+          error,
+          'PROFILE_CLEANUP_FAILED',
+          'Profile cleanup deferred; retained for retry',
+          { uploadId: row.id },
+          true,
+        );
       }
     }
   }

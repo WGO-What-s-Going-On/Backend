@@ -1,9 +1,13 @@
+import {
+  createLogger,
+  withLogContext,
+  type LogFields,
+} from '../../observability/logging.js';
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import {
   ConsoleLogger,
   Injectable,
-  Logger,
   type OnModuleInit,
   type OnModuleDestroy,
 } from '@nestjs/common';
@@ -24,6 +28,18 @@ export const MODERATION_STREAM = 'moderation:events';
 export const MODERATION_GROUP = 'post-moderation-lifecycle';
 export const MODERATION_DEAD_STREAM = 'post-moderation-lifecycle:dead';
 
+const moderationLog = createLogger('post-service', 'moderation');
+function logModerationFailure(fields: LogFields): void {
+  moderationLog.failure(
+    String(fields.event),
+    undefined,
+    String(fields.errorCode),
+    'Moderation event processing failed',
+    { ...fields, consumerGroup: MODERATION_GROUP },
+    fields.disposition === 'RETRY',
+  );
+}
+
 export class ModerationConsumer {
   readonly name = `post-${randomUUID()}`;
   private cursor = '0-0';
@@ -32,10 +48,10 @@ export class ModerationConsumer {
     private readonly application: Pick<ApplyModerationLifecycle, 'execute'>,
     private readonly reclaimMs = 30000,
     private readonly stream = MODERATION_STREAM,
-    private readonly logger: Pick<
-      ConsoleLogger,
-      'warn' | 'error'
-    > = new ConsoleLogger(ModerationConsumer.name, { json: true }),
+    private readonly logger: Pick<ConsoleLogger, 'warn' | 'error'> = {
+      warn: logModerationFailure,
+      error: logModerationFailure,
+    },
   ) {}
 
   private commands() {
@@ -76,11 +92,12 @@ export class ModerationConsumer {
 
   async process(entry: Entry): Promise<void> {
     let input: ModerationLifecycleEvent | null = null;
+    let deadLettered = false;
     // 손상된 payload나 예외 본문을 로그에 펼치지 않고 식별자만 명시적으로 선택한다.
     const context = () => ({
       service: 'post-service',
       stream: this.stream,
-      group: MODERATION_GROUP,
+      consumerGroup: MODERATION_GROUP,
       consumer: this.name,
       streamId: entry.id,
       eventId:
@@ -93,7 +110,12 @@ export class ModerationConsumer {
     });
     try {
       input = parseModerationEvent(entry.message);
-      if (input) await this.application.execute(input);
+      if (input) {
+        const parsed = input;
+        await withLogContext({ correlationId: parsed.correlationId }, () =>
+          this.application.execute(parsed),
+        );
+      }
     } catch (error) {
       const errorCode =
         error instanceof InvalidModerationEvent
@@ -154,6 +176,7 @@ export class ModerationConsumer {
         });
         throw deadLetterError;
       }
+      deadLettered = true;
       this.logger.warn({
         ...context(),
         event: 'moderation_event_dead_lettered',
@@ -169,6 +192,24 @@ export class ModerationConsumer {
     // ACK 실패는 업무 실패 재시도 예산과 분리한다. 재전달 시 MongoDB 처리 이력이 중복을 막는다.
     try {
       await this.commands().xAck(this.stream, MODERATION_GROUP, entry.id);
+      if (deadLettered)
+        moderationLog.success(
+          'moderation.dead_lettered',
+          'Moderation event saved to dead letter stream and acknowledged',
+          context(),
+        );
+      else if (input)
+        moderationLog.success(
+          'moderation.event_processed',
+          'Moderation event processing completed and acknowledged',
+          context(),
+        );
+      else
+        moderationLog.skipped(
+          'moderation.event_processed',
+          'EVENT_NOT_SUPPORTED',
+          context(),
+        );
     } catch (error) {
       this.logger.error({
         ...context(),
@@ -183,7 +224,7 @@ export class ModerationConsumer {
 
 @Injectable()
 export class ModerationWorker implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(ModerationWorker.name);
+  private readonly logger = createLogger('post-service', 'moderation');
   private stopped = false;
   private running?: Promise<void>;
   private redis?: Redis;
@@ -211,8 +252,15 @@ export class ModerationWorker implements OnModuleInit, OnModuleDestroy {
       disableOfflineQueue: true,
       socket: { connectTimeout: 2000, reconnectStrategy: false },
     });
-    this.redis.on('error', () =>
-      this.logger.warn('Moderation Redis connection error'),
+    this.redis.on('error', (error) =>
+      this.logger.failure(
+        'moderation.redis',
+        error,
+        'REDIS_CONNECTION_FAILED',
+        'Moderation Redis connection failed',
+        {},
+        true,
+      ),
     );
     this.running = this.run(this.redis);
   }
@@ -234,9 +282,14 @@ export class ModerationWorker implements OnModuleInit, OnModuleDestroy {
           await consumer.tick();
           await delay(250);
         }
-      } catch {
-        this.logger.warn(
-          'Moderation consumer retry; inspect pending entries and DLQ',
+      } catch (error) {
+        this.logger.failure(
+          'moderation.poll',
+          error,
+          'MODERATION_POLL_FAILED',
+          'Moderation event polling failed',
+          {},
+          true,
         );
         if (redis.isOpen) redis.destroy();
         if (!this.stopped) await delay(1000);

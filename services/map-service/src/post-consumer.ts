@@ -1,3 +1,5 @@
+import { createLogger } from './observability/logging.js';
+const log = createLogger('map-service', 'map');
 import { randomUUID } from 'node:crypto';
 import {
   DEAD_STREAM,
@@ -90,11 +92,25 @@ export class PostConsumer {
           for (const entry of batch.messages) await this.process(entry);
         if (Date.now() - this.lastMetrics > 30000) {
           this.lastMetrics = Date.now();
-          console.info('post-map metrics', await this.metrics());
+          const metrics = await this.metrics();
+          log.success('consumer.metrics', 'Map consumer metrics.', {
+            consumerGroup: POST_GROUP,
+            pending: metrics.pending,
+            oldestPendingIdleMs: metrics.oldestIdleMs,
+            failed: metrics.failures,
+            count: metrics.deadLetters,
+          });
         }
       } catch (error) {
         this.failures++;
-        console.error('post-map loop failed', error);
+        log.failure(
+          'consumer.poll.failed',
+          error,
+          'STREAM_POLL_FAILED',
+          'Map consumer polling failed.',
+          { consumerGroup: POST_GROUP },
+          true,
+        );
         await delay(500);
       }
     }
@@ -102,11 +118,20 @@ export class PostConsumer {
 
   async process(entry: Entry): Promise<void> {
     const fields = entry.message;
+    const started = performance.now();
+    const context = {
+      stream: POST_STREAM,
+      consumerGroup: POST_GROUP,
+      streamId: entry.id,
+      eventId: fields.eventId,
+      eventType: fields.eventType,
+    };
     if (
       fields.eventType &&
       !['PostCreated', 'PostExpired', 'PostDeleted'].includes(fields.eventType)
     ) {
       await this.index.redis.xAck(POST_STREAM, POST_GROUP, entry.id);
+      log.skipped('consumer.event.acknowledged', 'UNSUPPORTED_EVENT', context);
       return;
     }
     try {
@@ -117,13 +142,13 @@ export class PostConsumer {
         await this.index.transition(parsePostStatus(fields.data, fields));
       else await this.index.write(parsePostCreated(fields.data, fields));
       await this.index.redis.xAck(POST_STREAM, POST_GROUP, entry.id);
+      log.success(
+        'consumer.event.acknowledged',
+        'Map event processed and acknowledged.',
+        { ...context, durationMs: performance.now() - started },
+      );
     } catch (error) {
       this.failures++;
-      console.error('post-map processing failed', {
-        streamId: entry.id,
-        eventId: fields.eventId,
-        error,
-      });
       const deliveries = await this.index.redis.xPendingRange(
         POST_STREAM,
         POST_GROUP,
@@ -132,18 +157,42 @@ export class PostConsumer {
         1,
       );
       const attempts = deliveries[0]?.deliveriesCounter ?? 1;
+      const invalid =
+        error instanceof Error && error.message.startsWith('Invalid');
+      log.failure(
+        'consumer.event.failed',
+        error,
+        invalid ? 'INVALID_CONTRACT' : 'EVENT_PROCESSING_FAILED',
+        'Map event processing failed.',
+        {
+          ...context,
+          attempt: attempts,
+          durationMs: performance.now() - started,
+        },
+        !invalid && attempts < 5,
+      );
       // DLQ 기록이 실패하면 ACK하지 않는다. 회수 후 다시 기록할 수 있어야 한다.
-      if (
-        (error instanceof Error && error.message.startsWith('Invalid')) ||
-        attempts >= 5
-      ) {
+      if (invalid || attempts >= 5) {
         await this.index.redis.xAdd(DEAD_STREAM, '*', {
           streamId: entry.id,
           eventId: fields.eventId ?? '',
           error: String(error),
           data: fields.data ?? '',
         });
+        log.failure(
+          'consumer.event.dead_lettered',
+          undefined,
+          invalid ? 'INVALID_CONTRACT' : 'RETRY_EXHAUSTED',
+          'Map event stored in dead letter stream.',
+          { ...context, attempt: attempts },
+          false,
+        );
         await this.index.redis.xAck(POST_STREAM, POST_GROUP, entry.id);
+        log.success(
+          'consumer.dead_letter.acknowledged',
+          'Dead letter event acknowledged.',
+          context,
+        );
       }
     }
   }

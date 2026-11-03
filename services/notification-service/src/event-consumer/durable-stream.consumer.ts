@@ -1,4 +1,8 @@
-import { Logger } from '@nestjs/common';
+import {
+  createLogger,
+  requestContext,
+  withLogContext,
+} from '../observability/logging.js';
 import { randomUUID } from 'node:crypto';
 import { createClient } from 'redis';
 import { PostgresDatabase } from '../persistence/postgres.database.js';
@@ -11,7 +15,7 @@ export interface StreamEntry {
 export class DurableStreamConsumer {
   readonly redis: ReturnType<typeof createClient>;
   readonly consumer = `notification-${randomUUID()}`;
-  private readonly logger = new Logger(DurableStreamConsumer.name);
+  private readonly logger = createLogger('notification-service', 'events');
   private stopped = false;
   private running?: Promise<void>;
   private cursor = '0-0';
@@ -116,11 +120,47 @@ export class DurableStreamConsumer {
     if (this.redis.isOpen) await this.redis.disconnect();
     await this.running?.catch(() => undefined);
   }
-  async process(entry: StreamEntry) {
+  async process(entry: StreamEntry): Promise<void> {
+    let correlationId: unknown;
+    try {
+      const envelope: unknown = JSON.parse(entry.message.data ?? '{}');
+      if (
+        envelope &&
+        typeof envelope === 'object' &&
+        'correlationId' in envelope
+      )
+        correlationId = envelope.correlationId;
+    } catch {
+      /* The domain parser below classifies malformed deliveries. */
+    }
+    return withLogContext(
+      requestContext({
+        'x-correlation-id': correlationId ?? entry.message.eventId,
+      }),
+      () => this.processEntry(entry),
+    );
+  }
+  private async processEntry(entry: StreamEntry): Promise<void> {
     try {
       await this.handle(entry.message, entry.id);
+      this.logger.success(
+        'notification_event_processed',
+        'Notification event processing completed',
+        {
+          stream: this.options.stream,
+          streamId: entry.id,
+          eventId: entry.message.eventId,
+          consumerGroup: this.options.group,
+        },
+      );
     } catch (e) {
-      if (e instanceof BusyDeliveryError) return;
+      if (e instanceof BusyDeliveryError) {
+        this.logger.skipped('notification_event_busy', 'DELIVERY_BUSY', {
+          streamId: entry.id,
+          stream: this.options.stream,
+        });
+        return;
+      }
       const pending = await this.redis.xPendingRange(
         this.options.stream,
         this.options.group,
@@ -129,9 +169,23 @@ export class DurableStreamConsumer {
         1,
       );
       const invalid = e instanceof Error && e.message.startsWith('Invalid');
-      if (!invalid && (pending[0]?.deliveriesCounter ?? 1) < 5) return;
+      const retryable = !invalid && (pending[0]?.deliveriesCounter ?? 1) < 5;
+      this.logger.failure(
+        'notification_event_failed',
+        e,
+        invalid ? 'INVALID_EVENT' : 'EVENT_PROCESSING_FAILED',
+        'Notification event processing failed',
+        {
+          stream: this.options.stream,
+          streamId: entry.id,
+          eventId: entry.message.eventId,
+          attempt: pending[0]?.deliveriesCounter ?? 1,
+        },
+        retryable,
+      );
+      if (retryable) return;
       // Quarantine and ACK share one Redis operation. No crash can ACK before DLQ persistence.
-      await this.redis.eval(
+      const moved = await this.redis.eval(
         `if #redis.call('XPENDING',KEYS[1],ARGV[1],ARGV[2],ARGV[2],1)==0 then return 0 end
         redis.call('XADD',KEYS[2],'*','streamId',ARGV[2],'eventId',ARGV[3],'data',ARGV[4],'reason',ARGV[5]);
         return redis.call('XACK',KEYS[1],ARGV[1],ARGV[2])`,
@@ -146,10 +200,45 @@ export class DurableStreamConsumer {
           ],
         },
       );
+      if (Number(moved) > 0)
+        this.logger.success(
+          'notification_event_dead_lettered',
+          'Notification event quarantined and acknowledged',
+          {
+            stream: this.options.dead,
+            streamId: entry.id,
+            eventId: entry.message.eventId,
+          },
+        );
       return;
     }
     // Repeated ACK outages must not quarantine a committed event.
-    await this.redis.xAck(this.options.stream, this.options.group, entry.id);
+    try {
+      await this.redis.xAck(this.options.stream, this.options.group, entry.id);
+    } catch (error) {
+      this.logger.failure(
+        'notification_ack_failed',
+        error,
+        'STREAM_ACK_FAILED',
+        'Committed event acknowledgement failed; redelivery is safe',
+        {
+          stream: this.options.stream,
+          streamId: entry.id,
+          eventId: entry.message.eventId,
+        },
+        true,
+      );
+      throw error;
+    }
+    this.logger.success(
+      'notification_event_acknowledged',
+      'Notification delivery acknowledged',
+      {
+        stream: this.options.stream,
+        streamId: entry.id,
+        consumerGroup: this.options.group,
+      },
+    );
   }
   async pollOnce() {
     if (!this.redis.isReady) await this.initialize();
@@ -182,7 +271,14 @@ export class DurableStreamConsumer {
         if (!this.stopped) {
           if (String(error).includes('NOGROUP'))
             await this.initialize().catch(() => undefined);
-          this.logger.warn(`Input pending for ${this.options.stream}`);
+          this.logger.failure(
+            'notification_poll_failed',
+            error,
+            'STREAM_POLL_FAILED',
+            'Notification stream polling failed',
+            { stream: this.options.stream },
+            true,
+          );
           await new Promise((r) => setTimeout(r, 500));
         }
       }
