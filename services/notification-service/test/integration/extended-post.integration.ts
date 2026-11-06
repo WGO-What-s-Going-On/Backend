@@ -239,13 +239,21 @@ describe('extended Post facts with PostgreSQL', () => {
     store = new PostgresEventStore(h.database, blocks);
     await store.apply(reply('blocked'));
     expect(await items()).toHaveLength(0);
+    const pending = reply('pending');
     allowed.mockRejectedValueOnce(new Error('User unavailable'));
-    await expect(store.apply(reply('pending'))).rejects.toThrow(
-      'User unavailable',
-    );
+    await expect(store.apply(pending)).rejects.toThrow('User unavailable');
+    expect(await items()).toHaveLength(0);
+    expect(await store.deliveries(postId)).toHaveLength(0);
     allowed.mockResolvedValue(true);
-    await store.apply(reply('allowed'));
+    await store.apply(pending);
+    await store.apply(pending);
     expect(await items()).toHaveLength(1);
+    expect(await items('1')).toHaveLength(1);
+    expect(
+      (await store.deliveries(postId))
+        .map(({ message }) => message.userId)
+        .sort(),
+    ).toEqual(['1', '3']);
     const send = vi.fn();
     allowed.mockResolvedValue(false);
     await new PostEventHandler(
