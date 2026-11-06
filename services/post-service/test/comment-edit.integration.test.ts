@@ -220,7 +220,11 @@ suite('Comment edit HTTP and Mongo transactions', () => {
       .expect(201);
     await posts.updateOne(
       { postId: f.postId },
-      { $set: { voteAt: new Date(0) } },
+      { $set: { 'counters.viewCount': 100 } },
+    );
+    await comments.updateMany(
+      { postId: f.postId },
+      { $set: { 'reactionCounts.HELPFUL': 20 } },
     );
     const [edit] = await Promise.all([
       request(app.getHttpServer())

@@ -246,7 +246,6 @@ class MongoCommands implements PostCommands {
         {
           ...post,
           bucketCount: this.bucketCount,
-          voteAt: new Date(post.createdAt.getTime() + 30 * 60_000),
           vote: {
             status: 'PENDING',
             candidates: [],
