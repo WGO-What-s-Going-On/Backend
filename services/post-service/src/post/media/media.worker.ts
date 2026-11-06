@@ -66,7 +66,7 @@ export class MediaCleanupWorker {
           },
         },
       );
-    // 종료 상태는 되돌릴 수 없다. 커서로 bounded scan해 앞쪽의 활성 첨부가 정리를 막지 않게 한다.
+    // 종료 기록의 첨부는 보존한다. 커서 순회로 앞쪽의 보존 첨부가 삭제 대상 정리를 막지 않게 한다.
     const attached = await records
       .find({ status: 'ATTACHED', mediaId: { $gt: this.cursor } })
       .sort({ mediaId: 1 })
@@ -83,7 +83,7 @@ export class MediaCleanupWorker {
         : undefined;
       if (
         !post ||
-        ['DELETED', 'EXPIRED'].includes(post.status) ||
+        post.status === 'DELETED' ||
         (row.commentId && (!comment || comment.status === 'DELETED'))
       )
         await records.updateOne(

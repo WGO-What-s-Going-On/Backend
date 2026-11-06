@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import type { PostStatus } from '../domain/post.js';
 
 export class ActivityLevelResponse {
   @ApiProperty({ type: 'integer', minimum: 0 }) participation!: number;
@@ -35,9 +36,21 @@ export class ActivityItemResponse {
   })
   kind!: string;
   @ApiProperty() postId!: string;
+  @ApiProperty({
+    enum: ['ACTIVE', 'EXPIRED'],
+    description:
+      'Current stored status of the parent post. Deleted posts are excluded.',
+  })
+  postStatus!: Extract<PostStatus, 'ACTIVE' | 'EXPIRED'>;
   @ApiProperty({ type: String, nullable: true }) commentId!: string | null;
   @ApiProperty({ type: String, format: 'date-time' }) createdAt!: string;
-  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description:
+      'Parent post author-closure time. Null does not mean the post is unexpired.',
+  })
   closedAt!: string | null;
 }
 

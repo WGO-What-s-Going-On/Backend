@@ -173,6 +173,98 @@ suite('Moderation v1 -> Post transaction -> Outbox', () => {
     vi.unstubAllEnvs();
   });
 
+  it.each(['moderation', 'pending expiration'] as const)(
+    'keeps %s posts readable from activity while rejecting new comments and reactions',
+    async (mode) => {
+      const postId = await create();
+      const base = `/api/v1/posts/${postId}`;
+      const header = { 'X-User-Id': '123' };
+      await request(app.getHttpServer())
+        .post(`${base}/participants`)
+        .set(header)
+        .send({})
+        .expect(201);
+      const { body: comment } = await request(app.getHttpServer())
+        .post(`${base}/comments`)
+        .set(header)
+        .send({ content: 'Before closure' })
+        .expect(201);
+      const status = mode === 'moderation' ? 'EXPIRED' : 'ACTIVE';
+      if (mode === 'moderation') {
+        await redis.xAdd(MODERATION_STREAM, '*', fields(postId));
+        await consumer.tick();
+      } else {
+        await posts.updateOne(
+          { postId },
+          { $set: { expiresAt: new Date(Date.now() - 1000) } },
+        );
+      }
+      const { body: activity } = await request(app.getHttpServer())
+        .get('/api/v1/posts/me/activity')
+        .set(header)
+        .expect(200);
+      expect(activity.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ postId, kind: 'POST', postStatus: status }),
+          expect.objectContaining({
+            postId,
+            kind: 'COMMENT',
+            postStatus: status,
+          }),
+        ]),
+      );
+      const { body: detail } = await request(app.getHttpServer())
+        .get(base)
+        .set(header)
+        .expect(200);
+      expect(detail.status).toBe(status);
+      const { body: page } = await request(app.getHttpServer())
+        .get(`${base}/comments`)
+        .set(header)
+        .expect(200);
+      expect(page.comments).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ commentId: comment.commentId }),
+        ]),
+      );
+      const beforeEvents = await outbox.countDocuments({ aggregateId: postId });
+      for (const [path, body] of [
+        [`${base}/comments`, { content: 'After closure' }],
+        [`${base}/reactions`, { type: 'CURIOUS' }],
+        [`${base}/comments/${comment.commentId}/reactions`, { type: 'AGREE' }],
+      ] as const) {
+        await request(app.getHttpServer())
+          .post(path)
+          .set(header)
+          .send(body)
+          .expect(403);
+      }
+      expect(await db.model('Comment').countDocuments({ postId })).toBe(1);
+      expect(await db.model('Reaction').countDocuments({ postId })).toBe(0);
+      expect(await db.model('CommentReaction').countDocuments({ postId })).toBe(
+        0,
+      );
+      expect(await outbox.countDocuments({ aggregateId: postId })).toBe(
+        beforeEvents,
+      );
+      await posts.updateOne({ postId }, { $set: { status: 'DELETED' } });
+      await request(app.getHttpServer()).get(base).set(header).expect(404);
+      await request(app.getHttpServer())
+        .get(`${base}/comments`)
+        .set(header)
+        .expect(404);
+      const { body: afterDelete } = await request(app.getHttpServer())
+        .get('/api/v1/posts/me/activity')
+        .set(header)
+        .expect(200);
+      expect(
+        afterDelete.items.some(
+          (item: { postId: string }) => item.postId === postId,
+        ),
+      ).toBe(false);
+    },
+  );
+
   it('records STALE and REACTIVATED without changing state or creating expiration', async () => {
     const postId = await create();
     for (const type of ['BOARD_STALE', 'BOARD_REACTIVATED'])

@@ -11,11 +11,8 @@ export class ReadPosts {
 
   async detail(postId: string, actor?: number) {
     const post = await this.queries.findDetail(postId);
-    if (
-      !post ||
-      post.status !== 'ACTIVE' ||
-      (post.expiresAt && post.expiresAt <= new Date())
-    )
+    // 종료는 쓰기만 막는다. 보존된 게시물과 댓글은 활동에서 계속 읽을 수 있다.
+    if (!post || post.status === 'DELETED')
       throw new PostNotFoundError('Post not found');
     return {
       ...(this.views ? (await this.views.posts([post], actor))[0]! : post),
@@ -31,11 +28,8 @@ export class ReadPosts {
   ) {
     // 목록 조회에서 부모의 이미지 URL까지 불필요하게 서명하지 않는다.
     const post = await this.queries.findStatus(postId);
-    if (
-      !post ||
-      post.status !== 'ACTIVE' ||
-      (post.expiresAt && post.expiresAt <= new Date())
-    )
+    // 종료는 쓰기만 막는다. 보존된 게시물과 댓글은 활동에서 계속 읽을 수 있다.
+    if (!post || post.status === 'DELETED')
       throw new PostNotFoundError('Post not found');
     // 한 건을 더 읽어 다음 페이지 여부를 판단한다. 커서에는 마지막 댓글의 정렬 키를 담는다.
     const rows = await this.queries.findComments(postId, cursor, limit + 1);
