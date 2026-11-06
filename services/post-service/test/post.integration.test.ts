@@ -1499,7 +1499,6 @@ suite('post creation integration', () => {
           })
           .expect(201);
         const boardId = created.body.postId;
-        await app.listen(0, '127.0.0.1');
         const jwtEnv = { ...process.env };
         let config;
         try {
