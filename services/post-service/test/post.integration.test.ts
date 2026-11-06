@@ -181,7 +181,11 @@ suite('post creation integration', () => {
       })
       .compile();
     app = module.createNestApplication();
-    await app.init();
+    // 수동 runOnce가 조건 준비 전 시작된 타이머 평가를 기다리지 않도록 한다.
+    // 실제 평가·트랜잭션은 유지하고 이 테스트의 실행 시점만 직접 제어한다.
+    vi.spyOn(app.get(VoteWorker), 'onModuleInit').mockImplementation(() => {});
+    // 요청마다 임시 서버를 닫지 않고 테스트 전체에서 같은 HTTP 연결 대상을 유지한다.
+    await app.listen(0, '127.0.0.1');
     connection = app.get(getConnectionToken());
     posts = app.get(getModelToken('Post'));
     comments = app.get(getModelToken('Comment'));
