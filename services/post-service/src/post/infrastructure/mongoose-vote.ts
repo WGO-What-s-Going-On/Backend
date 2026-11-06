@@ -24,6 +24,13 @@ export class MongooseVote {
     @InjectModel('Outbox') private readonly outbox: Model<any>,
     @Inject(LOCATION_AUTHORIZATION)
     private readonly authorization: LocationAuthorization,
+    @InjectModel('Counter')
+    private readonly counters: Model<{
+      postId: string;
+      metric: string;
+      bucketId: number;
+      count: number;
+    }>,
   ) {}
 
   private async transaction<T>(
@@ -52,43 +59,61 @@ export class MongooseVote {
   async selectDue(postId: string, now = new Date()): Promise<void> {
     const result = await this.transaction(async (session) => {
       const post = await this.posts.findOne({ postId }).session(session).lean();
-      if (
-        !post ||
-        post.vote?.status !== 'PENDING' ||
-        !post.voteAt ||
-        post.voteAt > now
-      )
-        return null;
+      if (!post || post.vote?.status !== 'PENDING') return null;
       if (
         post.status !== 'ACTIVE' ||
         post.closedAt != null ||
         (post.expiresAt && post.expiresAt <= now)
       )
         return null;
+      // 상세 조회와 동일하게 기존 값과 bucket 증가분을 같은 스냅샷에서 합산한다.
+      const increments = await this.counters
+        .find({ postId, metric: 'viewCount' }, 'count')
+        .session(session)
+        .lean();
+      const viewCount =
+        Number(post.counters?.viewCount ?? 0) +
+        increments.reduce((sum, row) => sum + row.count, 0);
+      if (viewCount < 100)
+        return {
+          status: 'PENDING' as const,
+          reason: 'INSUFFICIENT_VIEWS',
+          viewCount,
+        };
       const comments = await this.comments
         .find({ postId, status: 'ACTIVE' })
         .session(session)
         .lean();
-      const ranked = comments
-        .sort(
-          (a, b) =>
-            Number(b.reactionCounts?.HELPFUL ?? 0) +
-              Number(b.reactionCounts?.AGREE ?? 0) -
-              (Number(a.reactionCounts?.HELPFUL ?? 0) +
-                Number(a.reactionCounts?.AGREE ?? 0)) ||
-            a.createdAt.getTime() - b.createdAt.getTime() ||
-            a.commentId.localeCompare(b.commentId),
-        )
-        .slice(0, 2);
-      if (ranked.length < 2) {
-        const closed = await this.posts.updateOne(
-          { postId, 'vote.status': 'PENDING' },
-          { $set: { vote: { ...post.vote, status: 'NONE', closedAt: now } } },
-          { session },
-        );
-        if (closed.matchedCount !== 1) return null;
-        return { status: 'NONE' as const, candidateIds: [] as string[] };
-      }
+      const scored = comments.map((comment) => {
+        const positive =
+          Number(comment.reactionCounts?.HELPFUL ?? 0) +
+          Number(comment.reactionCounts?.AGREE ?? 0);
+        const total = positive + Number(comment.reactionCounts?.DIFFERENT ?? 0);
+        return { comment, positive, total };
+      });
+      const ranked = scored
+        .filter(({ total }) => total >= Math.ceil(viewCount / 5))
+        .sort((a, b) => {
+          // 정수 교차 곱으로 비율 동점을 판단한다. 큰 집계값도 정밀도를 잃지 않는다.
+          const ratio =
+            BigInt(b.positive) * BigInt(a.total) -
+            BigInt(a.positive) * BigInt(b.total);
+          return (
+            (ratio > 0n ? 1 : ratio < 0n ? -1 : 0) ||
+            b.positive - a.positive ||
+            a.comment.createdAt.getTime() - b.comment.createdAt.getTime() ||
+            a.comment.commentId.localeCompare(b.comment.commentId)
+          );
+        })
+        .slice(0, 2)
+        .map(({ comment }) => comment);
+      // 후보가 부족해도 이후 조회·반응 증가 시 다시 평가할 수 있게 대기를 유지한다.
+      if (ranked.length < 2)
+        return {
+          status: 'PENDING' as const,
+          reason: 'INSUFFICIENT_CANDIDATES',
+          viewCount,
+        };
       // 댓글 삭제·공감 변경과 후보 스냅샷 저장의 순서를 확정한다.
       for (const comment of ranked) {
         const fence = await this.comments.updateOne(
@@ -105,6 +130,10 @@ export class MongooseVote {
         scoreAtSelection:
           Number(comment.reactionCounts?.HELPFUL ?? 0) +
           Number(comment.reactionCounts?.AGREE ?? 0),
+        totalReactionsAtSelection:
+          Number(comment.reactionCounts?.HELPFUL ?? 0) +
+          Number(comment.reactionCounts?.AGREE ?? 0) +
+          Number(comment.reactionCounts?.DIFFERENT ?? 0),
         votes: 0,
       }));
       const opened = await this.posts.updateOne(
@@ -113,6 +142,7 @@ export class MongooseVote {
           $set: {
             vote: {
               status: 'OPEN',
+              viewCountAtSelection: viewCount,
               candidates,
               selectedAt: now,
               closedAt: null,
@@ -155,27 +185,30 @@ export class MongooseVote {
       }
       return {
         status: 'OPEN' as const,
+        viewCount,
         candidateIds: candidates.map((candidate) => candidate.commentId),
       };
     });
     const logger = createLogger('post-service', 'vote');
     if (!result) {
-      logger.skipped('vote.selection', 'NOT_DUE_OR_INACTIVE', { postId });
+      logger.skipped('vote.selection', 'NOT_PENDING_OR_INACTIVE', { postId });
+      return;
+    }
+    if (result.status === 'PENDING') {
+      logger.skipped('vote.selection', result.reason, {
+        postId,
+        viewCount: result.viewCount,
+      });
       return;
     }
     // 재시도된 트랜잭션의 후보는 기록하지 않고 최종 커밋 결과만 남긴다.
-    logger.success(
-      result.status === 'OPEN' ? 'vote.opened' : 'vote.none',
-      result.status === 'OPEN'
-        ? 'Vote opened'
-        : 'Vote closed without enough candidates',
-      {
-        postId,
-        status: result.status,
-        candidateCount: result.candidateIds.length,
-        selectedAt: now.toISOString(),
-      },
-    );
+    logger.success('vote.opened', 'Vote opened', {
+      postId,
+      status: result.status,
+      viewCount: result.viewCount,
+      candidateCount: result.candidateIds.length,
+      selectedAt: now.toISOString(),
+    });
     for (const commentId of result.candidateIds)
       logger.success('vote.candidate_selected', 'Vote candidate selected', {
         postId,
@@ -200,6 +233,7 @@ export class MongooseVote {
       status: vote?.status ?? 'NONE',
       candidates: vote?.candidates ?? [],
       selectedAt: vote?.selectedAt ?? null,
+      viewCountAtSelection: vote?.viewCountAtSelection ?? null,
       closedAt: vote?.closedAt ?? null,
       winner: vote?.winner ?? null,
       mySelection,

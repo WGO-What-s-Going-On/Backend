@@ -27,6 +27,7 @@ async function main() {
     'outbox-retry': 2,
     'schedule-expiration': 2,
     expire: 1,
+    'vote-requeue': 1,
     'moderate-post': 2,
     'moderate-comment': 3,
   };
@@ -40,7 +41,7 @@ async function main() {
     )
   )
     throw new Error(
-      'Usage: post:operations outbox-failed | reaction-conflicts | outbox-retry <eventId> <reason> | schedule-expiration <postId> <ISO-date> | expire <postId> | moderate-post <postId> <decisionId> | moderate-comment <postId> <commentId> <decisionId> [reviewedActivityVersion]',
+      'Usage: post:operations vote-requeue <postId> | outbox-failed | reaction-conflicts | outbox-retry <eventId> <reason> | schedule-expiration <postId> <ISO-date> | expire <postId> | moderate-post <postId> <decisionId> | moderate-comment <postId> <commentId> <decisionId> [reviewedActivityVersion]',
     );
   if (
     !command.startsWith('outbox') &&
@@ -93,6 +94,29 @@ async function main() {
           2,
         ),
       );
+      return;
+    }
+    if (command === 'vote-requeue' && id) {
+      // 후보 부족이 로그로 확인된 ID만 운영자가 명시한다. 마감 이력은 자동 추정하지 않는다.
+      const result = await db.model('Post', PostSchema, 'posts').updateOne(
+        {
+          postId: id,
+          status: 'ACTIVE',
+          closedAt: null,
+          $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+          'vote.status': 'NONE',
+          'vote.selectedAt': null,
+          'vote.candidates': { $size: 0 },
+        },
+        {
+          $set: {
+            'vote.status': 'PENDING',
+            'vote.closedAt': null,
+            'vote.winner': null,
+          },
+        },
+      );
+      console.info({ postId: id, requeued: result.modifiedCount === 1 });
       return;
     }
     const outbox = db.model('Outbox', OutboxSchema, 'outbox_events');

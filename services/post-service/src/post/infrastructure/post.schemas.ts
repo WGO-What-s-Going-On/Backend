@@ -39,7 +39,7 @@ export const PostSchema = new Schema(
 PostSchema.index({ 'region.code': 1, 'vote.status': 1 });
 PostSchema.index({ authorId: 1, createdAt: -1, _id: -1 });
 PostSchema.index({ status: 1, expiresAt: 1 });
-PostSchema.index({ 'vote.status': 1, voteAt: 1 });
+PostSchema.index({ 'vote.status': 1, status: 1, postId: 1 });
 
 export const VoteSelectionSchema = new Schema(
   {

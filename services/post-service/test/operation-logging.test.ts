@@ -49,7 +49,7 @@ describe('committed vote logs', () => {
       findOne: () =>
         query({
           status: 'ACTIVE',
-          voteAt: now,
+          counters: { viewCount: 100 },
           vote: { status: pending ? 'PENDING' : 'OPEN' },
         }),
       updateOne: async () => ({ matchedCount: 1 }),
@@ -57,6 +57,7 @@ describe('committed vote logs', () => {
     const rows = Array.from({ length: comments }, (_, i) => ({
       commentId: `comment_${i}`,
       content: 'private comment',
+      reactionCounts: { HELPFUL: 20 },
       authorId: 123,
       createdAt: now,
     }));
@@ -70,6 +71,7 @@ describe('committed vote logs', () => {
       model({}),
       model({ create: async () => {} }),
       {} as never,
+      model({ find: () => query([]) }),
     );
   }
   it('emits opening and both candidate identifiers only after commit without comment content', async () => {
@@ -85,6 +87,7 @@ describe('committed vote logs', () => {
       outcome: 'success',
       severity: 'INFO',
       candidateCount: 2,
+      viewCount: 100,
     });
     expect(lines.join('')).not.toContain('private comment');
   });
@@ -94,12 +97,15 @@ describe('committed vote logs', () => {
   });
   it('distinguishes insufficient candidates from already processed votes', async () => {
     await votes(true, 1).selectDue(postId, now);
-    expect(logs()[0]).toMatchObject({ event: 'vote.none', status: 'NONE' });
+    expect(logs()[0]).toMatchObject({
+      event: 'vote.selection',
+      reasonCode: 'INSUFFICIENT_CANDIDATES',
+    });
     lines.length = 0;
     await votes(true, 2, false).selectDue(postId, now);
     expect(logs()[0]).toMatchObject({
       outcome: 'skipped',
-      reasonCode: 'NOT_DUE_OR_INACTIVE',
+      reasonCode: 'NOT_PENDING_OR_INACTIVE',
     });
   });
 });

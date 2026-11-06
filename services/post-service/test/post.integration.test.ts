@@ -75,6 +75,14 @@ suite('post creation integration', () => {
   let id: string;
   const header = { 'X-User-Id': '123' };
 
+  async function qualifyVote(postId: string) {
+    await comments.updateMany(
+      { postId },
+      { $set: { 'reactionCounts.HELPFUL': 20 } },
+    );
+    await posts.updateOne({ postId }, { $set: { 'counters.viewCount': 100 } });
+  }
+
   beforeAll(async () => {
     vi.stubEnv('SEMANTIC_MODEL_ENABLED', 'false');
     process.env.NODE_ENV = 'test';
@@ -1101,7 +1109,7 @@ suite('post creation integration', () => {
       { $set: { authorId: 789 } },
     );
     await posts.updateOne({ postId }, { $unset: { region: 1 } });
-    await posts.updateOne({ postId }, { $set: { voteAt: new Date(0) } });
+    await qualifyVote(postId);
     await app.get(VoteWorker).runOnce();
     await request(app.getHttpServer())
       .put(`/api/v1/posts/${postId}/vote`)
@@ -1174,10 +1182,7 @@ suite('post creation integration', () => {
       .get(`/api/v1/posts/${postId}/vote`)
       .expect(200)
       .then((response) => expect(response.body.status).toBe('PENDING'));
-    await posts.updateOne(
-      { postId },
-      { $set: { voteAt: new Date(Date.now() - 1000) } },
-    );
+    await qualifyVote(postId);
     await app.get(VoteWorker).runOnce();
     const open = await request(app.getHttpServer())
       .get(`/api/v1/posts/${postId}/vote`)
@@ -1297,10 +1302,7 @@ suite('post creation integration', () => {
           .expect(200)
       ).body.status,
     ).toBe('PENDING');
-    await posts.updateOne(
-      { postId: sparse },
-      { $set: { voteAt: new Date(Date.now() - 1000) } },
-    );
+    await qualifyVote(sparse);
     await app.get(VoteWorker).runOnce();
     expect(
       (
@@ -1308,7 +1310,7 @@ suite('post creation integration', () => {
           .get(`/api/v1/posts/${sparse}/vote`)
           .expect(200)
       ).body.status,
-    ).toBe('NONE');
+    ).toBe('PENDING');
     const early = await make();
     await app
       .get(PostLifecycle)
@@ -1337,10 +1339,7 @@ suite('post creation integration', () => {
       .set(header)
       .send({ content: 'Two' })
       .expect(201);
-    await posts.updateOne(
-      { postId: cancelled },
-      { $set: { voteAt: new Date(Date.now() - 1000) } },
-    );
+    await qualifyVote(cancelled);
     await app.get(VoteWorker).runOnce();
     await request(app.getHttpServer())
       .delete(`/api/v1/posts/${cancelled}/comments/${one.body.commentId}`)
@@ -1369,10 +1368,7 @@ suite('post creation integration', () => {
       .set(header)
       .send({ content: 'B' })
       .expect(201);
-    await posts.updateOne(
-      { postId: empty },
-      { $set: { voteAt: new Date(Date.now() - 1000) } },
-    );
+    await qualifyVote(empty);
     await app.get(VoteWorker).runOnce();
     await request(app.getHttpServer())
       .delete(`/api/v1/posts/${empty}`)
@@ -1422,10 +1418,7 @@ suite('post creation integration', () => {
       .set(header)
       .send({ content: 'Second' })
       .expect(201);
-    await posts.updateOne(
-      { postId },
-      { $set: { voteAt: new Date(Date.now() - 1000) } },
-    );
+    await qualifyVote(postId);
     await app.get(VoteWorker).runOnce();
     const simultaneous = await Promise.all([
       request(app.getHttpServer())

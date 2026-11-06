@@ -6,6 +6,7 @@ import { MongooseVote } from '../src/post/infrastructure/mongoose-vote.js';
 import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
 import {
   CommentSchema,
+  CounterSchema,
   OutboxSchema,
   PostSchema,
   VoteSelectionSchema,
@@ -17,6 +18,12 @@ suite('vote candidate events with MongoDB and Redis', () => {
   const posts = db.model('Post', PostSchema);
   const comments = db.model('Comment', CommentSchema);
   const outbox = db.model('Outbox', OutboxSchema);
+  const counters = db.model<{
+    postId: string;
+    metric: string;
+    bucketId: number;
+    count: number;
+  }>('Counter', CounterSchema);
   const selections = db.model('VoteSelection', VoteSelectionSchema);
   let votes: MongooseVote;
   let worker: OutboxWorker;
@@ -30,14 +37,22 @@ suite('vote candidate events with MongoDB and Redis', () => {
     );
     await db.dropDatabase();
     for (const model of Object.values(db.models)) await model.syncIndexes();
-    votes = new MongooseVote(db, posts, comments, selections, outbox, {
-      assertCanCreate: async () => {},
-      resolveRegion: async () => ({
-        code: '1159053000',
-        name: '서울특별시 동작구 상도1동',
-      }),
-      assertCanJoin: async () => {},
-    });
+    votes = new MongooseVote(
+      db,
+      posts,
+      comments,
+      selections,
+      outbox,
+      {
+        assertCanCreate: async () => {},
+        resolveRegion: async () => ({
+          code: '1159053000',
+          name: '서울특별시 동작구 상도1동',
+        }),
+        assertCanJoin: async () => {},
+      },
+      counters,
+    );
     worker = new OutboxWorker(outbox);
     await redis.connect();
     await redis.del('post:events');
@@ -53,8 +68,10 @@ suite('vote candidate events with MongoDB and Redis', () => {
     vi.unstubAllEnvs();
   });
 
-  async function fixture(authors = [456, 789, 999]) {
-    const postId = `post_${randomUUID()}`;
+  async function fixture(
+    authors = [456, 789, 999],
+    postId = `post_${randomUUID()}`,
+  ) {
     await posts.create({
       postId,
       authorId: 123,
@@ -65,7 +82,8 @@ suite('vote candidate events with MongoDB and Redis', () => {
       radiusM: 150,
       createdAt: new Date('2026-01-01T00:00:00.000Z'),
       updatedAt: selectedAt,
-      voteAt: selectedAt,
+      voteAt: new Date('2099-01-01'),
+      counters: { viewCount: 100 },
       vote: {
         status: 'PENDING',
         candidates: [],
@@ -81,8 +99,8 @@ suite('vote candidate events with MongoDB and Redis', () => {
       content: `Comment ${index}`,
       status: 'ACTIVE',
       reactionCounts: {
-        HELPFUL: index === 0 ? 2 : 0,
-        AGREE: index === 0 ? 3 : 0,
+        HELPFUL: index === 0 ? 20 : 10,
+        AGREE: index === 0 ? 30 : 10,
         DIFFERENT: 0,
       },
       createdAt: new Date(index * 1000),
@@ -120,7 +138,7 @@ suite('vote candidate events with MongoDB and Redis', () => {
             postId,
             commentId: candidate.commentId,
             authorId: candidate.authorId,
-            scoreAtSelection: index === 0 ? 5 : 0,
+            scoreAtSelection: index === 0 ? 50 : 20,
             regionCode: '1159053000',
             selectedAt,
           },
@@ -178,7 +196,7 @@ suite('vote candidate events with MongoDB and Redis', () => {
   });
 
   it.each([
-    ['not due', { voteAt: new Date(selectedAt.getTime() + 1) }],
+    ['insufficient views', { 'counters.viewCount': 99 }],
     ['deleted', { status: 'DELETED' }],
     ['closed', { closedAt: selectedAt }],
     ['expired', { expiresAt: selectedAt }],
@@ -194,7 +212,122 @@ suite('vote candidate events with MongoDB and Redis', () => {
     const { postId } = await fixture([456]);
     await votes.selectDue(postId, selectedAt);
     expect(await events(postId)).toEqual([]);
-    expect((await votes.read(postId)).status).toBe('NONE');
+    expect((await votes.read(postId)).status).toBe('PENDING');
+  });
+
+  it('automatically rechecks pending posts after bucket views and reactions reach the thresholds', async () => {
+    const { postId, candidates } = await fixture([456, 789]);
+    const { VoteWorker } = await import(
+      '../src/post/infrastructure/vote.worker.js'
+    );
+    const poller = new VoteWorker(posts, votes);
+    await posts.updateOne({ postId }, { $set: { 'counters.viewCount': 99 } });
+    await poller.runOnce();
+    expect((await votes.read(postId)).status).toBe('PENDING');
+    await counters.create({
+      postId,
+      bucketId: 0,
+      metric: 'viewCount',
+      count: 2,
+    });
+    await poller.runOnce();
+    expect((await votes.read(postId)).status).toBe('PENDING');
+    await comments.updateOne(
+      { commentId: candidates[1]!.commentId },
+      { $inc: { 'reactionCounts.DIFFERENT': 1 } },
+    );
+    await poller.runOnce();
+    expect(await votes.read(postId)).toMatchObject({
+      status: 'OPEN',
+      viewCountAtSelection: 101,
+    });
+    expect(await events(postId)).toHaveLength(2);
+    await comments.updateMany(
+      { postId },
+      { $set: { 'reactionCounts.DIFFERENT': 1000 } },
+    );
+    await poller.runOnce();
+    expect(await events(postId)).toHaveLength(2);
+    await poller.onModuleDestroy();
+  });
+
+  it('opens at exactly 100 views after waiting at 99, even without voteAt', async () => {
+    const { postId } = await fixture([1, 2]);
+    await posts.updateOne(
+      { postId },
+      { $unset: { voteAt: 1 }, $set: { 'counters.viewCount': 99 } },
+    );
+    await votes.selectDue(postId, selectedAt);
+    expect((await votes.read(postId)).status).toBe('PENDING');
+    await counters.create({
+      postId,
+      bucketId: 0,
+      metric: 'viewCount',
+      count: 1,
+    });
+    await votes.selectDue(postId, selectedAt);
+    expect(await votes.read(postId)).toMatchObject({
+      status: 'OPEN',
+      viewCountAtSelection: 100,
+    });
+  });
+
+  it('ranks by positive ratio, then absolute positives, and excludes low volume and deleted comments', async () => {
+    const { postId, candidates } = await fixture([1, 2, 3, 4, 5]);
+    const counts = [
+      [18, 2],
+      [36, 4],
+      [100, 100],
+      [9, 1],
+      [1000, 0],
+    ];
+    for (const [index, candidate] of candidates.entries()) {
+      const [positive, negative] = counts[index]!;
+      await comments.updateOne(
+        { commentId: candidate.commentId },
+        {
+          $set: {
+            reactionCounts: {
+              HELPFUL: positive,
+              AGREE: 0,
+              DIFFERENT: negative,
+            },
+            status: index === 4 ? 'DELETED' : 'ACTIVE',
+          },
+        },
+      );
+    }
+    await votes.selectDue(postId, selectedAt);
+    const vote = await votes.read(postId);
+    expect(vote.candidates.map((candidate) => candidate.commentId)).toEqual([
+      candidates[1]!.commentId,
+      candidates[0]!.commentId,
+    ]);
+    expect(
+      vote.candidates.map((candidate) => candidate.totalReactionsAtSelection),
+    ).toEqual([40, 20]);
+  });
+
+  it('cycles past an ineligible first batch instead of starving later posts', async () => {
+    const { VoteWorker } = await import(
+      '../src/post/infrastructure/vote.worker.js'
+    );
+    vi.stubEnv('OUTBOX_BATCH_SIZE', '1');
+    const first = await fixture([1], `post_00000000-${randomUUID()}`);
+    const second = await fixture([1, 2], `post_zzzzzzzz-${randomUUID()}`);
+    const poller = new VoteWorker(posts, votes);
+    try {
+      const pending = await posts.countDocuments({
+        status: 'ACTIVE',
+        'vote.status': 'PENDING',
+      });
+      for (let i = 0; i <= pending + 1; i++) await poller.runOnce();
+      expect((await votes.read(first.postId)).status).toBe('PENDING');
+      expect((await votes.read(second.postId)).status).toBe('OPEN');
+    } finally {
+      vi.stubEnv('OUTBOX_BATCH_SIZE', '100');
+      await poller.onModuleDestroy();
+    }
   });
 
   it('rolls back the first event and OPEN state if the second event cannot be stored', async () => {
