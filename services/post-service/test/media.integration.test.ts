@@ -221,6 +221,145 @@ suite('media HTTP and MongoDB transactions (GCS adapter stubbed)', () => {
       .expect(204);
     await api().get(`/api/v1/posts/${postId}/media`).expect(404);
   });
+  async function attachedPost() {
+    const postMedia: [string, string] = [await ready(), await ready()];
+    const commentMedia: [string, string] = [await ready(), await ready()];
+    const created = await api()
+      .post('/api/v1/posts')
+      .set('X-User-Id', '123')
+      .send({ ...draft, mediaIds: postMedia })
+      .expect(201);
+    const postId = created.body.postId;
+    await api()
+      .post(`/api/v1/posts/${postId}/participants`)
+      .set('X-User-Id', '123')
+      .send({})
+      .expect(201);
+    const comment = await api()
+      .post(`/api/v1/posts/${postId}/comments`)
+      .set('X-User-Id', '123')
+      .send({ content: 'Preserved photo', mediaIds: commentMedia })
+      .expect(201);
+    return {
+      postId,
+      commentId: comment.body.commentId,
+      postMedia,
+      commentMedia,
+    };
+  }
+
+  it.each(['EXPIRED', 'past expiry', 'closed'])(
+    'preserves attachments after %s and cleans them after user deletion',
+    async (state) => {
+      const { postId, commentId, postMedia, commentMedia } =
+        await attachedPost();
+      const posts = app.get<Model<any>>(getModelToken('Post'));
+      await posts.updateOne(
+        { postId },
+        {
+          $set:
+            state === 'EXPIRED'
+              ? { status: 'EXPIRED' }
+              : state === 'closed'
+                ? { closedAt: new Date() }
+                : { expiresAt: new Date(0) },
+        },
+      );
+      const worker = app.get(MediaCleanupWorker);
+      await worker.runOnce();
+      expect(await records.countDocuments({ postId, status: 'ATTACHED' })).toBe(
+        4,
+      );
+      const detail = await api().get(`/api/v1/posts/${postId}`).expect(200);
+      expect(
+        detail.body.media.map((m: { mediaId: string }) => m.mediaId),
+      ).toEqual(postMedia);
+      const comments = await api()
+        .get(`/api/v1/posts/${postId}/comments`)
+        .expect(200);
+      expect(
+        comments.body.comments[0].media.map(
+          (m: { mediaId: string }) => m.mediaId,
+        ),
+      ).toEqual(commentMedia);
+      await api().get(`/api/v1/posts/${postId}/media`).expect(200);
+      await api()
+        .get(`/api/v1/posts/${postId}/comments/${commentId}/media`)
+        .expect(200);
+      await api()
+        .delete(`/api/v1/posts/${postId}`)
+        .set('X-User-Id', '123')
+        .expect(204);
+      await api().get(`/api/v1/posts/${postId}`).expect(404);
+      await api().get(`/api/v1/posts/${postId}/comments`).expect(404);
+      await api()
+        .get(`/api/v1/posts/${postId}/comments/${commentId}/media`)
+        .expect(404);
+      await worker.runOnce();
+      expect(await records.countDocuments({ postId, status: 'DELETING' })).toBe(
+        4,
+      );
+      await records.updateMany(
+        { postId },
+        { $set: { cleanupAt: new Date(0) } },
+      );
+      gcs.remove.mockClear();
+      await worker.runOnce();
+      expect(await records.countDocuments({ postId })).toBe(0);
+      for (const mediaId of [...postMedia, ...commentMedia])
+        expect(gcs.remove).toHaveBeenCalledWith(
+          expect.objectContaining({ mediaId }),
+        );
+    },
+  );
+
+  it('omits missing or deleting attachments without losing the detail or comment page', async () => {
+    const { postId, commentId, postMedia, commentMedia } = await attachedPost();
+    await app
+      .get<Model<any>>(getModelToken('Post'))
+      .updateOne({ postId }, { $set: { status: 'EXPIRED' } });
+    await records.deleteOne({ mediaId: postMedia[0] });
+    await records.updateOne(
+      { mediaId: commentMedia[0] },
+      { $set: { status: 'DELETING', cleanupAt: new Date(0) } },
+    );
+    const detail = await api().get(`/api/v1/posts/${postId}`).expect(200);
+    expect(
+      detail.body.media.map((m: { mediaId: string }) => m.mediaId),
+    ).toEqual(postMedia.slice(1));
+    const comments = await api()
+      .get(`/api/v1/posts/${postId}/comments`)
+      .expect(200);
+    expect(comments.body.comments[0].commentId).toBe(commentId);
+    expect(
+      comments.body.comments[0].media.map(
+        (m: { mediaId: string }) => m.mediaId,
+      ),
+    ).toEqual(commentMedia.slice(1));
+    await records.deleteMany({ postId });
+    await api()
+      .get(`/api/v1/posts/${postId}`)
+      .expect(200)
+      .then((r) => expect(r.body.media).toEqual([]));
+    await api()
+      .get(`/api/v1/posts/${postId}/comments`)
+      .expect(200)
+      .then((r) => expect(r.body.comments[0].media).toEqual([]));
+  });
+
+  it('still rejects attachments belonging to another target', async () => {
+    const { postId, commentId, postMedia, commentMedia } = await attachedPost();
+    const service = app.get(MediaService);
+    await expect(
+      service.forTargets([{ postId, mediaIds: commentMedia }]),
+    ).rejects.toThrow('Attached media not found');
+    await expect(
+      service.forTargets([{ postId, commentId, mediaIds: postMedia }]),
+    ).rejects.toThrow('Attached media not found');
+    await expect(
+      service.forTargets([{ postId: 'other', mediaIds: postMedia }]),
+    ).rejects.toThrow('Attached media not found');
+  });
   it('rolls back earlier attachment when another owner file fails and allows one concurrent winner', async () => {
     const first = await ready();
     const foreign = await ready('456');

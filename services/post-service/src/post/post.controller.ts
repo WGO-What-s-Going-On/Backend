@@ -494,7 +494,8 @@ export class PostController {
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary: '게시물 첨부 조회 URL 갱신',
-    description: '기존 ACTIVE 게시물 공개 조회 정책을 적용합니다.',
+    description:
+      'ACTIVE 및 EXPIRED 게시물의 첨부를 반환하며 이미 정리된 첨부는 제외합니다. DELETED 게시물은 404입니다.',
   })
   @ApiOkResponse({ type: [MediaResponse] })
   async postMedia(@Param('postId') id: string) {
@@ -505,7 +506,8 @@ export class PostController {
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary: '댓글 첨부 조회 URL 갱신',
-    description: '부모 게시물과 댓글이 모두 ACTIVE여야 합니다.',
+    description:
+      'ACTIVE 및 EXPIRED 게시물의 ACTIVE 댓글 첨부를 반환하며 이미 정리된 첨부는 제외합니다. 종료·만료 시각으로 조회를 차단하지 않습니다.',
   })
   @ApiOkResponse({ type: [MediaResponse] })
   async commentMedia(
@@ -514,10 +516,7 @@ export class PostController {
   ) {
     const validated = postId(id);
     const parent = await this.readPosts.status(validated);
-    if (
-      parent.status !== 'ACTIVE' ||
-      (parent.expiresAt && parent.expiresAt <= new Date())
-    )
+    if (parent.status === 'DELETED')
       throw new PostNotFoundError('Post not found');
     const comment = await this.postQueries.findComment(
       validated,
