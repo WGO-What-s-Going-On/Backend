@@ -175,6 +175,30 @@ describe('OpenAPI document', () => {
     ).toBeDefined();
   });
 
+  it('documents expired reads and write restrictions', async () => {
+    const { body: document } = await request(app.getHttpServer())
+      .get('/docs/openapi.json')
+      .expect(200);
+    for (const path of [
+      '/api/v1/posts/{postId}',
+      '/api/v1/posts/{postId}/comments',
+    ]) {
+      expect(document.paths[path].get.description).toContain('EXPIRED');
+      expect(document.paths[path].get.responses['404'].description).toContain(
+        'DELETED',
+      );
+    }
+    for (const suffix of [
+      '/comments',
+      '/reactions',
+      '/comments/{commentId}/reactions',
+    ]) {
+      const operation = document.paths[`/api/v1/posts/{postId}${suffix}`].post;
+      expect(operation.description).toContain('EXPIRED');
+      expect(operation.responses['403']).toBeDefined();
+    }
+  });
+
   it('documents activity response fields, nested items and nullable values', async () => {
     const { body: document } = await request(app.getHttpServer())
       .get('/docs/openapi.json')
