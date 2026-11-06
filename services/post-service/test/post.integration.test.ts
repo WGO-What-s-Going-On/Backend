@@ -191,6 +191,7 @@ suite('post creation integration', () => {
       participants.syncIndexes(),
       outbox.syncIndexes(),
       app.get<Model<any>>(getModelToken('VoteSelection')).syncIndexes(),
+      app.get<Model<any>>(getModelToken('DailyPostView')).syncIndexes(),
     ]);
     await redis.connect();
     await redis.del('post:events');

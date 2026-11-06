@@ -414,67 +414,25 @@ sequenceDiagram
     G-->>C: Post Detail
 ```
 
-현재 구현은 익명 요청에 ACTIVE 게시물만 반환한다. 없는·비활성 게시물은 `404`다.
-응답은 아래 게시물 필드에서 MongoDB `_id`를 제외한다. 조회 시 카운터와 Outbox를
-변경하지 않는다. 아래 `PostViewed` 조회수 집계 설계는 후속 작업이다.
+상세 조회는 보존된 ACTIVE 및 EXPIRED 게시물을 반환하고, 없는 게시물과 DELETED는
+`404`를 반환한다. 운영에서는 Gateway가 서명한 사용자 신원을 검증한다.
 
-게시판 조회 횟수를 증가시키기 위해 매번 다음과 같은 Query를 수행하는 것은 피한다.
+공개 상세 GET은 로그인 사용자의 열람을 작성자 본인까지 포함해 한국 날짜 기준
+하루 한 번 집계한다. 비로그인, 내부 상세, 미디어, 목록 조회는 집계하지 않는다.
+요청 진입 시각에서 날짜를 한 번 계산해 재시도가 자정을 넘어도 날짜를 유지한다.
 
-```
-db.posts.updateOne(
-  {
-    postId: postId
-  },
-  {
-    $inc: {
-      "counters.viewCount": 1
-    }
-  }
-)
-```
+`post_daily_views`의 `(postId, userId, day)` 유니크 인덱스가 중복을 막는다.
+최초 조회 기록과 `post_counters`의 `viewCount` 증가는 같은 MongoDB 트랜잭션에서
+커밋된다. 사용자 ID를 기존 partition 전략에 전달해 bucket을 선택한다.
+게시물 문서의 `counters`와 `updatedAt`은 변경하지 않는다.
+응답은 기존 기준값과 bucket 증가분을 합산하며 현재 요청에서 커밋한 조회를 포함한다.
 
-하나의 인기 게시판에 조회가 몰리는 경우 특정 Document에 지속적으로 Write가 집중될 수 있다.
-
-따라서 조회 횟수는 Event 기반으로 비동기 집계한다.
-
-```mermaid
-flowchart LR
-
-    C[Post Viewed]
-
-    O[(outbox_events)]
-
-    W[Outbox Worker]
-
-    K[Redis Streams]
-
-    A[Counter Aggregator]
-
-    M[(MongoDB)]
-
-    C --> O
-    O --> W
-    W -->|XADD PostViewed| K
-    K --> A
-
-    A -->|Batch Increment| M
-```
-
-즉 다음과 같은 Eventual Consistency를 허용한다.
-
-```
-PostViewed
-    ↓
-MongoDB Outbox
-    ↓
-Outbox Worker → Redis Streams
-    ↓
-Counter Aggregator
-    ↓
-Batch Update
-    ↓
-MongoDB
-```
+조회 집계는 동기 방식이며 별도 `PostViewed` 이벤트나 Consumer를 만들지 않는다.
+저장 실패 시 요청도 실패하고 조회 기록과 증가분을 함께 롤백한다.
+상세 응답 구성 실패는 조회를 기록하지 않는다. 트랜잭션에서 삭제 상태를 다시
+검사하며, 이후 동시에 삭제된 게시물은 삭제 전 읽힌 조회로 집계될 수 있다.
+조회 기록은 자동 삭제하지 않는다. 장기 보존 정책을 도입할 때는 날짜가 고정된
+진행 중 요청이 삭제된 기록을 다시 생성할 가능성까지 검토해야 한다.
 
 ---
 

@@ -1,4 +1,5 @@
 import { MediaService } from '../src/post/media/media.service.js';
+import { MongoosePostViews } from '../src/post/infrastructure/mongoose-post.views.js';
 import { POST_STATE_QUERIES } from '../src/post/application/ports.js';
 import { PostLifecycle } from '../src/post/application/lifecycle.js';
 import { MongooseVote } from '../src/post/infrastructure/mongoose-vote.js';
@@ -57,6 +58,7 @@ describe('similar HTTP contract', () => {
           CreateReaction,
           JoinPost,
           ReadPosts,
+          MongoosePostViews,
         ].map((provide) => ({ provide, useValue: {} })),
         { provide: FindSimilarPosts, useValue: { execute } },
       ],
