@@ -59,6 +59,10 @@ import {
   VoteSelectionSchema,
 } from './infrastructure/post.schemas.js';
 import { OutboxWorker } from './infrastructure/outbox.worker.js';
+import {
+  DailyPostViewSchema,
+  MongoosePostViews,
+} from './infrastructure/mongoose-post.views.js';
 
 @Module({
   imports: [
@@ -83,6 +87,11 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
         collection: 'post_comment_reactions',
       },
       { name: 'Counter', schema: CounterSchema, collection: 'post_counters' },
+      {
+        name: 'DailyPostView',
+        schema: DailyPostViewSchema,
+        collection: 'post_daily_views',
+      },
       {
         name: 'Reaction',
         schema: ReactionSchema,
@@ -115,6 +124,7 @@ import { OutboxWorker } from './infrastructure/outbox.worker.js';
     MediaCleanupWorker,
     MongoosePostStore,
     MongoosePostRead,
+    MongoosePostViews,
     MongooseVote,
     { provide: PARTITION_STRATEGY, useClass: HashPartitionStrategy },
     { provide: POST_READ_QUERIES, useExisting: MongoosePostRead },

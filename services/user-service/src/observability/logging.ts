@@ -56,6 +56,7 @@ const fields = new Set([
   'failed',
   'skipped',
   'candidateCount',
+  'viewCount',
   'totalVotes',
   'hasWinner',
   'tie',

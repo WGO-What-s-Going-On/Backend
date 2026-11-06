@@ -678,7 +678,10 @@ suite('post activity event contracts', () => {
     const rows = await events(id, 'PostExpired');
     expect(rows).toHaveLength(1);
     expect(rows[0].payload.post.expiresAt).toEqual(due);
-    await request(app.getHttpServer()).get(`/api/v1/posts/${id}`).expect(404);
+    const { body: expired } = await request(app.getHttpServer())
+      .get(`/api/v1/posts/${id}`)
+      .expect(200);
+    expect(expired.status).toBe('EXPIRED');
     const deletedId = await create();
     await lifecycle.scheduleExpiration(deletedId, due);
     await request(app.getHttpServer())
@@ -878,8 +881,8 @@ suite('post activity event contracts', () => {
     const future = await create();
     await lifecycle.scheduleExpiration(due, new Date(Date.now() - 1000));
     await lifecycle.scheduleExpiration(future, new Date(Date.now() + 60000));
-    // 기한이 지났다면 scheduler가 아직 처리하지 않았어도 새 활동과 공개 조회를 거부한다.
-    await request(app.getHttpServer()).get(`/api/v1/posts/${due}`).expect(404);
+    // 기한이 지나면 scheduler 처리 전에도 쓰기는 거부하지만 읽기는 허용한다.
+    await request(app.getHttpServer()).get(`/api/v1/posts/${due}`).expect(200);
     await request(app.getHttpServer())
       .post(`/api/v1/posts/${due}/comments`)
       .set(other)

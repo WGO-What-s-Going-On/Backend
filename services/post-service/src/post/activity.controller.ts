@@ -20,7 +20,8 @@ import {
   ActivityPageResponse,
   RankingResponse,
 } from './presentation/activity.openapi.js';
-import { Types, type Model } from 'mongoose';
+import { Types, type Model, type PipelineStage } from 'mongoose';
+import type { PostStatus } from './domain/post.js';
 import { GatewayAuthGuard } from '../gateway-auth.js';
 import { userId } from './presentation/post.input.js';
 export function activityLevel(
@@ -228,7 +229,7 @@ export class Activities {
       {
         model: this.posts,
         kind: 'POST',
-        filter: { authorId: actor, status: { $ne: 'DELETED' } },
+        filter: { authorId: actor, status: { $in: ['ACTIVE', 'EXPIRED'] } },
         time: 'createdAt',
       },
       {
@@ -266,23 +267,52 @@ export class Activities {
               ],
             }
           : {};
-        const rows = await source.model
-          .find(
-            { ...source.filter, ...filter },
-            `postId commentId ${source.time} closedAt`,
-          )
-          .sort({ [source.time]: -1, _id: -1 })
-          .limit(21)
-          .maxTimeMS(2000)
-          .lean();
-        return rows.map((row) => ({
-          kind: source.kind,
-          postId: row.postId,
-          commentId: row.commentId ?? null,
-          createdAt: row[source.time] as Date,
-          id: String(row._id),
-          closedAt: row.closedAt ?? null,
-        }));
+        const parent = source.kind === 'POST' ? '' : 'parentPost.';
+        const pipeline: PipelineStage[] = [
+          { $match: { ...source.filter, ...filter } },
+          { $sort: { [source.time]: -1, _id: -1 } },
+        ];
+        if (source.kind !== 'POST') {
+          pipeline.push(
+            {
+              $lookup: {
+                from: this.posts.collection.name,
+                localField: 'postId',
+                foreignField: 'postId',
+                as: 'parentPost',
+              },
+            },
+            { $unwind: '$parentPost' },
+            { $match: { 'parentPost.status': { $in: ['ACTIVE', 'EXPIRED'] } } },
+          );
+        }
+        // 삭제된 부모를 먼저 제외해야 유효한 활동이 다음 페이지에서 누락되지 않는다.
+        pipeline.push(
+          { $limit: 21 },
+          {
+            $project: {
+              _id: 0,
+              id: { $toString: '$_id' },
+              kind: { $literal: source.kind },
+              postId: 1,
+              commentId: { $ifNull: ['$commentId', null] },
+              createdAt: `$${source.time}`,
+              postStatus: `$${parent}status`,
+              closedAt: { $ifNull: [`$${parent}closedAt`, null] },
+            },
+          },
+        );
+        return source.model
+          .aggregate<{
+            id: string;
+            kind: string;
+            postId: string;
+            commentId: string | null;
+            createdAt: Date;
+            postStatus: Extract<PostStatus, 'ACTIVE' | 'EXPIRED'>;
+            closedAt: Date | null;
+          }>(pipeline)
+          .option({ maxTimeMS: 2000 });
       }),
     );
     const rows = pages
@@ -350,7 +380,8 @@ export class ActivityController {
   @ApiOkResponse({ type: ActivityPageResponse })
   @ApiOperation({
     summary: 'Recent own activity',
-    description: '20 items per page; cursor from nextCursor.',
+    description:
+      '20 items per page, newest first; cursor from nextCursor. Includes ACTIVE and EXPIRED parent posts. Activities whose parent post is deleted or missing are omitted. postStatus and closedAt come from the parent post. Vote createdAt is its latest selection time.',
   })
   list(@Headers('x-user-id') header: string, @Query('cursor') cursor?: string) {
     return this.activities.list(userId(header), cursor);

@@ -85,7 +85,7 @@ WS Gateway는 ACTIVE 게시물 room 참여, 게시물·댓글 조회와 댓글 �
 
 ### 우선순위 2: 조회와 상태 변경
 
-- [x] **Post Service HTTP 조회 API:** 게시물 상세, 댓글 커서 조회, 내부 batch-get·meta/status 조회를 구현했다. 내부 경로는 서비스 간 인증 연동 전까지 운영에서 차단한다. 이 완료 표시는 WS Gateway 실시간 전달이나 주변 검색 조합의 완료를 뜻하지 않는다. `PostViewed` 집계도 별도 작업이다.
+- [x] **Post Service HTTP 조회 API:** 게시물 상세, 댓글 커서 조회, 내부 batch-get·meta/status 조회를 구현했다. 로그인 사용자의 공개 상세 조회는 작성자를 포함해 한국 날짜마다 한 번 집계한다. 조회 기록과 bucket 카운터는 같은 MongoDB 트랜잭션으로 저장한다. 비로그인·내부·미디어 조회는 집계하지 않는다. 이 완료 표시는 WS Gateway 실시간 전달이나 주변 검색 조합의 완료를 뜻하지 않는다.
 - [ ] **주변 게시물 조회 조합:** Map Service의 위치 검색 결과를 HTTP Gateway가 Post Service 내부 batch-get과 조합하는 계약·구현·통합 테스트를 완료한다. 현재 HTTP Gateway는 `/api/v1/posts`를 투명 프록시만 한다.
 - [x] **종료·취소 Command:** 게시물·댓글 삭제, 종류별 공감 취소, 참여 종료의 트랜잭션·멱등성·이벤트를 구현했다. 게시물 수정은 별도 후속 기능이다.
 - [x] **Post 만료 처리:** 기한 예약, `ACTIVE → EXPIRED` Worker, `PostExpired` Outbox 및 중복·경합 처리를 구현했다. Moderation 네트워크 연동은 후속 범위다.

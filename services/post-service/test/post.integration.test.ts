@@ -75,6 +75,14 @@ suite('post creation integration', () => {
   let id: string;
   const header = { 'X-User-Id': '123' };
 
+  async function qualifyVote(postId: string) {
+    await comments.updateMany(
+      { postId },
+      { $set: { 'reactionCounts.HELPFUL': 20 } },
+    );
+    await posts.updateOne({ postId }, { $set: { 'counters.viewCount': 100 } });
+  }
+
   beforeAll(async () => {
     vi.stubEnv('SEMANTIC_MODEL_ENABLED', 'false');
     process.env.NODE_ENV = 'test';
@@ -173,7 +181,11 @@ suite('post creation integration', () => {
       })
       .compile();
     app = module.createNestApplication();
-    await app.init();
+    // 수동 runOnce가 조건 준비 전 시작된 타이머 평가를 기다리지 않도록 한다.
+    // 실제 평가·트랜잭션은 유지하고 이 테스트의 실행 시점만 직접 제어한다.
+    vi.spyOn(app.get(VoteWorker), 'onModuleInit').mockImplementation(() => {});
+    // 요청마다 임시 서버를 닫지 않고 테스트 전체에서 같은 HTTP 연결 대상을 유지한다.
+    await app.listen(0, '127.0.0.1');
     connection = app.get(getConnectionToken());
     posts = app.get(getModelToken('Post'));
     comments = app.get(getModelToken('Comment'));
@@ -191,6 +203,7 @@ suite('post creation integration', () => {
       participants.syncIndexes(),
       outbox.syncIndexes(),
       app.get<Model<any>>(getModelToken('VoteSelection')).syncIndexes(),
+      app.get<Model<any>>(getModelToken('DailyPostView')).syncIndexes(),
     ]);
     await redis.connect();
     await redis.del('post:events');
@@ -1100,7 +1113,7 @@ suite('post creation integration', () => {
       { $set: { authorId: 789 } },
     );
     await posts.updateOne({ postId }, { $unset: { region: 1 } });
-    await posts.updateOne({ postId }, { $set: { voteAt: new Date(0) } });
+    await qualifyVote(postId);
     await app.get(VoteWorker).runOnce();
     await request(app.getHttpServer())
       .put(`/api/v1/posts/${postId}/vote`)
@@ -1173,10 +1186,7 @@ suite('post creation integration', () => {
       .get(`/api/v1/posts/${postId}/vote`)
       .expect(200)
       .then((response) => expect(response.body.status).toBe('PENDING'));
-    await posts.updateOne(
-      { postId },
-      { $set: { voteAt: new Date(Date.now() - 1000) } },
-    );
+    await qualifyVote(postId);
     await app.get(VoteWorker).runOnce();
     const open = await request(app.getHttpServer())
       .get(`/api/v1/posts/${postId}/vote`)
@@ -1296,10 +1306,7 @@ suite('post creation integration', () => {
           .expect(200)
       ).body.status,
     ).toBe('PENDING');
-    await posts.updateOne(
-      { postId: sparse },
-      { $set: { voteAt: new Date(Date.now() - 1000) } },
-    );
+    await qualifyVote(sparse);
     await app.get(VoteWorker).runOnce();
     expect(
       (
@@ -1307,7 +1314,7 @@ suite('post creation integration', () => {
           .get(`/api/v1/posts/${sparse}/vote`)
           .expect(200)
       ).body.status,
-    ).toBe('NONE');
+    ).toBe('PENDING');
     const early = await make();
     await app
       .get(PostLifecycle)
@@ -1336,10 +1343,7 @@ suite('post creation integration', () => {
       .set(header)
       .send({ content: 'Two' })
       .expect(201);
-    await posts.updateOne(
-      { postId: cancelled },
-      { $set: { voteAt: new Date(Date.now() - 1000) } },
-    );
+    await qualifyVote(cancelled);
     await app.get(VoteWorker).runOnce();
     await request(app.getHttpServer())
       .delete(`/api/v1/posts/${cancelled}/comments/${one.body.commentId}`)
@@ -1368,10 +1372,7 @@ suite('post creation integration', () => {
       .set(header)
       .send({ content: 'B' })
       .expect(201);
-    await posts.updateOne(
-      { postId: empty },
-      { $set: { voteAt: new Date(Date.now() - 1000) } },
-    );
+    await qualifyVote(empty);
     await app.get(VoteWorker).runOnce();
     await request(app.getHttpServer())
       .delete(`/api/v1/posts/${empty}`)
@@ -1421,10 +1422,7 @@ suite('post creation integration', () => {
       .set(header)
       .send({ content: 'Second' })
       .expect(201);
-    await posts.updateOne(
-      { postId },
-      { $set: { voteAt: new Date(Date.now() - 1000) } },
-    );
+    await qualifyVote(postId);
     await app.get(VoteWorker).runOnce();
     const simultaneous = await Promise.all([
       request(app.getHttpServer())
@@ -1501,7 +1499,6 @@ suite('post creation integration', () => {
           })
           .expect(201);
         const boardId = created.body.postId;
-        await app.listen(0, '127.0.0.1');
         const jwtEnv = { ...process.env };
         let config;
         try {

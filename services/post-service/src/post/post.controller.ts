@@ -1,4 +1,5 @@
 import { distanceM } from './nearby.controller.js';
+import { MongoosePostViews } from './infrastructure/mongoose-post.views.js';
 import { UseGuards } from '@nestjs/common';
 import { GatewayAuthGuard } from '../gateway-auth.js';
 import { Patch } from '@nestjs/common';
@@ -118,6 +119,7 @@ export class PostController {
     private readonly createReaction: CreateReaction,
     private readonly joinPost: JoinPost,
     private readonly readPosts: ReadPosts,
+    private readonly postViews: MongoosePostViews,
     private readonly findSimilar: FindSimilarPosts,
     private readonly lifecycle: PostLifecycle,
     private readonly votes: MongooseVote,
@@ -494,7 +496,8 @@ export class PostController {
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary: '게시물 첨부 조회 URL 갱신',
-    description: '기존 ACTIVE 게시물 공개 조회 정책을 적용합니다.',
+    description:
+      'ACTIVE 및 EXPIRED 게시물의 첨부를 반환하며 이미 정리된 첨부는 제외합니다. DELETED 게시물은 404입니다.',
   })
   @ApiOkResponse({ type: [MediaResponse] })
   async postMedia(@Param('postId') id: string) {
@@ -505,7 +508,8 @@ export class PostController {
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary: '댓글 첨부 조회 URL 갱신',
-    description: '부모 게시물과 댓글이 모두 ACTIVE여야 합니다.',
+    description:
+      'ACTIVE 및 EXPIRED 게시물의 ACTIVE 댓글 첨부를 반환하며 이미 정리된 첨부는 제외합니다. 종료·만료 시각으로 조회를 차단하지 않습니다.',
   })
   @ApiOkResponse({ type: [MediaResponse] })
   async commentMedia(
@@ -514,10 +518,7 @@ export class PostController {
   ) {
     const validated = postId(id);
     const parent = await this.readPosts.status(validated);
-    if (
-      parent.status !== 'ACTIVE' ||
-      (parent.expiresAt && parent.expiresAt <= new Date())
-    )
+    if (parent.status === 'DELETED')
       throw new PostNotFoundError('Post not found');
     const comment = await this.postQueries.findComment(
       validated,
@@ -532,22 +533,26 @@ export class PostController {
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary: '게시물 상세 조회',
-    description: 'ACTIVE 게시물만 반환합니다.',
+    description:
+      'ACTIVE 및 EXPIRED 게시물을 반환하며 DELETED는 404입니다. 로그인 사용자의 상세 조회는 작성자를 포함해 한국 날짜 기준 하루 한 번 집계하고 응답 조회수에 반영합니다. 비로그인 조회는 집계하지 않습니다. 종료 후 댓글·감정표현 작성은 허용하지 않습니다.',
   })
   @ApiParam({
     name: 'postId',
     example: 'post_123e4567-e89b-12d3-a456-426614174000',
   })
   @ApiOkResponse({ type: PostResponse })
-  @ApiNotFoundResponse({ description: '게시물이 없거나 비활성 상태' })
+  @ApiNotFoundResponse({ description: '게시물이 없거나 DELETED 상태' })
   @ApiQuery({ name: 'latitude', type: Number, required: false })
   @ApiQuery({ name: 'longitude', type: Number, required: false })
   async detail(
     @Param('postId') id: string,
+    @Req() request: { method: string },
     @Headers('x-user-id') header?: string,
     @Query('latitude') latitude?: unknown,
     @Query('longitude') longitude?: unknown,
   ) {
+    const viewedAt = new Date();
+    const actor = header ? userId(header) : undefined;
     const coordinates = latitude !== undefined || longitude !== undefined;
     if (
       coordinates &&
@@ -561,12 +566,18 @@ export class PostController {
         Math.abs(Number(longitude)) > 180)
     )
       throw new BadRequestException('Both valid coordinates required');
-    const post = await this.readPosts.detail(
-      postId(id),
-      header ? userId(header) : undefined,
-    );
+    const post = await this.readPosts.detail(postId(id), actor);
+    const viewCount =
+      actor === undefined || request.method !== 'GET'
+        ? post.counters.viewCount
+        : await this.postViews.record({
+            postId: postId(id),
+            userId: actor,
+            at: viewedAt,
+          });
     return {
       ...post,
+      counters: { ...post.counters, viewCount },
       distanceM: coordinates
         ? distanceM(
             Number(latitude),
@@ -583,7 +594,7 @@ export class PostController {
   @ApiOperation({
     summary: '댓글 목록 조회',
     description:
-      'ACTIVE 댓글을 최신순으로 반환합니다. 커서는 해당 게시물에만 사용할 수 있습니다.',
+      'ACTIVE 및 EXPIRED 게시물의 ACTIVE 댓글을 최신순으로 반환합니다. 만료 시각이 지나도 조회할 수 있으며 DELETED 게시물은 404입니다. 커서는 해당 게시물에만 사용할 수 있습니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiQuery({
@@ -599,7 +610,7 @@ export class PostController {
     schema: { minimum: 1, maximum: 100, default: 30 },
   })
   @ApiOkResponse({ type: CommentPageResponse })
-  @ApiNotFoundResponse({ description: '게시물이 없거나 비활성 상태' })
+  @ApiNotFoundResponse({ description: '게시물이 없거나 DELETED 상태' })
   comments(
     @Param('postId') id: string,
     @Query('cursor') cursor: unknown,
@@ -646,7 +657,7 @@ export class PostController {
   @ApiOperation({
     summary: '댓글 작성',
     description:
-      '게시물이 ACTIVE일 때 댓글·카운터·Outbox를 한 트랜잭션에 저장합니다.',
+      '게시물이 ACTIVE이고 종료·만료되지 않았을 때 댓글·카운터·Outbox를 한 트랜잭션에 저장합니다. EXPIRED 또는 만료 시각이 지난 게시물은 403입니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiHeader({
@@ -681,7 +692,7 @@ export class PostController {
   @ApiOperation({
     summary: '댓글 공감 작성',
     description:
-      '한 사용자가 댓글에 종류별로 하나씩 누를 수 있습니다. 같은 종류의 반복 요청은 기존 공감을 반환하며 이벤트는 발행하지 않습니다.',
+      'EXPIRED 또는 종료·만료된 게시물에는 작성할 수 없으며 403을 반환합니다. 한 사용자가 댓글에 종류별로 하나씩 누를 수 있습니다. 같은 종류의 반복 요청은 기존 공감을 반환하며 이벤트는 발행하지 않습니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiParam({ name: 'commentId' })
@@ -716,7 +727,7 @@ export class PostController {
   @ApiOperation({
     summary: '게시물 공감 작성',
     description:
-      '한 사용자가 종류별로 하나씩 누를 수 있으며, 같은 종류의 반복 요청은 기존 반응을 반환합니다.',
+      'EXPIRED 또는 종료·만료된 게시물에는 작성할 수 없으며 403을 반환합니다. 한 사용자가 종류별로 하나씩 누를 수 있으며, 같은 종류의 반복 요청은 기존 반응을 반환합니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiHeader({
@@ -854,13 +865,14 @@ export class InternalPostController {
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary: '내부 게시물 상세 조회',
-    description: '서비스 JWT가 필요하며 ACTIVE 게시물만 반환합니다.',
+    description:
+      '서비스 JWT가 필요하며 ACTIVE 및 EXPIRED 게시물을 반환합니다. DELETED는 404입니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiBearerAuth('service-jwt')
   @ApiOkResponse({ type: PostResponse })
   @ApiUnauthorizedResponse({ description: '서비스 JWT가 없거나 유효하지 않음' })
-  @ApiNotFoundResponse({ description: '게시물이 없거나 비활성 상태' })
+  @ApiNotFoundResponse({ description: '게시물이 없거나 DELETED 상태' })
   @ApiServiceUnavailableResponse({ description: '서비스 JWT 설정이 없음' })
   detail(
     @Param('postId') id: string,
@@ -874,7 +886,8 @@ export class InternalPostController {
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary: '내부 댓글 목록 조회',
-    description: '서비스 JWT가 필요하며 HTTP 공개 조회와 같은 커서 형식입니다.',
+    description:
+      '서비스 JWT가 필요하며 ACTIVE 및 EXPIRED 게시물의 댓글을 반환합니다. DELETED는 404이며 HTTP 공개 조회와 같은 커서 형식입니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiQuery({
@@ -892,7 +905,7 @@ export class InternalPostController {
   @ApiBearerAuth('service-jwt')
   @ApiOkResponse({ type: CommentPageResponse })
   @ApiUnauthorizedResponse({ description: '서비스 JWT가 없거나 유효하지 않음' })
-  @ApiNotFoundResponse({ description: '게시물이 없거나 비활성 상태' })
+  @ApiNotFoundResponse({ description: '게시물이 없거나 DELETED 상태' })
   @ApiServiceUnavailableResponse({ description: '서비스 JWT 설정이 없음' })
   comments(
     @Param('postId') id: string,

@@ -178,6 +178,8 @@ export function appResources(config, name, image) {
     USER_GRPC_ADDRESS: 'user-service:50052',
   };
   const sql = ['user-service', 'notification-service'].includes(name);
+  if (name === 'notification-service')
+    settings.NOTIFICATION_USER_BLOCKS_URL = `${settings.USER_SERVICE_URL}/internal/notifications/blocks/check`;
   if (name === 'user-service')
     Object.assign(settings, {
       GCS_PROFILE_ENABLED: 'true',

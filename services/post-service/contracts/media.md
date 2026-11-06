@@ -6,7 +6,7 @@
 
 - 로컬/테스트 업로드 생성·상태·완료·취소는 기존 `X-User-Id` 양의 정수 정책이다. 다른 사용자 업로드는 404.
 - **production 공개 업로드 및 기존 공개 작성 API는 사용자 인증 연동 전까지 503이다.** 이번 변경은 이를 우회하지 않는다. 운영 기능 활성화 완료로 간주하지 않는다.
-- 조회 URL 발급은 기존 공개 조회 정책대로 ACTIVE이고 기한이 지나지 않은 게시물, ACTIVE 댓글에만 허용한다. 다른 비공개 접근 권한을 새로 정의하지 않는다.
+- 조회 URL 발급은 기존 공개 조회 정책대로 ACTIVE 및 EXPIRED 게시물과 그 ACTIVE 댓글에 허용한다. 작성자 종료 또는 만료 시각 경과로 읽기를 차단하지 않으며 DELETED 게시물은 404다. 다른 비공개 접근 권한을 새로 정의하지 않는다.
 - 내부 댓글 작성의 서비스 JWT/사용자 위임 검증을 유지한다. `mediaIds`는 추가 선택 필드다. 현재 WS Gateway는 이 필드를 전달하도록 변경하지 않았으므로 WS 첨부 작성은 별도 작업이다.
 - Presigned URL은 소지자에게 유효한 임시 권한이다. URL/서명 헤더를 로그·이벤트·영구 DB·분석 도구에 기록하지 않는다. 이미 발급된 GET URL은 삭제 요청 즉시 취소되지 않으며 만료 또는 GCS 정리 시점까지 유효할 수 있다. 이미 받은 파일·브라우저 캐시는 회수할 수 없다.
 
@@ -50,16 +50,17 @@ if (!complete.ok) throw new Error('Media verification failed');
 // 이후 게시물/댓글 생성 body의 mediaIds에 mediaId를 넣는다.
 ```
 
-400은 입력/개수/형식 오류, 403은 로컬 사용자 헤더 오류, 404는 없는 리소스/다른 소유자/비활성 대상, 409는 첨부 불가능한 상태·이미 사용·만료, 422는 아직 없는 업로드 또는 파일 검증 실패, 503은 비활성 설정/서명·GCS 장애/운영 인증 미연동이다. 기존 Nest 오류 형식 `{statusCode,message,error}`를 사용한다. 첨부된 파일의 단독 취소는 409이며 게시물/댓글 삭제로 수명주기를 종료한다. 취소는 기록 정리 전까지 멱등, 정리 후는 404다. 내부 댓글 mutationId 재시도는 기존 결과 우선 정책을 유지한다.
+400은 입력/개수/형식 오류, 403은 로컬 사용자 헤더 오류, 404는 없는 리소스/다른 소유자/삭제된 대상, 409는 첨부 불가능한 상태·이미 사용·만료, 422는 아직 없는 업로드 또는 파일 검증 실패, 503은 비활성 설정/서명·GCS 장애/운영 인증 미연동이다. 기존 Nest 오류 형식 `{statusCode,message,error}`를 사용한다. 첨부된 파일의 단독 취소는 409이며 게시물/댓글 삭제로 수명주기를 종료한다. 취소는 기록 정리 전까지 멱등, 정리 후는 404다. 내부 댓글 mutationId 재시도는 기존 결과 우선 정책을 유지한다.
 
 ## 데이터와 정리
 
 - `posts.mediaIds`, `post_comments.mediaIds`: 순서 있는 ID 배열, 기존 문서는 미존재를 `[]`로 읽는다. 기존 데이터 backfill 불필요.
 - 새 `post_media`: mediaId, ownerId, type, contentType, sizeBytes, SHA256 checksum, uploadKey, objectKey, 상태/시각, 연결된 postId/commentId. **URL을 저장하지 않는다.**
-- 상태: PENDING → READY → ATTACHED. PENDING/READY 취소·24시간 만료, 대상 게시물 만료/삭제·댓글 삭제 시 DELETING → GCS 삭제 성공 후 DB 기록 제거.
+- 상태: PENDING → READY → ATTACHED. PENDING/READY 취소·24시간 만료, 대상 게시물 삭제·댓글 삭제 또는 부모 리소스 유실 시 DELETING → GCS 삭제 성공 후 DB 기록 제거.
+- 이미 정리되어 ATTACHED 레코드가 없는 첨부는 상세·댓글 목록·첨부 URL 갱신 응답의 `media`에서 제외한다. 남은 첨부는 `mediaIds` 순서를 유지하며 모두 없으면 `media: []`를 반환한다. 저장된 `mediaIds`는 과거 참조로 남을 수 있다. 다른 게시물·댓글에 속한 첨부 참조는 계속 404로 차단하고 서명/GCS 장애는 숨기지 않는다. 기존 DELETING 작업은 복원하지 않으며 삭제된 파일을 되살리지 않는다.
 - 첨부 READY→ATTACHED 조건부 변경과 게시물/댓글·counter·Outbox 기록은 **같은 MongoDB 트랜잭션**이다. 타인 파일·이미 첨부된 파일·동시 요청 실패는 전체 롤백한다. 파일 검증/복사는 트랜잭션 밖에서 한다. GCS와 MongoDB를 하나의 원자적 트랜잭션으로 처리하지 않는다.
 - GCS pending 경로: `post-media/pending/<mediaId>`, 최종 경로: `post-media/objects/<mediaId>`. 업로드 서명은 pending에만 발급하고 x-goog-if-generation-match `0`로 덮어쓰기를 막는다. 검증한 generation 조건으로 final로 복사한다. 사용자 PUT URL 재사용이 첨부 파일을 바꾸지 못한다.
-- Worker는 기본 60초마다 상태별 최대 50개를 처리한다. ATTACHED는 커서 순회로 종료된 부모를 찾는다. 삭제 대상으로 바꾼 뒤 5분 유예하고 pending/final을 삭제한다. 실패 기록은 유지하고 5분 후 재시도한다. 다중 인스턴스 삭제는 같은 키에 대해 멱등이다. 대량 backlog는 여러 주기에 걸쳐 정리한다.
+- Worker는 기본 60초마다 상태별 최대 50개를 처리한다. ATTACHED는 커서 순회로 삭제되거나 없어진 부모를 찾는다. 게시물 종료·만료만으로는 게시물과 ACTIVE 댓글의 첨부를 정리하지 않는다. 삭제 대상으로 바꾼 뒤 5분 유예하고 pending/final을 삭제한다. 실패 기록은 유지하고 5분 후 재시도한다. 다중 인스턴스 삭제는 같은 키에 대해 멱등이다. 대량 backlog는 여러 주기에 걸쳐 정리한다.
 - pending prefix Lifecycle 만료를 **반드시** 설정한다. 완료 후 pending 원본, 늦은 업로드, URL 재사용으로 생긴 임시 객체를 정리한다. final prefix에는 광범위한 날짜 만료를 걸지 않는다. 비정상 장기 프로세스 정지·복구/DB 백업 복원 후에는 GCS inventory와 DB objectKey를 대조해 orphan을 점검한다.
 - 기존 Redis 이벤트 payload/버전은 변경하지 않는다. WS/이벤트로 갱신을 인지한 소비자는 Post API에서 첨부를 조회한다. 이벤트에 URL이나 objectKey를 싣지 않는다.
 

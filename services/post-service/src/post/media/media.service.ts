@@ -162,8 +162,9 @@ export class MediaService {
       const media = [];
       for (const id of target.mediaIds ?? []) {
         const record = byId.get(id);
+        // 과거 정리로 사라진 첨부가 보존된 게시물이나 댓글 페이지 전체를 막지 않게 한다.
+        if (!record) continue;
         if (
-          !record ||
           record.postId !== target.postId ||
           (record.commentId ?? undefined) !== target.commentId
         )

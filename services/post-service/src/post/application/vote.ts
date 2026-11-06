@@ -6,12 +6,14 @@ export interface VoteCandidate {
   content: string;
   scoreAtSelection: number;
   votes: number;
+  totalReactionsAtSelection?: number;
 }
 
 export interface VoteState {
   status: 'PENDING' | 'OPEN' | 'CLOSED' | 'CANCELLED' | 'NONE';
   candidates: VoteCandidate[];
   selectedAt: Date | null;
+  viewCountAtSelection?: number;
   closedAt: Date | null;
   winner: VoteCandidate | null;
 }

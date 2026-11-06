@@ -29,6 +29,22 @@ class MemorySubscriptions implements PushSubscriptionRepository {
 }
 
 describe('FirebasePushAdapter', () => {
+  it('does not call Firebase without an eligible token', async () => {
+    const subscriptions = new PushSubscriptionService(
+      new MemorySubscriptions(),
+    );
+    const sendEachForMulticast = vi.fn();
+    const adapter = new FirebasePushAdapter(
+      new ConfigService(),
+      subscriptions,
+      { sendEachForMulticast } as unknown as Messaging,
+    );
+    await expect(
+      adapter.send({ userId: '1', title: 'title', body: 'body' }),
+    ).resolves.toMatchObject({ attempted: 0, succeeded: 0, failed: 0 });
+    expect(sendEachForMulticast).not.toHaveBeenCalled();
+  });
+
   it('keeps authorization identities and consent revisions out of client FCM data', async () => {
     const subscriptions = new PushSubscriptionService(
       new MemorySubscriptions(),
@@ -52,14 +68,18 @@ describe('FirebasePushAdapter', () => {
       data: {
         notificationId: 'n',
         type: 'NEARBY_POST_CREATED',
+        commentId: 'comment-1',
         actorId: '999',
         allowTerminal: 'true',
         subscriptionRevision: 'private-consent-revision',
       },
+      actionPath: '/boards/post-1',
     });
     expect(sendEachForMulticast.mock.calls[0]?.[0].data).toEqual({
       notificationId: 'n',
       type: 'NEARBY_POST_CREATED',
+      commentId: 'comment-1',
+      actionPath: '/boards/post-1',
     });
     expect(
       sendEachForMulticast.mock.calls[0]?.[0].webpush.notification.tag,

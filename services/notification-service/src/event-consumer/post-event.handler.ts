@@ -32,6 +32,17 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
   ) {}
   onModuleInit(): void {
     if (!this.config?.get<string>('redis.url')) return;
+    if (
+      this.config.get<string>('NOTIFICATION_PUSH_DELIVERY_ENABLED') === 'false'
+    ) {
+      this.logger.emit({
+        event: 'push_delivery_paused',
+        outcome: 'skipped',
+        reasonCode: 'PUSH_DELIVERY_PAUSED',
+        message: 'Push delivery is paused; pending jobs are retained',
+      });
+      return;
+    }
     this.timer = setInterval(() => {
       if (!this.stopped)
         void this.drain().catch((error) =>
@@ -74,6 +85,10 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
     await this.dispatch(event.aggregateId);
   }
   async dispatch(postId?: string): Promise<void> {
+    if (
+      this.config?.get<string>('NOTIFICATION_PUSH_DELIVERY_ENABLED') === 'false'
+    )
+      return;
     let failure: unknown;
     for (const pending of await this.store.deliveries(postId)) {
       try {
@@ -130,6 +145,19 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
           await this.store.finish(delivery, 'PENDING');
           throw error;
         }
+        const counts = {
+          attempt: delivery.attempts,
+          postId: delivery.postId,
+          count: result.attempted,
+          delivered: result.succeeded,
+          failed: result.failed,
+        };
+        if (result.succeeded > 0)
+          this.logger.success(
+            'push_delivery_sent',
+            'FCM accepted push messages',
+            counts,
+          );
         const retry = result.retryTokens;
         if (
           retry?.length ||
@@ -151,18 +179,16 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
             undefined,
             'PUSH_PERMANENT_FAILURE',
             'Push delivery completed with permanent failures',
-            {
-              attempt: delivery.attempts,
-              postId: delivery.postId,
-              failed: result.failed,
-            },
+            counts,
             false,
           );
-        else
-          this.logger.success('push_delivery_sent', 'Push delivery completed', {
-            attempt: delivery.attempts,
-            postId: delivery.postId,
-            failed: result.failed,
+        else if (result.succeeded === 0)
+          this.logger.emit({
+            ...counts,
+            event: 'push_delivery_skipped',
+            outcome: 'skipped',
+            reasonCode: result.attempted === 0 ? 'NO_TOKENS' : 'INVALID_TOKENS',
+            message: 'No FCM message accepted for this delivery attempt',
           });
       } catch (error) {
         if (!(error instanceof BusyDeliveryError))
