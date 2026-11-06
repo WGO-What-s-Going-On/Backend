@@ -158,12 +158,23 @@ Notification/User 소비자와 Moderation의 네트워크 연동은 별도 구�
 
 ## 조회 API
 
-공개 조회는 인증 없이 `ACTIVE` 게시물만 반환한다. `GET /api/v1/posts/{postId}`는
-게시물 상세를 반환하며, 없는·비활성 게시물은 `404`다. `GET
+운영 공개 조회는 Gateway가 검증한 로그인 사용자 신원을 요구한다.
+`GET /api/v1/posts/{postId}`는 보존된 ACTIVE 및 EXPIRED 게시물 상세를 반환하며,
+없는 게시물과 DELETED는 `404`다. `GET
 /api/v1/posts/{postId}/comments?limit=30&cursor=...`는 ACTIVE 댓글을 최신순으로
 `{"comments":[...],"nextCursor":null}` 형태로 반환한다. `limit`은 기본 30,
 허용 범위 1–100이다. 다음 페이지가 있을 때만 `nextCursor`에 불투명한 문자열이
 들어간다. 잘못된 커서와 다른 게시물의 커서는 `400`이다. 응답에는 MongoDB `_id`가 없다.
+
+로그인 사용자의 공개 상세 GET은 작성자 본인을 포함해 게시물마다 한국 날짜 기준
+하루 한 번 조회수를 증가시킨다. 비로그인, HEAD, 목록, 내부 상세, 미디어 조회는 집계하지
+않는다. 별도 호출 없이 응답의 `counters.viewCount`에 현재 조회가 반영된다.
+`post_daily_views`의 `(postId, userId, day)` 유니크 기록과 bucket 카운터를 같은
+MongoDB 트랜잭션에 저장하므로 동시 요청과 재시도로 중복 증가하지 않는다.
+시작 시 유니크 인덱스 생성을 기다린다. MongoDB replica set과 인덱스 생성 권한이
+필요하며, 기록은 자동 삭제하지 않는다. 저장 실패는 상세 요청 실패로 반환되고
+트랜잭션은 롤백된다. 기존 게시물의 조회수 기준값과 `updatedAt`은 보존한다.
+과거 열람 기록의 소급 집계는 하지 않는다. `PostViewed` 이벤트는 발행하지 않는다.
 
 내부 조회는 다음과 같다. 운영에서 batch-get은 기존대로 `503`이며,
 meta/status는 서비스 JWT를 요구한다.

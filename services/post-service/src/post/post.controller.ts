@@ -1,4 +1,5 @@
 import { distanceM } from './nearby.controller.js';
+import { MongoosePostViews } from './infrastructure/mongoose-post.views.js';
 import { UseGuards } from '@nestjs/common';
 import { GatewayAuthGuard } from '../gateway-auth.js';
 import { Patch } from '@nestjs/common';
@@ -118,6 +119,7 @@ export class PostController {
     private readonly createReaction: CreateReaction,
     private readonly joinPost: JoinPost,
     private readonly readPosts: ReadPosts,
+    private readonly postViews: MongoosePostViews,
     private readonly findSimilar: FindSimilarPosts,
     private readonly lifecycle: PostLifecycle,
     private readonly votes: MongooseVote,
@@ -532,7 +534,7 @@ export class PostController {
   @ApiOperation({
     summary: '게시물 상세 조회',
     description:
-      'ACTIVE 및 EXPIRED 게시물을 반환합니다. 만료 시각이 지나도 조회할 수 있으며 DELETED는 404입니다. 종료 후 댓글·감정표현 작성은 허용하지 않습니다.',
+      'ACTIVE 및 EXPIRED 게시물을 반환하며 DELETED는 404입니다. 로그인 사용자의 상세 조회는 작성자를 포함해 한국 날짜 기준 하루 한 번 집계하고 응답 조회수에 반영합니다. 비로그인 조회는 집계하지 않습니다. 종료 후 댓글·감정표현 작성은 허용하지 않습니다.',
   })
   @ApiParam({
     name: 'postId',
@@ -544,10 +546,13 @@ export class PostController {
   @ApiQuery({ name: 'longitude', type: Number, required: false })
   async detail(
     @Param('postId') id: string,
+    @Req() request: { method: string },
     @Headers('x-user-id') header?: string,
     @Query('latitude') latitude?: unknown,
     @Query('longitude') longitude?: unknown,
   ) {
+    const viewedAt = new Date();
+    const actor = header ? userId(header) : undefined;
     const coordinates = latitude !== undefined || longitude !== undefined;
     if (
       coordinates &&
@@ -561,12 +566,18 @@ export class PostController {
         Math.abs(Number(longitude)) > 180)
     )
       throw new BadRequestException('Both valid coordinates required');
-    const post = await this.readPosts.detail(
-      postId(id),
-      header ? userId(header) : undefined,
-    );
+    const post = await this.readPosts.detail(postId(id), actor);
+    const viewCount =
+      actor === undefined || request.method !== 'GET'
+        ? post.counters.viewCount
+        : await this.postViews.record({
+            postId: postId(id),
+            userId: actor,
+            at: viewedAt,
+          });
     return {
       ...post,
+      counters: { ...post.counters, viewCount },
       distanceM: coordinates
         ? distanceM(
             Number(latitude),

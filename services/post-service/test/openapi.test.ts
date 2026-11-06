@@ -8,6 +8,7 @@ import {
 } from '../src/post/activity.controller.js';
 import { PostLifecycle } from '../src/post/application/lifecycle.js';
 import { MongooseVote } from '../src/post/infrastructure/mongoose-vote.js';
+import { MongoosePostViews } from '../src/post/infrastructure/mongoose-post.views.js';
 import { FindSimilarPosts } from '../src/post/semantic/search.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -46,6 +47,7 @@ describe('OpenAPI document', () => {
         POST_STATE_QUERIES,
         PostLifecycle,
         MongooseVote,
+        MongoosePostViews,
         CreatePost,
         CreateComment,
         CreateCommentReaction,
