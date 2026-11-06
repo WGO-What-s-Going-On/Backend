@@ -84,6 +84,26 @@ test('settings, secret refs and bootstrap names are pinned and restoration keeps
   }
   assert.notEqual(resourceHash(old), resourceHash(next));
 });
+test('notification uses the internal User block endpoint from its ConfigMap', () => {
+  const resources = releaseResources(
+    config,
+    'notification-service',
+    image('notification-service'),
+    'staging',
+  );
+  const container = resources.find((r) => r.kind === 'Deployment').spec.template
+    .spec.containers[0];
+  const settings = resources.find(
+    (r) =>
+      r.kind === 'ConfigMap' &&
+      r.metadata.name === container.envFrom[0].configMapRef.name,
+  ).data;
+  assert.equal(
+    settings.NOTIFICATION_USER_BLOCKS_URL,
+    'http://user-service:3001/internal/notifications/blocks/check',
+  );
+  assert.equal(settings.NOTIFICATION_SERVICE_PRIVATE_JWK, undefined);
+});
 test('rollback rejects resource injection and inconsistent state digest', () => {
   const resources = releaseResources(
     config,
