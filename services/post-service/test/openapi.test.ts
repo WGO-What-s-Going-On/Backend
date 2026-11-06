@@ -224,6 +224,11 @@ describe('OpenAPI document', () => {
       'COMMENT_REACTION',
       'VOTE',
     ]);
+    expect(schemas.ActivityItemResponse.required).toContain('postStatus');
+    expect(schemas.ActivityItemResponse.properties.postStatus.enum).toEqual([
+      'ACTIVE',
+      'EXPIRED',
+    ]);
     expect(schemas.ActivityItemResponse.properties.closedAt).toMatchObject({
       format: 'date-time',
       nullable: true,

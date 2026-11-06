@@ -127,7 +127,13 @@ Swagger에 목록 응답 스키마가 포함된다.
 ## 활동·칭호·행정동 랭킹
 
 - `GET /posts/me/activity?cursor=...` → `{items,nextCursor}`. 20개씩 최신순.
-  kind=POST/COMMENT/REACTION/COMMENT_REACTION/VOTE, postId, commentId, createdAt, closedAt.
+  kind=POST/COMMENT/REACTION/COMMENT_REACTION/VOTE, postId, commentId, createdAt, postStatus, closedAt.
+  postStatus는 부모 게시물에 저장된 ACTIVE 또는 EXPIRED다. 만료 게시물의 활동은 포함하고,
+  DELETED이거나 존재하지 않는 부모 게시물의 활동은 모든 kind에서 제외한다.
+  closedAt은 부모 게시물의 작성자 수동 종료 시각이다. null이어도 EXPIRED일 수 있으며,
+  수동 종료된 게시물은 postStatus=ACTIVE와 closedAt을 함께 반환한다.
+  투표의 createdAt은 선택 갱신 시각이다. 다음 페이지는 응답의 nextCursor를 그대로 전달한다.
+  부모 상태 필터를 페이지 크기 제한 전에 적용한다. 이 응답 변경은 만료 게시물의 상세·댓글 열람 권한을 변경하지 않는다.
   현재 남아 있는 작성·댓글·반응·투표 관계를 집계하며 취소된 관계는 제외한다.
 - `GET /posts/me/level` → participation, agreeReceived, picks, score, level(1~4), title.
 - 프론트 `features/level/levels.ts` 기준: 참여 10회 → 받은 AGREE 10개 → 대표 의견 50점.
