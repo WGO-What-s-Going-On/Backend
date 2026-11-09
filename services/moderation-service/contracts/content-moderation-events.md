@@ -3,18 +3,31 @@
 ## Responsibility and input
 
 Moderation evaluates content; it does not determine or execute sanctions. Input is
-Post's `post:events` `PostCommentCreated` or `PostCommentUpdated` v1 flat envelope, transmitted as Redis
-fields `eventId`, `eventType`, `data`. Existing schema/producer/identifier/time,
-comment author/content and activity-version validation applies. No Post DB access,
-automatic deletion, credit deduction, account suspension or direct push occurs.
+Post's `post:events` v1 flat envelope, transmitted as Redis fields `eventId`,
+`eventType`, `data`. Existing schema/producer/identifier/time validation applies.
+No Post DB access, automatic deletion, credit deduction, account suspension or direct push occurs.
 
-`PostCreated` currently contains no body. The authorized internal Post detail API
-admits ws-gateway, not moderation-service. Post-body evaluation is **unimplemented**
-pending a content/reference/version and authorized access contract. No fake content
-or contentVersion is constructed. For comments, activityVersion increases on content edits and deletion. It identifies
-the evaluated body as well as fencing deleted activity. It does not itself authorize
-a sanction. Edited input requires the version and comment.updatedAt; legacy create
-input still defaults to version 1. Deploy this consumer before enabling Post edits.
+`PostCreated` and content-edit `PostUpdated` carry `post.title`, `post.content`,
+`post.authorId` and top-level `postVersion`. Both text fields are complete immutable
+snapshots from the Post transaction. Partial edits retain the other field from that
+transaction. Title length is 1–120 and body length is 1–5,000 JavaScript UTF-16 code
+units, preserving the whitespace accepted by Post creation. Author and version are
+positive safe integers. The provider receives title, two newlines, then body.
+
+Legacy create/edit events and state-only close/reopen `PostUpdated` lack both text
+fields. They skip content evaluation. Creation still initializes lifecycle. Any
+partial snapshot or snapshot without a valid author/version is rejected. Post edits
+do not reset lifecycle activity or reactivate a deleted post. Post snapshots can
+be evaluated out of order; their exact source postVersion stays in each result.
+
+`PostCommentCreated` and `PostCommentUpdated` retain the existing comment validation,
+provider input, lifecycle ordering and activityVersion behavior. activityVersion
+increases on content edits and deletion. Edited input requires the version and
+comment.updatedAt; legacy create input still defaults to version 1.
+Deploy the Notification consumer that accepts POST and COMMENT evaluations first,
+then Moderation, then the Post snapshot producer. Old already-processed
+bodyless events cannot acquire content through replay. Recovery needs a new explicit
+evaluation source with real content/version; never mutate an old event ID.
 
 Late evaluations retain their original source version. Lifecycle CAS ignores older
 versions, and a deletion tombstone prevents reactivation. Evaluation facts may still
@@ -55,9 +68,11 @@ Output Redis fields are `eventId`, `eventType`, `data`. data is a flat JSON obje
 }
 ```
 
-All fields except authorId and activityVersion are required. IDs and correlation
-are nonempty strings; targetType is COMMENT. Author is the validated numeric Post
-comment author. Version defaults to 1 for legacy v1 create messages. Newly processed
+The example is the unchanged COMMENT output. `targetType` is COMMENT or POST.
+COMMENT requires commentId and may include activityVersion. POST requires postVersion
+and omits commentId and activityVersion. Other fields are required except authorId.
+IDs and correlation are nonempty strings. Author is the validated numeric Post
+source author. Comment version defaults to 1 for legacy v1 create messages. Newly processed
 input retains its source correlation. A repaired legacy result without correlation
 uses sourceEventId, explicitly an unavailable-original-correlation fallback.
 occurredAt/evaluatedAt use the canonical result completion timestamp; replay does
@@ -76,7 +91,10 @@ authority and applied/rejected feedback contract before taking action.
 
 `moderation:content:{sourceEventId}` retains the canonical result and prepared
 publication for 30 days, consistent with existing result retention. Internal
-sourceHash detects conflicting replay content without storing its body. The
+sourceHash detects conflicting replay content without storing its body. POST hashes
+bind the target type, postId, postVersion, title and body separately. Existing COMMENT
+hash encoding and stored rows without targetType retain their original meaning.
+Legacy publication repair derives the target and version from the canonical result. The
 compact `moderation:content-published:{sourceEventId}` receipt has no TTL, preventing
 re-evaluation after the result expires. Receipt retention must be included in the
 approved replay/audit/data-retention policy; it is not a full permanent audit DB.
@@ -118,7 +136,7 @@ Moderation input group remains post-moderation: maximum 20 new/reclaimed entries
 deliveries before moderation:post:dead. ACK failures after successful handling stay
 pending and are not reclassified as provider failure. Shutdown waits for in-flight
 processing. DLQ holds source payload for diagnosis; restrict access because it can
-contain comments. Raw payload, provider errors and keys are not logged.
+contain post titles, post bodies and comments. Raw payload, provider errors and keys are not logged.
 
 After restoring Redis/provider availability, drain PEL. If failed input has a saved
 prepared result, replay original source ID to finish publication. For already

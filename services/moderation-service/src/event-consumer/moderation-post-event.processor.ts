@@ -1,15 +1,15 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { CLOCK, SystemClock, type Clock } from '../lifecycle/clock.js';
 
-import { CommentModerationService } from '../content-moderation/comment-moderation.service.js';
+import { ContentModerationService } from '../content-moderation/content-moderation.service.js';
 import { LifecycleService } from '../lifecycle/lifecycle.service.js';
-import type { PostEvent } from './post-event.js';
+import type { PostEvent, PostContentSnapshot } from './post-event.js';
 import type { PostEventProcessor } from './post-event.processor.js';
 
 @Injectable()
 export class ModerationPostEventProcessor implements PostEventProcessor {
   constructor(
-    private readonly moderation: CommentModerationService,
+    private readonly moderation: ContentModerationService,
     private readonly lifecycle: LifecycleService,
     @Optional()
     @Inject(CLOCK)
@@ -27,6 +27,12 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
           );
         else
           await this.lifecycle.initialize(event.aggregateId, event.occurredAt);
+        if (event.postContent)
+          await this.moderatePost(event, event.postContent);
+        return;
+      case 'PostUpdated':
+        if (event.postContent)
+          await this.moderatePost(event, event.postContent);
         return;
       case 'PostCommentCreated':
       case 'PostCommentUpdated':
@@ -44,6 +50,7 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
           return;
         }
         await this.moderation.moderate({
+          targetType: 'COMMENT',
           eventId: event.eventId,
           postId: event.aggregateId,
           commentId: event.comment.commentId,
@@ -104,5 +111,17 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
       case 'PostParticipantLeft':
         return;
     }
+  }
+  private async moderatePost(
+    event: PostEvent,
+    snapshot: PostContentSnapshot,
+  ): Promise<void> {
+    await this.moderation.moderate({
+      targetType: 'POST',
+      eventId: event.eventId,
+      postId: event.aggregateId,
+      correlationId: event.correlationId,
+      ...snapshot,
+    });
   }
 }

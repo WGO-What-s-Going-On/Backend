@@ -48,7 +48,12 @@ export class PostLifecycle {
       requireActive(post);
       const now = new Date();
       await tx.commands.fenceActivities(postId, post.bucketCount);
-      await tx.commands.updateDetails(postId, details, now);
+      await tx.commands.updateDetails(
+        postId,
+        details,
+        now,
+        post.postVersion + 1,
+      );
       await tx.commands.appendEvent(
         event(
           postId,
@@ -56,6 +61,8 @@ export class PostLifecycle {
           {
             post: {
               postId,
+              title: details.title ?? post.title,
+              content: details.content ?? post.content,
               authorId: post.authorId,
               category: post.category,
               closedAt: post.closedAt ?? null,

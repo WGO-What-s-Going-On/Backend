@@ -2,6 +2,8 @@ import { mediaIds as validateMediaIds } from '../media/media.policy.js';
 export type PostStatus = 'ACTIVE' | 'EXPIRED' | 'DELETED';
 
 export interface PostState {
+  title: string;
+  content: string;
   voteCandidateIds?: string[];
   closedAt?: Date | null;
   postId: string;

@@ -56,6 +56,8 @@ class MongoQueries implements PostStateQueries {
           closedAt: post.closedAt ?? null,
           authorId: post.authorId,
           category: post.category,
+          title: post.title,
+          content: post.content,
           expiresAt: post.expiresAt ?? null,
           postVersion: post.postVersion ?? 1,
           bucketCount: post.bucketCount ?? 1,
@@ -505,10 +507,11 @@ class MongoCommands implements PostCommands {
     postId: string,
     details: { title?: string; content?: string },
     now: Date,
+    postVersion: number,
   ): Promise<void> {
     await this.posts.updateOne(
       { postId },
-      { $set: { ...details, updatedAt: now }, $inc: { postVersion: 1 } },
+      { $set: { ...details, updatedAt: now, postVersion } },
       { session: this.session },
     );
   }

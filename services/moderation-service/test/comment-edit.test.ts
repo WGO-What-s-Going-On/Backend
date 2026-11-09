@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { CommentModerationService } from '../src/content-moderation/comment-moderation.service.js';
+import { ContentModerationService } from '../src/content-moderation/content-moderation.service.js';
 import type { StoredModerationResult } from '../src/content-moderation/moderation-result.js';
 import { contentEvent } from '../src/content-moderation/content-event.js';
 import { LifecycleService } from '../src/lifecycle/lifecycle.service.js';
@@ -59,7 +59,7 @@ function fixture() {
       return true;
     },
   });
-  const moderation = new CommentModerationService(
+  const moderation = new ContentModerationService(
     { moderate },
     {
       find: async (id) => results.get(id) ?? null,
@@ -151,7 +151,11 @@ describe('Edited comment moderation', () => {
       version: 3,
       deleted: false,
     });
-    expect(f.published.map((result) => result.activityVersion)).toEqual([3, 2]);
+    expect(
+      f.published.map((result) =>
+        result.targetType === 'COMMENT' ? result.activityVersion : undefined,
+      ),
+    ).toEqual([3, 2]);
   });
   it('does not process edits after a deletion tombstone', async () => {
     const f = fixture();

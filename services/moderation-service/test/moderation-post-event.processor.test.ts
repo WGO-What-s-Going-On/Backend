@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { CommentModerationService } from '../src/content-moderation/comment-moderation.service.js';
+import type { ContentModerationService } from '../src/content-moderation/content-moderation.service.js';
 import { ModerationPostEventProcessor } from '../src/event-consumer/moderation-post-event.processor.js';
 import type { PostEvent } from '../src/event-consumer/post-event.js';
 import type { LifecycleService } from '../src/lifecycle/lifecycle.service.js';
@@ -31,7 +31,7 @@ describe('ModerationPostEventProcessor', () => {
   it('initializes lifecycle for PostCreated without moderating post content', async () => {
     const moderation = {
       moderate: vi.fn(),
-    } as unknown as CommentModerationService;
+    } as unknown as ContentModerationService;
     const lifecycle = {
       initialize: vi.fn(),
       recordComment: vi.fn(),
@@ -50,7 +50,7 @@ describe('ModerationPostEventProcessor', () => {
     const moderate = vi.fn().mockResolvedValue({});
     const recordComment = vi.fn();
     const processor = new ModerationPostEventProcessor(
-      { moderate } as unknown as CommentModerationService,
+      { moderate } as unknown as ContentModerationService,
       {
         initialize: vi.fn(),
         recordComment,
@@ -71,7 +71,7 @@ describe('ModerationPostEventProcessor', () => {
     async (eventType) => {
       const moderation = {
         moderate: vi.fn(),
-      } as unknown as CommentModerationService;
+      } as unknown as ContentModerationService;
       const lifecycle = {
         initialize: vi.fn(),
         recordComment: vi.fn(),

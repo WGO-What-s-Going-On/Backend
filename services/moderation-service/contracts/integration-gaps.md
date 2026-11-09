@@ -12,21 +12,18 @@
 
 ## 게시글 본문 검사
 
-PostCreated에는 content가 없다. title은 WGO 게시글 계약이 아니며 요청하지 않는다. `GET /internal/v1/posts/{postId}`는 상세 본문을 제공할 수 있지만 현재 서비스 JWT의 subject/issuer는 ws-gateway만 허용한다. meta/status는 본문 검사 계약이 아니며 meta는 목표 권한표에도 허용 호출자가 없다. 운영 비활성 batch-get이나 로컬 무인증 호환 경로로 이를 우회하지 않는다. 따라서 게시글 AI 검사는 미구현이다.
+2026-11-09에 Post 이벤트의 스냅샷 방식으로 연결했다. 신규 `PostCreated`와 제목·본문
+수정 `PostUpdated`는 `post.title`, `post.content`, `post.authorId`, 최상위 `postVersion`을
+같은 MongoDB 트랜잭션에 저장한다. Moderation은 제목과 본문을 검사하고 원본 버전을
+`moderation:content-events`의 POST 결과에 보존한다. 인가된 상세 조회나 다른 서비스 DB 접근은 필요하지 않다.
 
-Post가 다음 중 하나를 확정해야 한다.
-
-| 대안 | 필요한 합의 |
-| --- | --- |
-| PostCreated additive 확장 | content와 검사 대상 contentVersion 또는 hash, 보존/민감정보 범위, 과거 v1 누락 처리, 수정 시 재검사 이벤트 |
-| 인가된 내부 상세 조회 | moderation-service 호출 권한·공개키 등록, ES256 대상/경로, postId → content/contentVersion/status 응답, 삭제/만료와 404/403/재시도 오류 정책, timeout |
-| 전용 검사 요청 이벤트 | 대상 타입·ID, content 또는 인가된 content reference, contentVersion/hash, source eventId, correlationId와 재생 규칙 |
-
-본문 조회 중 수정/삭제될 수 있으므로 검사 결과를 Post에 적용할 때 동일 contentVersion 검사가 필요하다. WS의 HS256 secret/신원을 Moderation에 복제하지 않는다.
+종료·재개만 한 이벤트와 과거 본문 없는 이벤트는 내용을 추정하지 않고 검사를 생략한다.
+과거 글의 소급 검사와 자동 제재는 별도 작업이다. 중복·재발행과 배포 순서는
+[내용 검사 이벤트 계약](content-moderation-events.md)을 따른다.
 
 ## 콘텐츠 제재 결정
 
-현재 댓글 결과는 Moderation Redis에 저장하고 moderation:content-events에 CONTENT_MODERATION_EVALUATED v1로 발행한다. 검사 결과는 확정 제재 결정과 다르다. `CONTENT_MODERATION_DECIDED`의 합의된 wire/수신 consumer와 자동 조치 API가 없다. Post의 운영 CLI에서 검토된 moderationDecisionId를 사용해 삭제하는 기능이 있다는 사실은 네트워크 결정 소비 계약이 있다는 뜻이 아니다. flagged만으로 자동 삭제하지 않는다.
+현재 게시글·댓글 결과는 Moderation Redis에 저장하고 moderation:content-events에 CONTENT_MODERATION_EVALUATED v1로 발행한다. 검사 결과는 확정 제재 결정과 다르다. `CONTENT_MODERATION_DECIDED`의 합의된 wire/수신 consumer와 자동 조치 API가 없다. Post의 운영 CLI에서 검토된 moderationDecisionId를 사용해 삭제하는 기능이 있다는 사실은 네트워크 결정 소비 계약이 있다는 뜻이 아니다. flagged만으로 자동 삭제하지 않는다.
 
 합의할 결정 event 또는 command에는 다음이 필요하다.
 
@@ -75,7 +72,7 @@ WS Gateway는 참가 시 Post status가 ACTIVE인지 확인한다. 2026-10-25 de
 
 ## Issue #31 범위
 
-이 서비스 내부의 9종 소비, 활동/ENDED 판단, 삭제·만료, Redis 정합성 및 검증은 구현했다. 게시글 검사와 콘텐츠 제재/종료 알림의 종단 간 연동은 미완료다. 기존 lifecycle v1의 Post 종료 적용은 별도 opt-in Consumer로 연결했으며 버전·사유 등 확장 계약은 후속이다. Issue 전체를 완료로 닫지 않으며 사용자 확인 없이 PR을 생성하지 않는다.
+이 서비스 내부의 9종 소비, 활동/ENDED 판단, 삭제·만료, Redis 정합성 및 검증은 구현했다. 게시글 내용 검사는 연결했다. 콘텐츠 제재/종료 알림의 종단 간 연동은 별도 계약이다. 기존 lifecycle v1의 Post 종료 적용은 별도 opt-in Consumer로 연결했으며 버전·사유 등 확장 계약은 후속이다. Issue 전체를 완료로 닫지 않으며 사용자 확인 없이 PR을 생성하지 않는다.
 
 
 ## Lifecycle v1 연결 이후 후속 작업

@@ -10,18 +10,22 @@ export function contentEvent(result: StoredModerationResult) {
     correlationId: result.correlationId ?? result.eventId,
     occurredAt: result.moderatedAt,
     sourceEventId: result.eventId,
-    targetType: 'COMMENT' as const,
     postId: result.postId,
-    commentId: result.commentId,
+    ...(result.targetType === 'POST'
+      ? { targetType: 'POST' as const, postVersion: result.postVersion }
+      : {
+          targetType: 'COMMENT' as const,
+          commentId: result.commentId,
+          ...(result.activityVersion !== undefined
+            ? { activityVersion: result.activityVersion }
+            : {}),
+        }),
     flagged: result.flagged,
     categories: result.categories,
     categoryScores: result.categoryScores,
     model: result.model,
     evaluatedAt: result.moderatedAt,
     ...(result.authorId !== undefined ? { authorId: result.authorId } : {}),
-    ...(result.activityVersion !== undefined
-      ? { activityVersion: result.activityVersion }
-      : {}),
   };
 }
 export type ContentModerationEvent = ReturnType<typeof contentEvent>;
