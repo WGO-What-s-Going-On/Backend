@@ -74,9 +74,15 @@ export class RedisModerationResultRepository
         event=cjson.decode(ARGV[2])
         event.flagged=canonical.flagged; event.categories=canonical.categories; event.categoryScores=canonical.categoryScores
         event.model=canonical.model; event.evaluatedAt=canonical.moderatedAt; event.occurredAt=canonical.moderatedAt
-        event.postId=canonical.postId; event.commentId=canonical.commentId; event.sourceEventId=canonical.eventId
+        event.postId=canonical.postId; event.sourceEventId=canonical.eventId
+        event.targetType=canonical.targetType or 'COMMENT'
+        if event.targetType=='POST' then
+          event.postVersion=canonical.postVersion; event.commentId=nil; event.activityVersion=nil
+        else
+          event.commentId=canonical.commentId; event.activityVersion=canonical.activityVersion; event.postVersion=nil
+        end
         event.correlationId=canonical.correlationId or canonical.eventId
-        event.authorId=canonical.authorId; event.activityVersion=canonical.activityVersion
+        event.authorId=canonical.authorId
         canonical.publication=event; raw=cjson.encode(canonical)
       end
       redis.call('SET',KEYS[1],raw,'EX',2592000)

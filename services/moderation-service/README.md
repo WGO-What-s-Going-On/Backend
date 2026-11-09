@@ -1,6 +1,6 @@
 # WGO Moderation Service
 
-Post 이벤트를 소비해 댓글을 검사하고 게시판 Lifecycle을 판단하는 NestJS 서비스입니다. Node.js 24 / pnpm 10을 사용합니다. 변경 범위는 이 서비스로 제한합니다.
+Post 이벤트를 소비해 게시글 제목·본문과 댓글을 검사하고 게시판 Lifecycle을 판단하는 NestJS 서비스입니다. Node.js 24 / pnpm 10을 사용합니다.
 
 ## 실행
 
@@ -24,7 +24,8 @@ XADD post:events * eventId <id> eventType <type> data <full JSON envelope>
 
 | 이벤트 | 실제 처리 |
 | --- | --- |
-| PostCreated | Lifecycle을 한 번 초기화. 기존 projection/tombstone 유지. 본문 AI 검사는 미연결 |
+| PostCreated | Lifecycle을 한 번 초기화. 기존 projection/tombstone 유지. 제목·본문 스냅샷이 있으면 AI 검사 후 원본 postVersion으로 결과 발행 |
+| PostUpdated | 제목·본문 수정 스냅샷 검사. 종료·재개만 한 이벤트와 과거 본문 없는 이벤트는 검사 없이 ACK. Lifecycle 활동 시각 유지 |
 | PostCommentCreated | 삭제/중복 버전 확인 → OpenAI → 결과 저장·검사 Stream 발행 → 댓글 상태와 meaningful activity CAS |
 | PostReactionCreated | CURIOUS / STILL_HAPPENING / HELPFUL은 meaningful activity. ENDED는 조기 종료 집계. LIKE는 ACK만 수행 |
 | PostParticipantJoined | 인식·ACK. meaningful activity나 알림 동의로 해석하지 않음 |
@@ -77,7 +78,7 @@ Redis 저장이 유지되는 범위에서 수신한 관계 버전/중복 이벤�
 
 결과는 `moderation:content:{eventId}`에 30일간 불변 저장하고 moderation:content-events에 검사 사실을 발행합니다. Lua의 준비된 결과/발행 receipt로 XADD 실패와 응답 유실을 복구하며, 반복 발행은 같은 eventId를 유지합니다. 댓글 생성의 관계 버전도 별도로 멱등 처리합니다. API 호출 전에 삭제된 댓글은 검사하지 않습니다. 호출 중 삭제되면 완료 결과는 감사 근거로 남지만 댓글 생성의 CAS에서 삭제 버전을 확인해 활동으로 반영하지 않습니다. 게시물 삭제/만료 중 API가 완료되는 경우도 부활하지 않습니다. flagged만으로 Post/댓글을 자동 삭제하지 않습니다.
 
-게시글 본문 검사, 확정 제재 workflow, Post 적용 피드백, Notification 종료 알림은 미연결입니다. 기존 lifecycle BOARD_CLOSED → Post EXPIRED 적용은 opt-in Consumer로 이미 구현되어 있습니다. 조사 근거와 필요한 계약은 [integration-gaps.md](contracts/integration-gaps.md)에 있습니다.
+게시글 생성·본문 수정은 전체 제목·본문과 postVersion 스냅샷으로 검사합니다. 과거 본문 없는 이벤트의 자동 소급 검사는 하지 않습니다. 확정 제재 workflow, Post 적용 피드백, Notification 종료 알림은 별도 계약입니다. 기존 lifecycle BOARD_CLOSED → Post EXPIRED 적용은 opt-in Consumer로 이미 구현되어 있습니다. 조사 근거와 필요한 계약은 [integration-gaps.md](contracts/integration-gaps.md)에 있습니다.
 
 ## 환경변수
 

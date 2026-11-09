@@ -5,13 +5,28 @@ export interface ModerationResult {
   model: string;
 }
 
-export interface StoredModerationResult extends ModerationResult {
+interface StoredResult extends ModerationResult {
   eventId: string;
   postId: string;
-  commentId: string;
   moderatedAt: string;
   correlationId?: string;
   authorId?: number;
-  activityVersion?: number;
   sourceHash?: string;
 }
+
+export type StoredModerationResult = StoredResult &
+  (
+    | {
+        targetType: 'POST';
+        postVersion: number;
+        commentId?: never;
+        activityVersion?: never;
+      }
+    | {
+        // Results stored before post evaluation had no target discriminant.
+        targetType?: 'COMMENT';
+        commentId: string;
+        activityVersion?: number;
+        postVersion?: never;
+      }
+  );

@@ -110,6 +110,8 @@ idempotency key는 없으므로 별도 생성 요청은 별도 게시물이 될 
   "post": {
     "postId": "post_22222222-2222-4222-8222-222222222222",
     "authorId": 123,
+    "title": "현장 상황",
+    "content": "현재 교통 상황을 공유합니다.",
     "latitude": 37.4979,
     "longitude": 127.0276,
     "radiusM": 250,
@@ -122,9 +124,13 @@ idempotency key는 없으므로 별도 생성 요청은 별도 게시물이 될 
 
 `postId: string`, `authorId: number`, `latitude/longitude/radiusM: number`,
 `category: string`, `expiresAt: null`이 현재 생산 형태다. 새 게시물은 ACTIVE이며
-`expiresAt`은 항상 null로 시작한다. `title`, `content`, `status`, `createdAt`은
-이 이벤트의 `post`에 포함되지 않는다. `post.postId = aggregateId`다.
-신규 생산자는 envelope 최상위에 `postVersion: 1`도 발행한다.
+`expiresAt`은 항상 null로 시작한다. 신규 생산자는 `post.title`과 `post.content`에
+생성 트랜잭션의 전체 제목·본문을 포함하고, envelope 최상위에 `postVersion: 1`을 발행한다.
+제목은 1–120자, 본문은 1–5,000자다. 길이는 JavaScript 문자열 길이 기준이며 생성 API가
+허용하는 공백도 그대로 보존한다. `status`, `createdAt`은 포함하지 않는다.
+`post.postId = aggregateId`다. Moderation은 이 스냅샷을 검사하며 Post 원본을 별도 조회하지 않는다.
+과거 Outbox에는 제목·본문이 모두 없을 수 있다. 소비자는 이를 내용 없는 과거 이벤트로
+처리하고 제목·본문·버전을 임의로 만들지 않는다. 한 필드만 있는 불완전한 스냅샷은 거부한다.
 
 - Notification 활용 제안: 주변·구독 대상의 신규 게시물 알림. 좌표만으로 수신자
   목록이 결정되는 것은 아니며, 위치·구독 조회 경로와 동의 정책을 별도로 정한다.
@@ -618,7 +624,16 @@ postVersion/activityVersion을 소비해 중복·역순 생성을 억제하고, 
 
 작성자 본문 수정·종료·재개는 Post 원본과 Outbox를 같은 트랜잭션에서 갱신한다.
 `PostUpdated`는 공통 envelope 외에 `post: {postId, authorId, category, closedAt}`와
-양의 정수 `postVersion`을 포함한다. closedAt은 ISO 시각 또는 null이다. 본문과 실명은 포함하지 않는다.
+양의 정수 `postVersion`을 포함한다. closedAt은 ISO 시각 또는 null이다.
+제목·본문 수정 이벤트에는 `post.title`과 `post.content`의 전체 수정 후 스냅샷을 추가한다.
+한 필드만 수정해도 다른 필드는 같은 트랜잭션에서 읽은 값으로 채운다. `postVersion`은
+원본에 저장한 수정 후 버전과 같으며, 버전 없는 과거 원본의 첫 수정은 2다.
+종료·재개만 한 이벤트와 과거 Outbox에는 두 필드가 모두 없으며 내용 검사를 요청하지 않는다.
+실명은 포함하지 않는다. 신규 스냅샷의 제목·본문 길이와 필수 작성자·버전은 생성과 같다.
+Moderation 소비자를 먼저 배포한 뒤 생산자를 배포한다. `schemaVersion: 1`과 기존 필드 위치는 유지한다.
+이미 처리한 과거 이벤트를 재전송해도 누락된 내용은 복구되지 않는다. 과거 글 검사는
+별도 승인된 복구 절차에서 새 사건 ID와 실제 내용·버전을 사용해야 한다.
+검사 결과는 `moderation:content-events`의 POST 평가 사실이며 자동 삭제·숨김을 의미하지 않는다.
 Semantic 소비자는 최신 원본을 다시 읽어 종료 글을 제거한다. Map은 공간 후보를 유지하고
 Post 조회가 원본 공개 상태를 다시 검증한다. WS는 postVersion으로 이전 갱신을 무시한다.
 

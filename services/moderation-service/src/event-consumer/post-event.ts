@@ -2,6 +2,7 @@
 
 export type PostEventType =
   | 'PostCreated'
+  | 'PostUpdated'
   | 'PostCommentCreated'
   | 'PostCommentUpdated'
   | 'PostReactionCreated'
@@ -11,7 +12,14 @@ export type PostEventType =
   | 'PostDeleted'
   | 'PostParticipantLeft'
   | 'PostExpired';
+export interface PostContentSnapshot {
+  title: string;
+  content: string;
+  authorId: number;
+  postVersion: number;
+}
 export interface PostEvent {
+  postContent?: PostContentSnapshot;
   eventId: string;
   aggregateId: string;
   eventType: PostEventType;
@@ -39,6 +47,7 @@ export interface PostEvent {
 }
 const eventTypes = new Set<PostEventType>([
   'PostCreated',
+  'PostUpdated',
   'PostCommentCreated',
   'PostCommentUpdated',
   'PostReactionCreated',
@@ -176,6 +185,31 @@ export function parsePostEvent(
     )
       throw new Error('Invalid deletion actor/reason');
   }
+  let postContent: PostContentSnapshot | undefined;
+  if (type === 'PostCreated' || type === 'PostUpdated') {
+    if ('title' in payload || 'content' in payload) {
+      if (
+        typeof payload.title !== 'string' ||
+        payload.title.length < 1 ||
+        payload.title.length > 120 ||
+        typeof payload.content !== 'string' ||
+        payload.content.length < 1 ||
+        payload.content.length > 5000 ||
+        !version(payload.authorId) ||
+        !version(value.postVersion)
+      )
+        throw new Error('Invalid post content snapshot');
+      postContent = {
+        title: payload.title,
+        content: payload.content,
+        authorId: payload.authorId,
+        postVersion: value.postVersion,
+      };
+    }
+  }
+  // The normalized snapshot must come from validated wire fields, never a supplied internal field.
+  delete value.postContent;
+  if (postContent) value.postContent = postContent;
   // v1 생성 이벤트의 추가 문맥/버전은 선택적이며, 해석에 필요한 최상위 도메인 객체를 보존한다.
   return value as unknown as PostEvent;
 }

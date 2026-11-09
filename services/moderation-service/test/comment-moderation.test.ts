@@ -2,7 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 
-import { CommentModerationService } from '../src/content-moderation/comment-moderation.service.js';
+import { ContentModerationService } from '../src/content-moderation/content-moderation.service.js';
 import {
   ModerationProviderError,
   type ModerationProvider,
@@ -23,7 +23,7 @@ class MemoryResults implements ModerationResultRepository {
   }
 }
 
-describe('CommentModerationService', () => {
+describe('ContentModerationService', () => {
   it.each([false, true])(
     'stores safe and flagged results (flagged=%s)',
     async (flagged) => {
@@ -36,11 +36,12 @@ describe('CommentModerationService', () => {
         }),
       };
       const repository = new MemoryResults();
-      const service = new CommentModerationService(provider, repository);
+      const service = new ContentModerationService(provider, repository);
       await expect(
         service.moderate({
           eventId: 'evt_1',
           postId: 'post_1',
+          targetType: 'COMMENT' as const,
           commentId: 'comment_1',
           content: 'text',
         }),
@@ -55,13 +56,14 @@ describe('CommentModerationService', () => {
       categoryScores: {},
       model: 'omni-moderation-latest',
     });
-    const service = new CommentModerationService(
+    const service = new ContentModerationService(
       { moderate },
       new MemoryResults(),
     );
     const input = {
       eventId: 'evt_1',
       postId: 'post_1',
+      targetType: 'COMMENT' as const,
       commentId: 'comment_1',
       content: 'text',
     };
@@ -72,7 +74,7 @@ describe('CommentModerationService', () => {
 
   it('does not persist provider failures as successful decisions', async () => {
     const repository = new MemoryResults();
-    const service = new CommentModerationService(
+    const service = new ContentModerationService(
       {
         moderate: vi
           .fn()
@@ -84,6 +86,7 @@ describe('CommentModerationService', () => {
       service.moderate({
         eventId: 'failed',
         postId: 'post_1',
+        targetType: 'COMMENT' as const,
         commentId: 'comment_1',
         content: 'hello',
       }),

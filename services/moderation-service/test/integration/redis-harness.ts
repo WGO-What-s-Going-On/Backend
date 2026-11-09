@@ -2,7 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { createClient } from 'redis';
 
-import { CommentModerationService } from '../../src/content-moderation/comment-moderation.service.js';
+import { ContentModerationService } from '../../src/content-moderation/content-moderation.service.js';
 import type { ModerationProvider } from '../../src/content-moderation/moderation-provider.js';
 import { RedisModerationResultRepository } from '../../src/content-moderation/redis-moderation-result.repository.js';
 import { ModerationPostEventProcessor } from '../../src/event-consumer/moderation-post-event.processor.js';
@@ -39,7 +39,7 @@ export async function redisHarness(
   const repository = new RedisLifecycleRepository(config);
   const results = new RedisModerationResultRepository(config);
   const lifecycle = new LifecycleService(repository);
-  const moderation = new CommentModerationService(provider, results);
+  const moderation = new ContentModerationService(provider, results);
   const processor = new ModerationPostEventProcessor(
     moderation,
     lifecycle,

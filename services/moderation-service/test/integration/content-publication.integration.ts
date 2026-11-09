@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigService } from '@nestjs/config';
 import type { createClient } from 'redis';
-import { CommentModerationService } from '../../src/content-moderation/comment-moderation.service.js';
+import { ContentModerationService } from '../../src/content-moderation/content-moderation.service.js';
 import { RedisModerationResultRepository } from '../../src/content-moderation/redis-moderation-result.repository.js';
 import { group, redisHarness, stream } from './redis-harness.js';
 
@@ -38,6 +38,7 @@ describe('content evaluation delivery with real Redis', () => {
       input: {
         eventId: e.eventId,
         postId,
+        targetType: 'COMMENT' as const,
         commentId: e.comment.commentId,
         content: e.comment.content,
         correlationId: e.correlationId,
@@ -127,7 +128,7 @@ describe('content evaluation delivery with real Redis', () => {
     );
     try {
       await other.ready();
-      const service = new CommentModerationService(
+      const service = new ContentModerationService(
         { moderate: async () => ({ ...result, flagged: true }) },
         other,
       );

@@ -155,6 +155,7 @@ export interface PostCommands {
     postId: string,
     details: { title?: string; content?: string },
     now: Date,
+    postVersion: number,
   ): Promise<void>;
   setClosed(postId: string, closedAt: Date | null, now: Date): Promise<void>;
   recordModerationEvent(input: ModerationLifecycleEvent): Promise<boolean>;
