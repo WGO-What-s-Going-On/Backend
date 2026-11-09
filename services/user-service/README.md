@@ -511,3 +511,9 @@ Proxy와 앱은 같은 Workload Identity를 사용하며 Proxy 포트를 Service
 ## 사용자 차단
 
 POST·GET `/api/v1/users/me/blocks`, DELETE `/api/v1/users/me/blocks/{blockedUserId}`를 제공한다. 기존 PUT·DELETE body API도 유지한다. [차단·이벤트 계약](contracts/user-blocks.md)을 따른다. 관계 변경과 `USER_BLOCK_CREATED`/`USER_BLOCK_REMOVED` Outbox 기록은 기존 PostgreSQL 트랜잭션에서 함께 커밋한다. Cloud SQL 연결·마이그레이션·User gRPC 구성은 유지한다.
+
+### 카카오 로그인 Redirect URI
+
+`POST /api/v1/auth/kakao`는 `{ authorizationCode, redirectUri? }`를 받는다. `KAKAO_REDIRECT_URIS`는 쉼표로 구분한 정확한 callback URL 목록이다. HTTPS 또는 로컬 개발용 HTTP localhost만 설정할 수 있으며 사용자 정보·fragment·와일드카드는 거부한다. 카카오 개발자 콘솔에도 동일한 URI를 등록해야 한다.
+
+명시한 redirectUri는 허용 목록과 정확히 일치해야 하며, 실패하면 카카오 호출 전에 400이다. 기존 클라이언트가 생략하면 `KAKAO_REDIRECT_URI`를 사용한다. 목록을 설정했다면 이 기본값도 목록에 포함해야 한다. 목록을 생략한 기존 환경은 단일 기본값만 허용한다. 목록만 설정한 환경에서는 요청의 redirectUri가 필수다. 프론트는 인가 코드 발급에 사용한 callback URI를 그대로 보내야 한다.

@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 const KAKAO_TOKEN_URL = 'https://kauth.kakao.com/oauth/token';
@@ -8,19 +12,44 @@ const KAKAO_USER_INFO_URL = 'https://kapi.kakao.com/v2/user/me';
 export class KakaoOAuthClient {
   private readonly restApiKey: string;
   private readonly clientSecret: string;
-  private readonly redirectUri: string;
+  private readonly redirectUri: string | undefined;
+  private readonly redirectUris: Set<string>;
 
   constructor(config: ConfigService) {
     this.restApiKey = requiredConfig(config, 'auth.kakao.restApiKey');
     this.clientSecret = requiredConfig(config, 'auth.kakao.clientSecret');
-    this.redirectUri = requiredConfig(config, 'auth.kakao.redirectUri');
+    this.redirectUri = config.get<string>('auth.kakao.redirectUri')?.trim();
+    const configured = config.get<string>('auth.kakao.redirectUris');
+    const uris =
+      configured === undefined
+        ? [this.redirectUri ?? '']
+        : configured.split(',').map((uri) => uri.trim());
+    if (uris.some((uri) => !validRedirectUri(uri)))
+      throw new Error(
+        'Kakao redirect URIs must be HTTPS URLs or HTTP localhost URLs without credentials or fragments',
+      );
+    this.redirectUris = new Set(uris);
+    if (this.redirectUri && !this.redirectUris.has(this.redirectUri))
+      throw new Error(
+        'KAKAO_REDIRECT_URI must be included in KAKAO_REDIRECT_URIS',
+      );
   }
 
-  async exchangeAuthorizationCode(authorizationCode: string): Promise<string> {
+  async exchangeAuthorizationCode(
+    authorizationCode: string,
+    redirectUri?: string,
+  ): Promise<string> {
+    // 생략한 기존 요청만 기본값을 사용한다. 명시한 값은 정규화하지 않고 정확히 대조한다.
+    const selectedUri =
+      redirectUri === undefined ? this.redirectUri : redirectUri;
+    if (!selectedUri || !this.redirectUris.has(selectedUri))
+      throw new BadRequestException(
+        'redirectUri must match an allowed Kakao redirect URI',
+      );
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: this.restApiKey,
-      redirect_uri: this.redirectUri,
+      redirect_uri: selectedUri,
       code: authorizationCode,
       client_secret: this.clientSecret,
     });
@@ -119,4 +148,20 @@ function extractPrecisionSafeId(
   }
 
   return undefined;
+}
+
+function validRedirectUri(uri: string): boolean {
+  if (!uri || uri.length > 2048 || uri.includes('*')) return false;
+  try {
+    const url = new URL(uri);
+    return (
+      !url.username &&
+      !url.password &&
+      !url.hash &&
+      (url.protocol === 'https:' ||
+        (url.protocol === 'http:' && url.hostname === 'localhost'))
+    );
+  } catch {
+    return false;
+  }
 }

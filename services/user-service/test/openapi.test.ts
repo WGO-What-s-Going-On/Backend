@@ -3,7 +3,7 @@ import { ActivityService } from '../src/rewards/activity.service.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AuthController } from '../src/auth/auth.controller.js';
 import { AuthService } from '../src/auth/auth.service.js';
 import { UsersController } from '../src/users/users.controller.js';
@@ -171,6 +171,32 @@ describe('User OpenAPI contract', () => {
       .set('X-User-Id', '001')
       .expect(401);
     await request(app.getHttpServer()).post('/api/v1/auth/logout').expect(401);
+  });
+  it('forwards redirectUri and rejects non-string input at the HTTP boundary', async () => {
+    const login = vi.spyOn(auth, 'loginWithKakao');
+    try {
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/kakao')
+        .send({
+          authorizationCode: 'code',
+          redirectUri: 'https://example.test/callback',
+        })
+        .expect(201);
+      expect(login).toHaveBeenCalledWith(
+        'code',
+        undefined,
+        'https://example.test/callback',
+      );
+      login.mockClear();
+      for (const redirectUri of [null, [], {}, 123, '', 'x'.repeat(2049)])
+        await request(app.getHttpServer())
+          .post('/api/v1/auth/kakao')
+          .send({ authorizationCode: 'code', redirectUri })
+          .expect(400);
+      expect(login).not.toHaveBeenCalled();
+    } finally {
+      login.mockRestore();
+    }
   });
   it('documents reward balances and cursor histories with service authentication', async () => {
     const { body: doc } = await request(app.getHttpServer())
