@@ -67,7 +67,9 @@ if (!complete.ok) throw new Error('Media verification failed');
 ## 환경과 권한
 
 `GCS_MEDIA_ENABLED=true`와 `GCS_MEDIA_BUCKET`을 설정한다. 버킷은 private이며 uniform bucket-level access와 public access prevention을 사용한다.
-`GCS_MEDIA_UPLOAD_TTL_SECONDS`, `GCS_MEDIA_READ_TTL_SECONDS`는 기본 300초이며 5~900초를 허용한다.
+`GCS_MEDIA_UPLOAD_TTL_SECONDS`는 기본 300초, 5~900초를 허용한다. `GCS_MEDIA_READ_TTL_SECONDS`는 기본 3600초, 5~3600초를 허용한다.
+
+읽기 URL은 TTL의 절반(초 단위 내림) 구간마다 서명 시작·만료를 함께 고정한다. 기본 설정에서는 같은 30분 구간의 같은 객체·서명 계정은 동일 URL이며, 반환 시 30~60분의 유효시간이 남는다. `expiresAt`이 실제 만료 기준이다. 캐시는 `private, max-age=86400`으로 설정한다. 프론트는 mediaId별 URL을 expiresAt까지 재사용할 수 있다. 이미 다운로드한 캐시는 URL 만료나 게시물 삭제 이후에도 남을 수 있다.
 `GCS_MEDIA_IMAGE_MAX_BYTES`는 기본 10 MiB, 최대 20 MiB다. `GCS_MEDIA_VIDEO_MAX_BYTES`는 기본·최대 100 MiB다.
 `GCS_MEDIA_CLEANUP_INTERVAL_MS`는 기본 60000이다. 미디어 비활성화는 기존 첨부 조회도 중단하므로 rollback 수단으로 쓰지 않는다.
 
