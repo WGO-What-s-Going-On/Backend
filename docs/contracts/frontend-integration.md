@@ -192,3 +192,13 @@ NEARBY_NOTIFICATIONS_ENABLED 기본false이며 OFF에서 새 위치 저장 요�
 FCM data.notificationId로 중복 표시를 막고 알림함을 원본으로 동기화한다. /posts/{id}와 commentId는 실제 원본 대상이 있는 경우만 사용한다. 칭호·신고·삭제 안내는 /notifications이며 payload.metadata에는 검증된 칭호/지역/레벨 등만 있다. regionName=null을 행정동 이름으로 추정하지 않는다. WS Notification 전용 인증 채널은 현재 없으며 REST/FCM으로 연결한다. 토큰 등록 성공과 실제 PWA 수신 성공은 별도 검증한다.
 
 게시글 생성은 `coverFocus?: { x: number; y: number }`를 받는다. 가로·세로 0~100 정수이며 mediaIds가 있을 때만 지정한다. 생성·상세·주변 목록은 coverFocus 또는 null을 반환한다. 자세한 검증과 저장 규칙은 [미디어 계약](../../services/post-service/contracts/media.md)을 따른다.
+
+
+## 쿠키 제한 환경의 WebSocket 연결
+
+1. `POST /api/v1/realtime/tickets`에 `Authorization: Bearer <accessToken>`을 보낸다. body는 필요 없다.
+2. `201 { ticket, expiresAt }`를 받고 `wss://<ws-host>/ws/v1?ticket=<encodeURIComponent(ticket)>`로 즉시 연결한다. 쿠키는 필요 없다.
+3. 티켓은 최대 45초·한 번의 연결 시도에만 사용한다. 재연결은 새 티켓을 발급한다. 만료된 Access JWT는 먼저 refresh한다.
+4. 연결 후 기존 board.join·댓글 프로토콜을 사용한다. 티켓 발급은 Room 참여 권한을 부여하지 않는다.
+
+발급 응답은 no-store이며 로그·분석·영구 저장소에 남기지 않는다. WS에서 잘못된/만료/재사용 티켓은 401, Redis 확인 불가는 503, 금지 Origin은 403이다. 기존 Bearer·쿠키 접속도 유지한다. [WS 상세 계약](../../gateways/ws-gateway/README.md#일회용-websocket-티켓)을 따른다. 서버 배포·허용 Origin·프록시 로그 설정과 실제 Safari/iOS 연결은 후속 검증 대상이다.

@@ -408,6 +408,48 @@ export async function mergeDocuments(
     for (const [category, entries] of Object.entries(components))
       Object.assign((result.components[category] ??= {}), entries);
   }
+  result.components.securitySchemes ??= {};
+  result.components.securitySchemes.GatewayAccess = {
+    type: 'http',
+    scheme: 'bearer',
+    bearerFormat: 'JWT',
+  };
+  result.paths['/api/v1/realtime/tickets'] = {
+    post: {
+      operationId: 'gateway_createRealtimeTicket',
+      summary: 'Issue a single-use WebSocket ticket',
+      description:
+        'Bearer Access JWT required. Lifetime at most 45 seconds and never beyond the access token expiry. Use as ?ticket= on the WS URL. Response is Cache-Control: no-store.',
+      security: [{ GatewayAccess: [] }],
+      responses: {
+        '201': {
+          description: 'Ticket issued',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['ticket', 'expiresAt'],
+                properties: {
+                  ticket: { type: 'string' },
+                  expiresAt: { type: 'string', format: 'date-time' },
+                },
+              },
+            },
+          },
+        },
+        '401': gatewayResponse('Invalid access token.', 'GATEWAY_UNAUTHORIZED'),
+        '503': gatewayResponse(
+          'Authentication not configured.',
+          'GATEWAY_UPSTREAM_UNAVAILABLE',
+        ),
+        '429': gatewayResponse(
+          'Gateway IP rate limit exceeded.',
+          'GATEWAY_RATE_LIMITED',
+        ),
+      },
+    },
+  };
+  operationIds.add('gateway_createRealtimeTicket');
   walk(result.paths, (object) => {
     if (
       typeof object.operationId === 'string' &&

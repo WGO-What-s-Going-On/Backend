@@ -510,3 +510,8 @@ Map 공간 후보는 유지하되 Post가 원본 공개 상태를 검증하고 S
 User 차단은 기존 PostgreSQL user_blocks와 transaction Outbox로 관리한다. Moderation 신고는 기존 Redis의 `moderation:reports:v1` 원본·journal과 Lua 발행·pending Worker 복구를 사용한다. Lifecycle·AI Streams는 유지한다. GCP Cloud SQL·GKE·Redis TLS/AOF/백업 설정은 변경하지 않는다.
 
 운영 신규 신고 접수는 Moderation→Post 호출자 인증·대상 확인 계약 미지원으로 503을 반환한다. 무인증 조회를 대체 경로로 사용하지 않는다. [배포 인계와 저장 계약](services/moderation-service/contracts/gateway-handoff.md)을 참고한다.
+
+
+### WebSocket 연결용 일회용 티켓
+
+교차 도메인 쿠키를 사용할 수 없는 클라이언트는 HTTP Gateway의 `/api/v1/realtime/tickets`에서 Access JWT를 검증받고 최대 45초의 전용 티켓을 발급받는다. Realtime Gateway는 서명·유효기간을 검증하고 공유 Redis의 원자적 NX 쓰기로 jti를 한 번만 소비한다. 이 60초 재사용 방지 상태는 Gateway의 연결 인증 인프라이며 도메인 원본 데이터가 아니다. Room 참여·댓글 인가는 계속 Post가 소유한다. 자세한 실패·배포 계약은 [WS Gateway](gateways/ws-gateway/README.md#일회용-websocket-티켓)를 따른다.

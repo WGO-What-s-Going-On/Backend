@@ -266,6 +266,7 @@ describe('public OpenAPI merge', () => {
     expect(Object.keys(doc.components.securitySchemes)).toEqual([
       'user__UserAccess',
       'moderation__UserAccess',
+      'GatewayAccess',
     ]);
   });
   it('replaces internal User credentials with public bearer authentication', async () => {
@@ -290,7 +291,14 @@ describe('public OpenAPI merge', () => {
     expect(doc.paths['/api/v1/users/me'].get.security).toEqual([
       { user__UserAccess: [] },
     ]);
+    expect(doc.paths['/api/v1/realtime/tickets'].post.security).toEqual([
+      { GatewayAccess: [] },
+    ]);
+    expect(
+      doc.paths['/api/v1/realtime/tickets'].post.responses['201'],
+    ).toBeDefined();
     expect(doc.components.securitySchemes).toEqual({
+      GatewayAccess: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
       user__UserAccess: {
         type: 'http',
         scheme: 'bearer',
@@ -336,6 +344,7 @@ describe('public OpenAPI merge', () => {
     expect(Object.keys(doc.paths)).toEqual([
       '/api/v1/posts',
       '/api/v1/location',
+      '/api/v1/realtime/tickets',
     ]);
     expect(doc.servers).toEqual([{ url: '/' }]);
     expect(doc.paths['/api/v1/posts'].trace).toBeUndefined();
@@ -352,6 +361,7 @@ describe('public OpenAPI merge', () => {
     expect(Object.keys(doc.components.securitySchemes)).toEqual([
       'post__UserAccess',
       'map__UserAccess',
+      'GatewayAccess',
     ]);
     expect(doc.components.schemas.post__InternalOnly).toBeUndefined();
     expect(JSON.stringify([post, map])).toBe(before);
@@ -409,6 +419,7 @@ describe('public OpenAPI merge', () => {
     expect(Object.keys(doc.paths)).toEqual([
       '/api/v1/users/me',
       '/api/v1/terms',
+      '/api/v1/realtime/tickets',
     ]);
     expect(doc.paths['/api/v1/users/me'].get.security).toEqual([
       { user__UserAccess: [] },
