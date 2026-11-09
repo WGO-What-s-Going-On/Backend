@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { moderationEvaluation } from './helpers/moderation-events.js';
 import { parseUserEvent } from '../src/event-consumer/user-event.js';
 import { parseModerationEvent } from '../src/event-consumer/moderation-event.js';
 
@@ -113,19 +114,60 @@ describe('User and Moderation wire boundaries', () => {
       ),
     ).toThrow('Invalid');
   });
-  it('parses an AI observation without a sanction recipient', () => {
-    const v = {
-      eventId: 'evt_content_123',
-      eventType: 'CONTENT_MODERATION_EVALUATED',
-      schemaVersion: 1,
-      producer: 'moderation-service',
-      occurredAt: '2026-11-03T00:00:00Z',
-      postId: 'post_1',
-      commentId: 'comment_1',
-      flagged: true,
-    };
-    expect(
-      parseModerationEvent(fields(v), 'moderation:content-events'),
-    ).not.toHaveProperty('recipient');
-  });
+  it.each([
+    ['POST', false],
+    ['POST', true],
+    ['COMMENT', false],
+    ['COMMENT', true],
+  ] as const)(
+    'accepts actual %s output with flagged=%s without a sanction recipient',
+    async (target, flagged) => {
+      const source = await moderationEvaluation(target, flagged);
+      expect(
+        parseModerationEvent(source, 'moderation:content-events'),
+      ).toMatchObject({ postId: 'post_evaluation', data: {} });
+      expect(
+        parseModerationEvent(source, 'moderation:content-events'),
+      ).not.toHaveProperty('recipient');
+    },
+  );
+  it.each([undefined, null, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '2'])(
+    'rejects POST version %s',
+    async (postVersion) => {
+      const source = await moderationEvaluation('POST');
+      const event = JSON.parse(source.data!);
+      expect(() =>
+        parseModerationEvent(
+          fields({ ...event, postVersion }),
+          'moderation:content-events',
+        ),
+      ).toThrow('Invalid AI evaluation');
+    },
+  );
+  it.each([undefined, null, '', ' ', 42])(
+    'rejects COMMENT identity %s',
+    async (commentId) => {
+      const source = await moderationEvaluation('COMMENT');
+      const event = JSON.parse(source.data!);
+      expect(() =>
+        parseModerationEvent(
+          fields({ ...event, commentId }),
+          'moderation:content-events',
+        ),
+      ).toThrow('Invalid AI evaluation');
+    },
+  );
+  it.each([undefined, null, 'BOARD'])(
+    'rejects missing or unknown evaluation target %s',
+    async (targetType) => {
+      const source = await moderationEvaluation('COMMENT');
+      const event = JSON.parse(source.data!);
+      expect(() =>
+        parseModerationEvent(
+          fields({ ...event, targetType }),
+          'moderation:content-events',
+        ),
+      ).toThrow('Invalid AI evaluation');
+    },
+  );
 });

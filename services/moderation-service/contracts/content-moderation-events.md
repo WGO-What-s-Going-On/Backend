@@ -24,7 +24,8 @@ be evaluated out of order; their exact source postVersion stays in each result.
 provider input, lifecycle ordering and activityVersion behavior. activityVersion
 increases on content edits and deletion. Edited input requires the version and
 comment.updatedAt; legacy create input still defaults to version 1.
-Deploy this consumer before enabling the new Post snapshots. Old already-processed
+Deploy the Notification consumer that accepts POST and COMMENT evaluations first,
+then Moderation, then the Post snapshot producer. Old already-processed
 bodyless events cannot acquire content through replay. Recovery needs a new explicit
 evaluation source with real content/version; never mutate an old event ID.
 
