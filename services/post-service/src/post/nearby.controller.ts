@@ -162,7 +162,7 @@ export class NearbyPosts {
           $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
           ...(input.category ? { category: input.category } : {}),
         },
-        'postId authorId anonymous title content category status locationSnapshot radiusM counters mediaIds createdAt updatedAt expiresAt closedAt -_id',
+        'postId authorId anonymous title content category status locationSnapshot radiusM counters mediaIds coverFocus createdAt updatedAt expiresAt closedAt -_id',
       )
       .maxTimeMS(2000)
       .lean();

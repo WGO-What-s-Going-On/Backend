@@ -93,3 +93,9 @@ pending prefix에는 2일 Lifecycle 만료를 둔다. final prefix에는 무조�
 
 - [GCS request preconditions](https://docs.cloud.google.com/storage/docs/request-preconditions)
 - [GCS signed URLs](https://docs.cloud.google.com/storage/docs/access-control/signed-urls)
+
+## 대표 사진 초점
+
+게시글 생성 body는 `coverFocus?: { x: number; y: number }`를 받는다. 두 값은 0~100 정수의 가로·세로 백분율이며, mediaIds가 있을 때만 지정한다. 사진이 없거나 초점을 선택하지 않으면 필드를 생략한다. null, 추가 키, 범위 밖·소수·문자열 값은 400이다.
+
+Post가 `posts.coverFocus`를 소유한다. 생성·상세·주변 목록(지도 시트)·최근 활동 응답에 coverFocus를 포함하며, 미지정 및 기존 문서는 null이다. 활동은 부모 게시글의 초점을 반환한다. 이벤트/Map 인덱스에 복제하지 않고 조회 시 Post 원본에서 읽는다. 기존 문서 backfill은 필요하지 않다.

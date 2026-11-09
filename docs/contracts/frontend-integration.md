@@ -127,7 +127,8 @@ Swagger에 목록 응답 스키마가 포함된다.
 ## 활동·칭호·행정동 랭킹
 
 - `GET /posts/me/activity?cursor=...` → `{items,nextCursor}`. 20개씩 최신순.
-  kind=POST/COMMENT/REACTION/COMMENT_REACTION/VOTE, postId, commentId, createdAt, postStatus, closedAt.
+  kind=POST/COMMENT/REACTION/COMMENT_REACTION/VOTE, postId, commentId, createdAt, postStatus, closedAt, coverFocus.
+  coverFocus는 부모 게시글의 사진 초점이며 미지정·기존 문서는 null이다.
   postStatus는 부모 게시물에 저장된 ACTIVE 또는 EXPIRED다. 만료 게시물의 활동은 포함하고,
   DELETED이거나 존재하지 않는 부모 게시물의 활동은 모든 kind에서 제외한다.
   closedAt은 부모 게시물의 작성자 수동 종료 시각이다. null이어도 EXPIRED일 수 있으며,
@@ -189,3 +190,5 @@ Notification은 실제 로컬 PostgreSQL/Redis에서 설정·삭제·전체 읽�
 NEARBY_NOTIFICATIONS_ENABLED 기본false이며 OFF에서 새 위치 저장 요청은503이다. User 차단 조회 전용 키·URL과 프런트 동의 UI를 배포 검증한 후 true로 전환한다. 반경150m 포함, 작성자 제외, 양방향 차단/종류 설정/게시글 mute 적용, 사용자당 기본10분에 최대1회 예약한다. 위치 철회·갱신·만료 및 게시글 종료·삭제는 이전 미전송 작업을 취소한다. 다수 수신자는 영속 cursor/lease와 최대50명/페이지, 최대5개 권위 조회 동시 실행으로 처리한다.
 
 FCM data.notificationId로 중복 표시를 막고 알림함을 원본으로 동기화한다. /posts/{id}와 commentId는 실제 원본 대상이 있는 경우만 사용한다. 칭호·신고·삭제 안내는 /notifications이며 payload.metadata에는 검증된 칭호/지역/레벨 등만 있다. regionName=null을 행정동 이름으로 추정하지 않는다. WS Notification 전용 인증 채널은 현재 없으며 REST/FCM으로 연결한다. 토큰 등록 성공과 실제 PWA 수신 성공은 별도 검증한다.
+
+게시글 생성은 `coverFocus?: { x: number; y: number }`를 받는다. 가로·세로 0~100 정수이며 mediaIds가 있을 때만 지정한다. 생성·상세·주변 목록은 coverFocus 또는 null을 반환한다. 자세한 검증과 저장 규칙은 [미디어 계약](../../services/post-service/contracts/media.md)을 따른다.

@@ -17,7 +17,13 @@ export interface PostState {
   radiusM?: number;
 }
 
+export interface CoverFocus {
+  x: number;
+  y: number;
+}
+
 export interface PostInput {
+  coverFocus?: CoverFocus;
   anonymous?: boolean;
   mediaIds?: string[];
   title: string;
@@ -36,6 +42,7 @@ export interface PostRegion {
 export type NewPostRecord = PostRecord & { region: PostRegion };
 
 export interface PostRecord {
+  coverFocus?: CoverFocus | null;
   region?: PostRegion;
   closedAt?: Date | null;
   anonymous?: boolean;
@@ -185,6 +192,15 @@ export function createPost(
   now: Date,
 ): PostRecord {
   const attachments = validateMediaIds(input.mediaIds);
+  if (input.coverFocus !== undefined) {
+    for (const value of [input.coverFocus.x, input.coverFocus.y])
+      if (!Number.isInteger(value) || value < 0 || value > 100)
+        throw new InvalidPostError(
+          'coverFocus coordinates must be integers between 0 and 100',
+        );
+    if (!attachments.length)
+      throw new InvalidPostError('coverFocus requires mediaIds');
+  }
   requireText(input.title, 'title', 120);
   requireText(input.content, 'content', 5000);
   requireText(input.category, 'category', 40);
@@ -197,6 +213,7 @@ export function createPost(
     postId,
     authorId,
     ...(attachments.length ? { mediaIds: attachments } : {}),
+    coverFocus: input.coverFocus ?? null,
     anonymous: input.anonymous ?? false,
     title: input.title,
     content: input.content,
