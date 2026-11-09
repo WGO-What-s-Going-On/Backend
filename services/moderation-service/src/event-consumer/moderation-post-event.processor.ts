@@ -2,6 +2,7 @@ import { Inject, Injectable, Optional } from '@nestjs/common';
 import { CLOCK, SystemClock, type Clock } from '../lifecycle/clock.js';
 
 import { ContentModerationService } from '../content-moderation/content-moderation.service.js';
+import { ContentEnforcementService } from '../content-moderation/content-enforcement.service.js';
 import { LifecycleService } from '../lifecycle/lifecycle.service.js';
 import type { PostEvent, PostContentSnapshot } from './post-event.js';
 import type { PostEventProcessor } from './post-event.processor.js';
@@ -14,6 +15,7 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
     @Optional()
     @Inject(CLOCK)
     private readonly clock: Clock = new SystemClock(),
+    @Optional() private readonly enforcement?: ContentEnforcementService,
   ) {}
 
   async process(event: PostEvent): Promise<void> {
@@ -38,6 +40,7 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
       case 'PostCommentUpdated':
         if (!event.comment?.content)
           throw new Error('Invalid PostCommentCreated payload');
+        await this.enforcement?.observeComment(event.aggregateId, event.comment.commentId, event.activityVersion ?? 1);
         if (
           !(await this.lifecycle.canModerateComment(
             event.aggregateId,
@@ -88,6 +91,7 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
       case 'PostCommentDeleted':
         if (!event.comment)
           throw new Error('Invalid PostCommentDeleted payload');
+        await this.enforcement?.observeComment(event.aggregateId, event.comment.commentId, event.activityVersion!, true);
         await this.lifecycle.recordComment(
           event.aggregateId,
           event.comment.commentId,
@@ -99,6 +103,7 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
         return;
       case 'PostDeleted':
       case 'PostExpired':
+        await this.enforcement?.observePostTerminal(event.aggregateId);
         await this.lifecycle.terminate(
           event.aggregateId,
           event.eventType === 'PostDeleted' ? 'DELETED' : 'EXPIRED',

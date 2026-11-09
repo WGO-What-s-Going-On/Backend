@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { createClient } from 'redis';
 
 import { ContentModerationService } from '../../src/content-moderation/content-moderation.service.js';
+import { ContentEnforcementService } from '../../src/content-moderation/content-enforcement.service.js';
+import type { EnforcementPolicy } from '../../src/content-moderation/enforcement-policy.js';
 import type { ModerationProvider } from '../../src/content-moderation/moderation-provider.js';
 import { RedisModerationResultRepository } from '../../src/content-moderation/redis-moderation-result.repository.js';
 import { ModerationPostEventProcessor } from '../../src/event-consumer/moderation-post-event.processor.js';
@@ -19,11 +21,12 @@ export const dead = 'moderation:post:dead';
 export async function redisHarness(
   provider: ModerationProvider,
   clock = { now: () => new Date() },
+  policy?: EnforcementPolicy,
 ) {
   // Compose 전용 Redis의 빈 DB 15만 사용한다. 기존 데이터가 있으면 삭제하지 않고 실패한다.
   const url =
     process.env.MODERATION_TEST_REDIS_URL ?? 'redis://localhost:6383/15';
-  const config = new ConfigService({ redis: { url } });
+  const config = new ConfigService({ redis: { url }, contentEnforcement: { enabled: policy ? 'true' : 'false', policy } });
   const redis = createClient({
     url,
     socket: { reconnectStrategy: false, connectTimeout: 2000 },
@@ -39,11 +42,13 @@ export async function redisHarness(
   const repository = new RedisLifecycleRepository(config);
   const results = new RedisModerationResultRepository(config);
   const lifecycle = new LifecycleService(repository);
-  const moderation = new ContentModerationService(provider, results);
+  const enforcement = new ContentEnforcementService(config);
+  const moderation = new ContentModerationService(provider, results, enforcement);
   const processor = new ModerationPostEventProcessor(
     moderation,
     lifecycle,
     clock,
+    enforcement,
   );
   const connection = createClient({
     url,
@@ -208,6 +213,7 @@ export async function redisHarness(
     await consumer.onModuleDestroy();
     await repository.onModuleDestroy();
     await results.onModuleDestroy();
+    await enforcement.onModuleDestroy();
     // FLUSHDB/FLUSHALL을 사용하지 않고 이 테스트가 소유한 key만 정리한다.
     await redis.del([...keys]);
     await redis.quit();
@@ -219,6 +225,7 @@ export async function redisHarness(
     results,
     lifecycle,
     moderation,
+    enforcement,
     processor,
     consumer,
     postId,

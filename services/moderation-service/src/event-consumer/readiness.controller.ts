@@ -1,8 +1,14 @@
-import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PostEventConsumer } from './post-event.consumer.js';
 import { RedisModerationResultRepository } from '../content-moderation/redis-moderation-result.repository.js';
 import { RedisLifecycleRepository } from '../lifecycle/redis-lifecycle.repository.js';
+import { ContentEnforcementService } from '../content-moderation/content-enforcement.service.js';
 
 @Controller('health')
 export class ModerationReadinessController {
@@ -11,6 +17,7 @@ export class ModerationReadinessController {
     private readonly consumer: PostEventConsumer,
     private readonly results: RedisModerationResultRepository,
     private readonly lifecycle: RedisLifecycleRepository,
+    @Optional() private readonly enforcement?: ContentEnforcementService,
   ) {}
   @Get('ready')
   async readiness() {
@@ -23,6 +30,7 @@ export class ModerationReadinessController {
           this.consumer.ready(),
           this.results.ready(),
           this.lifecycle.ready(),
+          this.enforcement?.isReady() ?? true,
         ]);
         if (checks.every(Boolean)) return { status: 'ready' };
       }

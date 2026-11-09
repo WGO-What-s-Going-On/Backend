@@ -1,5 +1,5 @@
 import { createLogger } from '../observability/logging.js';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import {
   MODERATION_PROVIDER,
@@ -10,6 +10,7 @@ import {
   type ModerationResultRepository,
 } from './moderation-result.repository.js';
 import type { StoredModerationResult } from './moderation-result.js';
+import { ContentEnforcementService } from './content-enforcement.service.js';
 
 export type ContentModerationInput = {
   eventId: string;
@@ -29,6 +30,7 @@ export class ContentModerationService {
     @Inject(MODERATION_PROVIDER) private readonly provider: ModerationProvider,
     @Inject(MODERATION_RESULT_REPOSITORY)
     private readonly repository: ModerationResultRepository,
+    @Optional() private readonly enforcement?: ContentEnforcementService,
   ) {}
 
   async moderate(
@@ -74,6 +76,7 @@ export class ContentModerationService {
         throw new Error('Invalid conflicting moderation source event');
       // A saved result is not completion until its output publication is confirmed.
       await this.repository.save(existing);
+      await this.enforcement?.decide(existing);
       this.logger.success(
         `${logPrefix}_moderation_publication_confirmed`,
         'Stored moderation publication confirmed',
@@ -105,18 +108,21 @@ export class ContentModerationService {
           }),
     };
     await this.repository.save(stored);
+    const canonical = (await this.repository.find(input.eventId)) ?? stored;
+    await this.enforcement?.decide(canonical);
     this.logger.success(
       `${logPrefix}_moderation_completed`,
       'Content moderation result persisted and published',
       context,
     );
-    return (await this.repository.find(input.eventId)) ?? stored;
+    return canonical;
   }
 
   async republishExisting(eventId: string): Promise<void> {
     const result = await this.repository.find(eventId);
     if (result) {
       await this.repository.save(result);
+      await this.enforcement?.decide(result);
       this.logger.success(
         `${result.targetType === 'POST' ? 'post' : 'comment'}_moderation_publication_confirmed`,
         'Stored moderation publication confirmed',
