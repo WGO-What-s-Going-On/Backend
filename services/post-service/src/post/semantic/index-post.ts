@@ -59,6 +59,7 @@ export class InvalidSemanticEvent extends Error {}
 export function semanticEvent(fields: Record<string, string>): string | null {
   const supported = [
     'PostUpdated',
+    'PostHidden',
     'PostCreated',
     'PostExpired',
     'PostDeleted',

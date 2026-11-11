@@ -135,3 +135,9 @@ CA 검증과 hostname 검증을 모두 유지한다. contact points는 쉼표로
 로컬 무인증 Cassandra는 `CASSANDRA_MODE=local`을 사용한다. production에서 local 모드는
 거부되며 local 모드에 자격증명이나 TLS 설정을 섞어도 시작을 거부한다.
 실제 TLS 연결, 잘못된 암호 거부, 인증서 이름 불일치, 재연결은 GKE 저장소 검증에 포함한다.
+
+### 숨김 공간 인덱스 무효화
+
+PostHidden v1은 PostDeleted와 같은 공간 인덱스 tombstone으로 처리한다.
+이는 파생 인덱스 제거이며 Post 원본 HIDDEN 상태나 본문을 삭제하지 않는다.
+[콘텐츠 숨김 계약](../post-service/contracts/content-decisions.md)을 따른다.

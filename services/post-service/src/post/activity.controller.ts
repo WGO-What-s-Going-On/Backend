@@ -62,7 +62,7 @@ export class Activities {
         $match: {
           'vote.status': 'CLOSED',
           'vote.winner': { $ne: null },
-          status: { $ne: 'DELETED' },
+          status: { $nin: ['DELETED', 'HIDDEN'] },
         },
       },
       {
@@ -98,7 +98,9 @@ export class Activities {
         .option({ maxTimeMS: 2000 });
     const [posts, comments, reactions, commentReactions, votes, agree, picks] =
       await Promise.all([
-        count(this.posts, 'authorId', { status: { $ne: 'DELETED' } }),
+        count(this.posts, 'authorId', {
+          status: { $nin: ['DELETED', 'HIDDEN'] },
+        }),
         count(this.comments, 'authorId', { status: 'ACTIVE' }),
         count(this.reactions, 'userId', { removedAt: null }),
         count(this.commentReactions, 'userId', { removedAt: null }),
@@ -157,7 +159,10 @@ export class Activities {
     const [posts, comments, reactions, commentReactions, votes, agree, picks] =
       await Promise.all([
         this.posts
-          .countDocuments({ authorId: actor, status: { $ne: 'DELETED' } })
+          .countDocuments({
+            authorId: actor,
+            status: { $nin: ['DELETED', 'HIDDEN'] },
+          })
           .maxTimeMS(2000),
         this.comments
           .countDocuments({ authorId: actor, status: 'ACTIVE' })
@@ -183,7 +188,7 @@ export class Activities {
               $match: {
                 'vote.status': 'CLOSED',
                 'vote.winner': { $ne: null },
-                status: { $ne: 'DELETED' },
+                status: { $nin: ['DELETED', 'HIDDEN'] },
               },
             },
             {

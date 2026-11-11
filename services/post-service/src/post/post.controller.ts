@@ -497,7 +497,7 @@ export class PostController {
   @ApiOperation({
     summary: '게시물 첨부 조회 URL 갱신',
     description:
-      'ACTIVE 및 EXPIRED 게시물의 첨부를 반환하며 이미 정리된 첨부는 제외합니다. DELETED 게시물은 404입니다.',
+      'ACTIVE 및 EXPIRED 게시물의 첨부를 반환하며 이미 정리된 첨부는 제외합니다. DELETED/HIDDEN 게시물은 404입니다.',
   })
   @ApiOkResponse({ type: [MediaResponse] })
   async postMedia(@Param('postId') id: string) {
@@ -518,7 +518,7 @@ export class PostController {
   ) {
     const validated = postId(id);
     const parent = await this.readPosts.status(validated);
-    if (parent.status === 'DELETED')
+    if (parent.status === 'DELETED' || parent.status === 'HIDDEN')
       throw new PostNotFoundError('Post not found');
     const comment = await this.postQueries.findComment(
       validated,
@@ -534,14 +534,14 @@ export class PostController {
   @ApiOperation({
     summary: '게시물 상세 조회',
     description:
-      'ACTIVE 및 EXPIRED 게시물을 반환하며 DELETED는 404입니다. 로그인 사용자의 상세 조회는 작성자를 포함해 한국 날짜 기준 하루 한 번 집계하고 응답 조회수에 반영합니다. 비로그인 조회는 집계하지 않습니다. 종료 후 댓글·감정표현 작성은 허용하지 않습니다.',
+      'ACTIVE 및 EXPIRED 게시물을 반환하며 DELETED/HIDDEN은 404입니다. 로그인 사용자의 상세 조회는 작성자를 포함해 한국 날짜 기준 하루 한 번 집계하고 응답 조회수에 반영합니다. 비로그인 조회는 집계하지 않습니다. 종료 후 댓글·감정표현 작성은 허용하지 않습니다.',
   })
   @ApiParam({
     name: 'postId',
     example: 'post_123e4567-e89b-12d3-a456-426614174000',
   })
   @ApiOkResponse({ type: PostResponse })
-  @ApiNotFoundResponse({ description: '게시물이 없거나 DELETED 상태' })
+  @ApiNotFoundResponse({ description: '게시물이 없거나 DELETED/HIDDEN 상태' })
   @ApiQuery({ name: 'latitude', type: Number, required: false })
   @ApiQuery({ name: 'longitude', type: Number, required: false })
   async detail(
@@ -594,7 +594,7 @@ export class PostController {
   @ApiOperation({
     summary: '댓글 목록 조회',
     description:
-      'ACTIVE 및 EXPIRED 게시물의 ACTIVE 댓글을 최신순으로 반환합니다. 만료 시각이 지나도 조회할 수 있으며 DELETED 게시물은 404입니다. 커서는 해당 게시물에만 사용할 수 있습니다.',
+      'ACTIVE 및 EXPIRED 게시물의 ACTIVE 댓글을 최신순으로 반환합니다. 만료 시각이 지나도 조회할 수 있으며 DELETED/HIDDEN 게시물은 404입니다. 커서는 해당 게시물에만 사용할 수 있습니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiQuery({
@@ -610,7 +610,7 @@ export class PostController {
     schema: { minimum: 1, maximum: 100, default: 30 },
   })
   @ApiOkResponse({ type: CommentPageResponse })
-  @ApiNotFoundResponse({ description: '게시물이 없거나 DELETED 상태' })
+  @ApiNotFoundResponse({ description: '게시물이 없거나 DELETED/HIDDEN 상태' })
   comments(
     @Param('postId') id: string,
     @Query('cursor') cursor: unknown,
@@ -866,13 +866,13 @@ export class InternalPostController {
   @ApiOperation({
     summary: '내부 게시물 상세 조회',
     description:
-      '서비스 JWT가 필요하며 ACTIVE 및 EXPIRED 게시물을 반환합니다. DELETED는 404입니다.',
+      '서비스 JWT가 필요하며 ACTIVE 및 EXPIRED 게시물을 반환합니다. DELETED/HIDDEN은 404입니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiBearerAuth('service-jwt')
   @ApiOkResponse({ type: PostResponse })
   @ApiUnauthorizedResponse({ description: '서비스 JWT가 없거나 유효하지 않음' })
-  @ApiNotFoundResponse({ description: '게시물이 없거나 DELETED 상태' })
+  @ApiNotFoundResponse({ description: '게시물이 없거나 DELETED/HIDDEN 상태' })
   @ApiServiceUnavailableResponse({ description: '서비스 JWT 설정이 없음' })
   detail(
     @Param('postId') id: string,
@@ -887,7 +887,7 @@ export class InternalPostController {
   @ApiOperation({
     summary: '내부 댓글 목록 조회',
     description:
-      '서비스 JWT가 필요하며 ACTIVE 및 EXPIRED 게시물의 댓글을 반환합니다. DELETED는 404이며 HTTP 공개 조회와 같은 커서 형식입니다.',
+      '서비스 JWT가 필요하며 ACTIVE 및 EXPIRED 게시물의 댓글을 반환합니다. DELETED/HIDDEN은 404이며 HTTP 공개 조회와 같은 커서 형식입니다.',
   })
   @ApiParam({ name: 'postId' })
   @ApiQuery({
@@ -905,7 +905,7 @@ export class InternalPostController {
   @ApiBearerAuth('service-jwt')
   @ApiOkResponse({ type: CommentPageResponse })
   @ApiUnauthorizedResponse({ description: '서비스 JWT가 없거나 유효하지 않음' })
-  @ApiNotFoundResponse({ description: '게시물이 없거나 DELETED 상태' })
+  @ApiNotFoundResponse({ description: '게시물이 없거나 DELETED/HIDDEN 상태' })
   @ApiServiceUnavailableResponse({ description: '서비스 JWT 설정이 없음' })
   comments(
     @Param('postId') id: string,

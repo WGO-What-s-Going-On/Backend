@@ -1,5 +1,5 @@
 import { mediaIds as validateMediaIds } from '../media/media.policy.js';
-export type PostStatus = 'ACTIVE' | 'EXPIRED' | 'DELETED';
+export type PostStatus = 'ACTIVE' | 'EXPIRED' | 'DELETED' | 'HIDDEN';
 
 export interface PostState {
   title: string;
@@ -74,7 +74,7 @@ export interface CommentRecord {
   postId: string;
   authorId: number;
   content: string;
-  status: 'ACTIVE' | 'DELETED';
+  status: 'ACTIVE' | 'DELETED' | 'HIDDEN';
   createdAt: Date;
   updatedAt: Date | null;
 }

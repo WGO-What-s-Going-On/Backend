@@ -21,7 +21,7 @@ Post Service
             └─ 결정 기능 ON + flagged=true + 버전/삭제 상태 검증 통과
                  └─ moderation:content-decisions
                       └─ CONTENT_MODERATION_DECIDED (decision: HIDE)
-                           ↓ Post Consumer 구현 필요
+                           ↓ Post Consumer (POST_CONTENT_DECISION_CONSUMER_ENABLED=true)
                            ↓ 현재 버전·중복·삭제 경합 검증
                            └─ 실제 숨김 및 조회/실시간 가시성 반영
 ```
@@ -232,7 +232,7 @@ Post Consumer 연동과 정책 허용 목록 확인 전에는 결정 기능을 O
 현재 다중 키 Lua는 Redis Cluster에 호환되지 않는다. 내구성·보존·archive·용량·ACL/TLS 설정도 배포 전 필요하다.
 검사 결과 보존은 30일이고, 결정 상태·receipt·최신 버전·tombstone에는 자동 TTL이 없다.
 
-## 8. Post 팀이 구현해야 할 부분
+## 8. Post 소비 구현 요구와 현재 상태
 
 1. `moderation:content-decisions`에 독립 Consumer Group(권장 `post-content-enforcement`)을 만든다.
    `schemaVersion`, 대상 ID·버전, `decision`, `reason`, 허용 `policyVersion`/fingerprint를 검증한다.
@@ -243,8 +243,8 @@ Post Consumer 연동과 정책 허용 목록 확인 전에는 결정 기능을 O
    HIDE를 기존 영구 삭제 함수에 임의로 연결하지 않는다.
 6. 적용·거부·실패 피드백 이벤트 계약을 합의한다. 결정 발행만으로 FE/Notification에 조치 완료를 표시하지 않는다.
 
-현재 구현 범위는 Moderation 생산자까지다. **Post Consumer, 실제 숨김, FE 노출 제어,
-Post 적용 결과 피드백과 서비스 간 숨김 E2E는 아직 연동되지 않았다.**
+Post Consumer·실제 숨김·Map/WS 비노출·적용 결과 Outbox는 #132에서 구현했다.
+프론트 숨김 메시지 처리와 운영 활성화는 배포 시 확인한다. Moderation/Notification 피드백 소비는 미구현이다.
 
 ## 상세 계약과 구현 위치
 
@@ -257,3 +257,8 @@ Post 적용 결과 피드백과 서비스 간 숨김 E2E는 아직 연동되지 
 - [검사 결과 필드 생성](../src/content-moderation/content-event.ts)
 - [결정 정책·필드·ID 생성](../src/content-moderation/enforcement-policy.ts)
 - [결정 버전 검증·Redis 발행](../src/content-moderation/content-enforcement.service.ts)
+
+## Post 소비 구현 갱신 (#132)
+
+Post/Map/WS의 실제 숨김 적용과 피드백 Outbox가 추가되었다. 이 문서의 발행 계약은 유지하며
+이전 미구현 표시는 [Post 소비 계약](../../post-service/contracts/content-decisions.md)으로 대체한다.

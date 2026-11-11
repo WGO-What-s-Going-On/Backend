@@ -219,9 +219,10 @@ export class MongooseVote {
 
   async read(postId: string, userId?: number) {
     const post = await this.posts
-      .findOne({ postId }, 'postId vote -_id')
+      .findOne({ postId }, 'postId status vote -_id')
       .lean();
-    if (!post) throw new PostNotFoundError('Post not found');
+    if (!post || post.status === 'HIDDEN')
+      throw new PostNotFoundError('Post not found');
     const selection = userId
       ? await this.selections.findOne({ postId, userId }).lean()
       : null;
@@ -242,7 +243,8 @@ export class MongooseVote {
 
   async choose(postId: string, userId: number, commentId: string) {
     const post = await this.posts.findOne({ postId }).lean();
-    if (!post) throw new PostNotFoundError('Post not found');
+    if (!post || post.status === 'HIDDEN')
+      throw new PostNotFoundError('Post not found');
     if (
       post.status !== 'ACTIVE' ||
       post.closedAt != null ||
@@ -276,7 +278,8 @@ export class MongooseVote {
   ) {
     return this.transaction(async (session) => {
       const post = await this.posts.findOne({ postId }).session(session).lean();
-      if (!post) throw new PostNotFoundError('Post not found');
+      if (!post || post.status === 'HIDDEN')
+        throw new PostNotFoundError('Post not found');
       const vote = post.vote as VoteState | null;
       if (
         post.status !== 'ACTIVE' ||

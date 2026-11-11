@@ -200,3 +200,11 @@ HTTP Gateway의 `POST /api/v1/realtime/tickets`에 User Access Bearer를 보내�
 애플리케이션 로그는 URL query를 기록하지 않는다. 배포 프록시·LB·분석 도구에서도 query 및 티켓 응답 본문을 기록하지 않도록 확인한다. WS 버전을 먼저 배포하고 HTTP 발급 API·프론트를 연결한다. 실제 Safari·iOS 및 배포 Redis 연결은 별도 검증한다.
 
 로컬 Redis가 6380에 있을 때 `RUN_REDIS_TICKET_INTEGRATION=1 npm test -- test/tickets.test.ts`로 두 Gateway의 동시 소비·Room 인가·장애 검증을 실행한다.
+
+### 콘텐츠 숨김 이벤트
+
+PostHidden/PostCommentHidden을 post.hidden/comment.hidden v1으로 전달한다.
+각각 postVersion/activityVersion과 hiddenAt을 포함하며 본문을 전달하지 않는다.
+게시글 숨김은 Room을 닫고 댓글 숨김은 늦은 생성·수정의 재노출을 막는다.
+클라이언트는 해당 콘텐츠를 제거하고 재연결 시 원본을 다시 조회한다.
+[전체 계약](../../services/post-service/contracts/content-decisions.md).
