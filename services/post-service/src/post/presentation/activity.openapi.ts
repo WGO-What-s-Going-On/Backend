@@ -1,3 +1,4 @@
+import { CoverFocusBody } from './post.openapi.js';
 import { ApiProperty } from '@nestjs/swagger';
 import type { PostStatus } from '../domain/post.js';
 
@@ -31,6 +32,8 @@ export class RankingResponse {
 }
 
 export class ActivityItemResponse {
+  @ApiProperty({ type: CoverFocusBody, nullable: true })
+  coverFocus!: CoverFocusBody | null;
   @ApiProperty({
     enum: ['POST', 'COMMENT', 'REACTION', 'COMMENT_REACTION', 'VOTE'],
   })

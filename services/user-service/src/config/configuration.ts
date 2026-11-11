@@ -103,6 +103,7 @@ export function configuration() {
         restApiKey: process.env.KAKAO_REST_API_KEY,
         clientSecret: process.env.KAKAO_CLIENT_SECRET,
         redirectUri: process.env.KAKAO_REDIRECT_URI,
+        redirectUris: process.env.KAKAO_REDIRECT_URIS,
       },
       jwt: {
         accessSecret: process.env.JWT_ACCESS_SECRET,

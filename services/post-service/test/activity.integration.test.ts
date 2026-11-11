@@ -153,6 +153,34 @@ suite('Recent activity parent-post contract against MongoDB', () => {
           commentId: kind === 'POST' ? null : `comment-${status}-${kind}`,
           createdAt: time.toISOString(),
           closedAt: closedAt.toISOString(),
+          coverFocus: null,
+        });
+      }
+    }
+  });
+
+  it('returns the parent cover focus for every activity kind', async () => {
+    for (const status of ['ACTIVE', 'EXPIRED'] as const) {
+      for (const kind of kinds) {
+        const postId = `${status}-${kind}`;
+        await seed(kind, postId, status);
+        await connection
+          .collection(collections.POST)
+          .updateOne({ postId }, { $set: { coverFocus: { x: 0, y: 100 } } });
+      }
+    }
+    const { body } = await page();
+    expect(body.items).toHaveLength(10);
+    for (const status of ['ACTIVE', 'EXPIRED']) {
+      for (const kind of kinds) {
+        expect(body.items).toContainEqual({
+          kind,
+          postId: `${status}-${kind}`,
+          postStatus: status,
+          commentId: kind === 'POST' ? null : `comment-${status}-${kind}`,
+          createdAt: time.toISOString(),
+          closedAt: closedAt.toISOString(),
+          coverFocus: { x: 0, y: 100 },
         });
       }
     }

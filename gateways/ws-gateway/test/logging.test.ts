@@ -33,7 +33,7 @@ describe('structured request logging', () => {
     });
     try {
       const response = await app.inject({
-        url: '/api/v1/posts/post-test/vote?token=private-query',
+        url: '/api/v1/posts/post-test/vote?ticket=private-query',
         headers: {
           authorization: 'Bearer private-token',
           cookie: 'secret-cookie',

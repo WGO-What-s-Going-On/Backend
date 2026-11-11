@@ -47,6 +47,12 @@ export class AuthController {
       type: 'object',
       required: ['authorizationCode'],
       properties: {
+        redirectUri: {
+          type: 'string',
+          maxLength: 2048,
+          description:
+            'Exact allowed Kakao callback URI. Omission uses KAKAO_REDIRECT_URI when configured.',
+        },
         authorizationCode: {
           type: 'string',
           minLength: 1,
@@ -57,7 +63,7 @@ export class AuthController {
   })
   @ApiResponse({ status: 201, type: KakaoLoginResult })
   @userErrorResponses(
-    [400, 'Missing or blank authorizationCode.'],
+    [400, 'Invalid authorizationCode or unapproved redirectUri.'],
     [401, 'Kakao authentication failed or account unavailable.'],
     [503, 'Account creation or authentication session unavailable.'],
   )
@@ -75,9 +81,17 @@ export class AuthController {
       throw new BadRequestException('authorizationCode must not be empty');
     }
 
+    if (
+      body.redirectUri !== undefined &&
+      (typeof body.redirectUri !== 'string' ||
+        !body.redirectUri ||
+        body.redirectUri.length > 2048)
+    )
+      throw new BadRequestException('Invalid redirectUri');
     const result = await this.authService.loginWithKakao(
       authorizationCode,
       typeof requestId === 'string' && requestId.trim() ? requestId : undefined,
+      body.redirectUri,
     );
     setAccessCookie(response, result.accessToken, result.expiresIn);
     return result;

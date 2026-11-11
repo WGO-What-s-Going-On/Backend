@@ -1,3 +1,4 @@
+import { GrpcNearbyPosts } from '../src/post/semantic/grpc-candidates.js';
 import { UserProfiles } from '../src/post/infrastructure/user-profiles.js';
 import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -84,6 +85,16 @@ suite('media HTTP and MongoDB transactions (GCS adapter stubbed)', () => {
         }),
         assertCanJoin: async () => {},
       })
+      .overrideProvider(GrpcNearbyPosts)
+      .useValue({
+        page: async () => ({
+          items: (await records.distinct('postId', { status: 'ATTACHED' })).map(
+            (postId) => ({ postId, distanceM: 0 }),
+          ),
+          truncated: false,
+          nextCursor: null,
+        }),
+      })
       .overrideProvider(OutboxWorker)
       .useValue({ wake() {} })
       .overrideProvider(GcsMediaStorage)
@@ -162,13 +173,31 @@ suite('media HTTP and MongoDB transactions (GCS adapter stubbed)', () => {
     const created = await api()
       .post('/api/v1/posts')
       .set('X-User-Id', '123')
-      .send({ ...draft, mediaIds: ids })
+      .send({ ...draft, mediaIds: ids, coverFocus: { x: 0, y: 100 } })
       .expect(201);
     const postId = created.body.postId;
+    expect(created.body.coverFocus).toEqual({ x: 0, y: 100 });
+    const nearby = await api()
+      .get('/api/v1/posts/nearby?latitude=37.5&longitude=127')
+      .set('X-User-Id', '123')
+      .expect(200);
+    expect(
+      nearby.body.posts.find((p: { postId: string }) => p.postId === postId)
+        .coverFocus,
+    ).toEqual({ x: 0, y: 100 });
+    const activity = await api()
+      .get('/api/v1/posts/me/activity')
+      .set('X-User-Id', '123')
+      .expect(200);
+    expect(
+      activity.body.items.find((p: { postId: string }) => p.postId === postId)
+        .coverFocus,
+    ).toEqual({ x: 0, y: 100 });
     expect(await records.countDocuments({ postId, status: 'ATTACHED' })).toBe(
       5,
     );
     const detail = await api().get(`/api/v1/posts/${postId}`).expect(200);
+    expect(detail.body.coverFocus).toEqual({ x: 0, y: 100 });
     expect(detail.body.media.map((m: any) => m.mediaId)).toEqual(ids);
     expect(detail.headers['cache-control']).toBe('no-store');
     expect(JSON.stringify(detail.body)).not.toContain('objectKey');

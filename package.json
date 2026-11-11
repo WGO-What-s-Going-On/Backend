@@ -2,6 +2,7 @@
   "name": "wgo-backend-ci",
   "private": true,
   "scripts": {
+    "verify:ci": "node scripts/ci-run.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,json,jsonc,yaml,yml,css,scss,html}\" \".github/workflows/*.{yml,yaml}\" .prettierrc.json",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,json,jsonc,yaml,yml,css,scss,html}\" \".github/workflows/*.{yml,yaml}\" .prettierrc.json"
   },

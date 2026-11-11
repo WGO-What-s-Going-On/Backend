@@ -6,6 +6,16 @@ const options = { versionKey: false, strict: true } as const;
 export const PostSchema = new Schema(
   {
     postId: { type: String, required: true, unique: true },
+    coverFocus: {
+      type: new Schema(
+        {
+          x: { type: Number, required: true },
+          y: { type: Number, required: true },
+        },
+        { _id: false },
+      ),
+      default: null,
+    },
     mediaIds: { type: [String], default: [] },
     authorId: { type: Number, required: true },
     anonymous: { type: Boolean, default: false },

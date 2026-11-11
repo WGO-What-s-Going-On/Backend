@@ -73,7 +73,7 @@ describe('media policy and configuration', () => {
       'GCS_MEDIA_BUCKET',
     );
     expect(() => mediaConfig({ GCS_MEDIA_ENABLED: 'yes' })).toThrow();
-    expect(() => mediaConfig({ GCS_MEDIA_READ_TTL_SECONDS: '901' })).toThrow();
+    expect(() => mediaConfig({ GCS_MEDIA_READ_TTL_SECONDS: '3601' })).toThrow();
     expect(() => mediaConfig({ GCS_MEDIA_UPLOAD_TTL_SECONDS: '4' })).toThrow();
   });
   it.each(['GOOGLE_APPLICATION_CREDENTIALS', 'STORAGE_EMULATOR_HOST'])(
@@ -129,6 +129,31 @@ describe('GCS signing and verification', () => {
     expect(new URL((await s.read(record)).url).pathname).toBe(
       '/test-media-bucket/post-media/objects/example',
     );
+  });
+  it('reuses read URLs within a window across instances and renews at the boundary', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-02T00:00:01Z'));
+    const first = storage();
+    const second = storage();
+    for (const s of [first, second]) {
+      vi.spyOn(s.client.authClient, 'getCredentials').mockImplementation(
+        async () => ({ client_email: 'post@test.iam.gserviceaccount.com' }),
+      );
+      vi.spyOn(s.client.authClient, 'sign').mockImplementation(async (data) =>
+        createHash('sha256').update(data).digest('base64'),
+      );
+    }
+    const initial = await first.read(record);
+    vi.setSystemTime(new Date('2026-11-02T00:29:59Z'));
+    expect(await second.read(record)).toEqual(initial);
+    expect(initial.expiresAt).toBe('2026-11-02T01:00:00.000Z');
+    expect(
+      new URL(initial.url).searchParams.get('response-cache-control'),
+    ).toBe('private, max-age=86400');
+    vi.setSystemTime(new Date('2026-11-02T00:30:00Z'));
+    const renewed = await first.read(record);
+    expect(renewed.url).not.toBe(initial.url);
+    expect(renewed.expiresAt).toBe('2026-11-02T01:30:00.000Z');
   });
   it('verifies actual SHA256 bytes and pins the generation through copy', async () => {
     const { reads, copies } = object();
