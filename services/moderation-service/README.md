@@ -2,6 +2,8 @@
 
 Post 이벤트를 소비해 게시글 제목·본문과 댓글을 검사하고 게시판 Lifecycle을 판단하는 NestJS 서비스입니다. Node.js 24 / pnpm 10을 사용합니다.
 
+게시글·댓글 입력부터 검사 결과(`EVALUATED`)와 숨김 결정(`DECIDED`) 발행, Post 소비 요구사항까지는 [콘텐츠 이벤트 발행 통합 안내](contracts/content-event-publishing-guide.md)에 정리되어 있습니다.
+
 ## QA 이슈 8: 자동 숨김 결정 (2026-11-11)
 
 기존 게시글·댓글 검사와 `CONTENT_MODERATION_EVALUATED`를 유지합니다. `MODERATION_CONTENT_ENFORCEMENT_ENABLED=true`일 때만 canonical `flagged=true` 결과로 `CONTENT_MODERATION_DECIDED`를 `moderation:content-decisions`에 발행합니다. 정상 결과는 결정 이벤트를 발행하지 않습니다. 결정은 POST의 postVersion 또는 COMMENT의 activityVersion과 `decision: HIDE`, `reason`, 정책 버전, 원본 eventId를 보존하며 원문은 포함하지 않습니다.
