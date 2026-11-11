@@ -56,6 +56,7 @@ export function postInput(raw: unknown): PostInput {
     'radiusM',
     'mediaIds',
     'coverFocus',
+    'displayPosition',
   ]);
   if (body.anonymous !== undefined && typeof body.anonymous !== 'boolean')
     throw new BadRequestException('anonymous must be a boolean');
@@ -67,6 +68,9 @@ export function postInput(raw: unknown): PostInput {
     ...(body.coverFocus === undefined
       ? {}
       : { coverFocus: coverFocus(body.coverFocus) }),
+    ...(body.displayPosition === undefined
+      ? {}
+      : { displayPosition: displayPosition(body.displayPosition) }),
     anonymous: (body.anonymous as boolean | undefined) ?? false,
     title: string(body.title, 'title'),
     content: string(body.content, 'content'),
@@ -148,6 +152,18 @@ function coverFocus(raw: unknown) {
   if (![x, y].every((n) => Number.isInteger(n) && n >= 0 && n <= 100))
     throw new BadRequestException(
       'coverFocus coordinates must be integers between 0 and 100',
+    );
+  return { x, y };
+}
+
+function displayPosition(raw: unknown) {
+  const value = object(raw);
+  fields(value, ['x', 'y']);
+  const x = number(value.x, 'displayPosition.x');
+  const y = number(value.y, 'displayPosition.y');
+  if (![x, y].every(Number.isFinite))
+    throw new BadRequestException(
+      'displayPosition coordinates must be finite numbers',
     );
   return { x, y };
 }

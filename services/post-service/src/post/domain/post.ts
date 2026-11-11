@@ -22,7 +22,13 @@ export interface CoverFocus {
   y: number;
 }
 
+export interface DisplayPosition {
+  x: number;
+  y: number;
+}
+
 export interface PostInput {
+  displayPosition?: DisplayPosition;
   coverFocus?: CoverFocus;
   anonymous?: boolean;
   mediaIds?: string[];
@@ -42,6 +48,7 @@ export interface PostRegion {
 export type NewPostRecord = PostRecord & { region: PostRegion };
 
 export interface PostRecord {
+  displayPosition?: DisplayPosition | null;
   coverFocus?: CoverFocus | null;
   region?: PostRegion;
   closedAt?: Date | null;
@@ -191,6 +198,13 @@ export function createPost(
   postId: string,
   now: Date,
 ): PostRecord {
+  if (
+    input.displayPosition &&
+    ![input.displayPosition.x, input.displayPosition.y].every(Number.isFinite)
+  )
+    throw new InvalidPostError(
+      'displayPosition coordinates must be finite numbers',
+    );
   const attachments = validateMediaIds(input.mediaIds);
   if (input.coverFocus !== undefined) {
     for (const value of [input.coverFocus.x, input.coverFocus.y])
@@ -213,6 +227,7 @@ export function createPost(
     postId,
     authorId,
     ...(attachments.length ? { mediaIds: attachments } : {}),
+    displayPosition: input.displayPosition ?? null,
     coverFocus: input.coverFocus ?? null,
     anonymous: input.anonymous ?? false,
     title: input.title,

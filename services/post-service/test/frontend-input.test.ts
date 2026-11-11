@@ -80,3 +80,29 @@ it('rejects cover focus without attachments', () => {
     ),
   ).toThrow('coverFocus requires mediaIds');
 });
+
+it('preserves display coordinates independently of geography and attachments', () => {
+  const post = createPost(
+    postInput({ ...draft, displayPosition: { x: -12.5, y: 0 } }),
+    1,
+    'test',
+    new Date(),
+  );
+  expect(post.displayPosition).toEqual({ x: -12.5, y: 0 });
+  expect(post.locationSnapshot).toEqual({ latitude: 37, longitude: 127 });
+  expect(
+    createPost(postInput(draft), 1, 'test', new Date()).displayPosition,
+  ).toBeNull();
+});
+it.each([
+  null,
+  [],
+  {},
+  { x: 1 },
+  { x: '1', y: 0 },
+  { x: Infinity, y: 0 },
+  { x: NaN, y: 0 },
+  { x: 0, y: 0, z: 1 },
+])('rejects invalid display coordinates %j', (displayPosition) => {
+  expect(() => postInput({ ...draft, displayPosition })).toThrow();
+});

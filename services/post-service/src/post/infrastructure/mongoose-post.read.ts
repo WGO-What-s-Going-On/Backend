@@ -34,6 +34,7 @@ export class MongoosePostRead implements PostReadQueries {
       title: post.title,
       content: post.content,
       mediaIds: post.mediaIds ?? [],
+      displayPosition: post.displayPosition ?? null,
       coverFocus: post.coverFocus ?? null,
       status: post.status,
       locationSnapshot: {

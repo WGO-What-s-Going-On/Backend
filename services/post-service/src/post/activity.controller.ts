@@ -299,6 +299,7 @@ export class Activities {
               createdAt: `$${source.time}`,
               postStatus: `$${parent}status`,
               closedAt: { $ifNull: [`$${parent}closedAt`, null] },
+              displayPosition: { $ifNull: [`$${parent}displayPosition`, null] },
               coverFocus: { $ifNull: [`$${parent}coverFocus`, null] },
             },
           },
