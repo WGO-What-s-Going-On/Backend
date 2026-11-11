@@ -26,7 +26,13 @@ export async function redisHarness(
   // Compose 전용 Redis의 빈 DB 15만 사용한다. 기존 데이터가 있으면 삭제하지 않고 실패한다.
   const url =
     process.env.MODERATION_TEST_REDIS_URL ?? 'redis://localhost:6383/15';
-  const config = new ConfigService({ redis: { url }, contentEnforcement: { enabled: policy ? 'true' : 'false', policy } });
+  const config = new ConfigService({
+    redis: { url },
+    contentEnforcement: {
+      enabled: policy ? 'true' : 'false',
+      policyVersion: policy?.policyVersion,
+    },
+  });
   const redis = createClient({
     url,
     socket: { reconnectStrategy: false, connectTimeout: 2000 },
@@ -43,7 +49,11 @@ export async function redisHarness(
   const results = new RedisModerationResultRepository(config);
   const lifecycle = new LifecycleService(repository);
   const enforcement = new ContentEnforcementService(config);
-  const moderation = new ContentModerationService(provider, results, enforcement);
+  const moderation = new ContentModerationService(
+    provider,
+    results,
+    enforcement,
+  );
   const processor = new ModerationPostEventProcessor(
     moderation,
     lifecycle,

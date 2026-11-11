@@ -7,12 +7,8 @@ import { parsePostEvent } from '../../src/event-consumer/post-event.js';
 import { ModerationPostEventProcessor } from '../../src/event-consumer/moderation-post-event.processor.js';
 import { group, redisHarness, stream } from './redis-harness.js';
 
-// A test policy only, never a shipped WGO moderation policy.
 const policy = {
-  policyVersion: 'qa8-test-v1',
-  approvedBy: 'test-reviewer',
-  approvedAt: '2026-01-01T00:00:00.000Z',
-  rules: [{ ruleId: 'test-threat', category: 'harassment/threatening' }],
+  policyVersion: 'qa8-flagged-v1',
 };
 const safe = {
   flagged: false,
@@ -45,6 +41,7 @@ describe('content decisions through Post wire, model adapter port and real Redis
       'moderation:content-target:*',
       'moderation:content-decision*',
       'moderation:content-post-terminal:*',
+      'moderation:content-post-target:*',
       'moderation:content-policy:*',
     ]) {
       for await (const batch of h.redis.scanIterator({ MATCH: pattern })) {
@@ -90,6 +87,24 @@ describe('content decisions through Post wire, model adapter port and real Redis
       },
     );
   }
+  function post(f: { postId: string }, version = 1) {
+    return h.fields(
+      version === 1 ? 'PostCreated' : 'PostUpdated',
+      f.postId,
+      '2026-11-11T00:00:00.000Z',
+      '',
+      {
+        postVersion: version,
+        post: {
+          postId: f.postId,
+          authorId: 1,
+          title: `private title ${version}`,
+          content: `private body ${version}`,
+          closedAt: null,
+        },
+      },
+    );
+  }
   async function decisions() {
     return (await h.redis.xRange(output, '-', '+')).map((row) =>
       JSON.parse(row.message.data!),
@@ -111,29 +126,36 @@ describe('content decisions through Post wire, model adapter port and real Redis
   }
 
   it.each([
-    ['normal', safe, 'NO_ACTION'],
-    ['harmful', harmful, 'HIDE_COMMENT'],
+    ['normal', safe],
+    ['harmful', harmful],
   ] as const)(
     'publishes %s decision with provenance, then ACKs without claiming Post application',
-    async (_, result, action) => {
+    async (_, result) => {
       moderate.mockResolvedValue(result);
       const f = await fixture();
       const message = comment(f);
       await h.send(message);
-      expect(await decisions()).toMatchObject([
-        {
-          eventType: 'CONTENT_MODERATION_DECIDED',
-          sourceEventId: message.eventId,
-          action,
-          activityVersion: 1,
-          postId: f.postId,
-          commentId: f.commentId,
-          policyVersion: policy.policyVersion,
-        },
-      ]);
+      expect(await decisions()).toMatchObject(
+        result.flagged
+          ? [
+              {
+                eventType: 'CONTENT_MODERATION_DECIDED',
+                sourceEventId: message.eventId,
+                decision: 'HIDE',
+                reason: 'OPENAI_MODERATION_FLAGGED',
+                activityVersion: 1,
+                postId: f.postId,
+                commentId: f.commentId,
+                policyVersion: policy.policyVersion,
+              },
+            ]
+          : [],
+      );
       const [decision] = await decisions();
-      expect(JSON.stringify(decision)).not.toContain('private synthetic');
-      expect(decision).not.toHaveProperty('appliedAt');
+      if (decision) {
+        expect(JSON.stringify(decision)).not.toContain('private synthetic');
+        expect(decision).not.toHaveProperty('appliedAt');
+      }
       expect((await h.redis.xPending(stream, group)).pending).toBe(0);
       expect(await h.redis.xLen('moderation:events')).toBe(0);
       expect((await h.lifecycle.list())[0]?.state).toBe('ACTIVE');
@@ -151,6 +173,67 @@ describe('content decisions through Post wire, model adapter port and real Redis
     ]);
     expect(await decisions()).toHaveLength(1);
     expect(moderate).toHaveBeenCalledOnce();
+  });
+  it.each([false, true])(
+    'keeps POST evaluation and publishes HIDE only for flagged=%s',
+    async (flagged) => {
+      moderate.mockResolvedValue({ ...harmful, flagged });
+      const f = await fixture();
+      const message = post(f, 3);
+      await h.send(message);
+      await h.send(message);
+      const records = await decisions();
+      expect(records).toHaveLength(flagged ? 1 : 0);
+      if (flagged) {
+        expect(records[0]).toMatchObject({
+          targetType: 'POST',
+          postId: f.postId,
+          postVersion: 3,
+          sourceEventId: message.eventId,
+          decision: 'HIDE',
+          reason: 'OPENAI_MODERATION_FLAGGED',
+        });
+        expect(records[0]).not.toHaveProperty('commentId');
+        expect(records[0]).not.toHaveProperty('activityVersion');
+        expect(JSON.stringify(records)).not.toContain('private');
+      }
+      expect(await h.redis.xLen('moderation:content-events')).toBe(1);
+      expect((await h.redis.xPending(stream, group)).pending).toBe(0);
+      expect(moderate).toHaveBeenCalledOnce();
+    },
+  );
+  it('preserves latest POST version while still evaluating late older edits', async () => {
+    const f = await fixture();
+    await h.send(post(f, 3));
+    await h.send(post(f, 2));
+    expect(await decisions()).toMatchObject([
+      { targetType: 'POST', postVersion: 3 },
+    ]);
+    expect(await h.redis.xLen('moderation:content-events')).toBe(2);
+    expect(moderate).toHaveBeenCalledTimes(2);
+  });
+  it('suppresses an old POST verdict after observing a newer safe edit', async () => {
+    const f = await fixture();
+    let release!: (value: typeof harmful) => void;
+    let started!: () => void;
+    const began = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    moderate
+      .mockImplementationOnce(() => {
+        started();
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      })
+      .mockResolvedValueOnce(safe);
+    const first = h.processor.process(parsePostEvent(post(f))!);
+    await began;
+    await h.send(post(f, 2));
+    release(harmful);
+    await first;
+    expect(await decisions()).toHaveLength(0);
+    expect(await h.redis.xLen('moderation:content-events')).toBe(2);
   });
   it('preserves safe-integer content versions without Lua JSON rounding', async () => {
     const f = await fixture();
@@ -185,9 +268,7 @@ describe('content decisions through Post wire, model adapter port and real Redis
     await h.send(comment(f, 2));
     release(harmful);
     await first;
-    expect(await decisions()).toMatchObject([
-      { action: 'NO_ACTION', activityVersion: 2 },
-    ]);
+    expect(await decisions()).toHaveLength(0);
     expect(await h.redis.xLen('moderation:content-events')).toBe(2);
     expect(
       (await h.lifecycle.list())[0]?.comments?.[f.commentId]?.version,
@@ -280,24 +361,27 @@ describe('content decisions through Post wire, model adapter port and real Redis
     expect((await h.redis.xPending(stream, group)).pending).toBe(0);
     expect(moderate).toHaveBeenCalledOnce();
   });
-  it('recovers an XADD runtime failure without changing the prepared decision', async () => {
-    const f = await fixture();
-    await h.redis.xAdd(output, '18446744073709551615-18446744073709551615', {
-      sentinel: 'test',
-    });
-    const message = comment(f);
-    const id = await h.send(message);
-    expect((await h.redis.xPending(stream, group)).pending).toBe(1);
-    const [preparedKey] = await h.redis.keys(
-      'moderation:content-decision:decision_*',
-    );
-    expect(preparedKey).toBeTruthy();
-    const prepared = await h.redis.get(preparedKey!);
-    await h.redis.del(output);
-    await reclaim(id);
-    expect(JSON.stringify((await decisions())[0])).toBe(prepared);
-    expect(moderate).toHaveBeenCalledOnce();
-  });
+  it.each(['POST', 'COMMENT'] as const)(
+    'recovers a %s XADD runtime failure without changing the prepared decision',
+    async (targetType) => {
+      const f = await fixture();
+      await h.redis.xAdd(output, '18446744073709551615-18446744073709551615', {
+        sentinel: 'test',
+      });
+      const message = targetType === 'POST' ? post(f) : comment(f);
+      const id = await h.send(message);
+      expect((await h.redis.xPending(stream, group)).pending).toBe(1);
+      const [preparedKey] = await h.redis.keys(
+        'moderation:content-decision:decision_*',
+      );
+      expect(preparedKey).toBeTruthy();
+      const prepared = await h.redis.get(preparedKey!);
+      await h.redis.del(output);
+      await reclaim(id);
+      expect(JSON.stringify((await decisions())[0])).toBe(prepared);
+      expect(moderate).toHaveBeenCalledOnce();
+    },
+  );
   it('recovers a lost decision commit response and lost input ACK without duplicate publication', async () => {
     const f = await fixture();
     const connection = (
@@ -347,7 +431,10 @@ describe('content decisions through Post wire, model adapter port and real Redis
     const unavailable = new ContentEnforcementService(
       new ConfigService({
         redis: { url: 'redis://127.0.0.1:1' },
-        contentEnforcement: { enabled: 'true', policy },
+        contentEnforcement: {
+          enabled: 'true',
+          policyVersion: policy.policyVersion,
+        },
       }),
     );
     try {
@@ -367,10 +454,14 @@ describe('content decisions through Post wire, model adapter port and real Redis
       await unavailable.onModuleDestroy();
     }
   });
-  it('rejects changing rules under the same published policy version', async () => {
+  it('rejects a conflicting fingerprint under an existing policy version', async () => {
     const f = await fixture();
     const message = comment(f);
     await h.send(message);
+    await h.redis.set(
+      `moderation:content-policy:${policy.policyVersion}`,
+      'different-policy-fingerprint',
+    );
     const other = new ContentEnforcementService(
       new ConfigService({
         redis: {
@@ -380,16 +471,12 @@ describe('content decisions through Post wire, model adapter port and real Redis
         },
         contentEnforcement: {
           enabled: 'true',
-          policy: {
-            ...policy,
-            rules: [
-              { ruleId: 'different', category: 'harassment/threatening' },
-            ],
-          },
+          policyVersion: policy.policyVersion,
         },
       }),
     );
     try {
+      expect(await other.isReady()).toBe(false);
       await expect(
         other.decide((await h.results.find(message.eventId))!),
       ).rejects.toThrow('CONTENT_POLICY_VERSION_REUSED');

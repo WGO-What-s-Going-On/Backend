@@ -21,6 +21,11 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
   async process(event: PostEvent): Promise<void> {
     switch (event.eventType) {
       case 'PostCreated':
+        if (event.postVersion)
+          await this.enforcement?.observePost(
+            event.aggregateId,
+            event.postVersion,
+          );
         if (event.post?.authorId)
           await this.lifecycle.initialize(
             event.aggregateId,
@@ -33,6 +38,11 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
           await this.moderatePost(event, event.postContent);
         return;
       case 'PostUpdated':
+        if (event.postVersion)
+          await this.enforcement?.observePost(
+            event.aggregateId,
+            event.postVersion,
+          );
         if (event.postContent)
           await this.moderatePost(event, event.postContent);
         return;
@@ -40,7 +50,11 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
       case 'PostCommentUpdated':
         if (!event.comment?.content)
           throw new Error('Invalid PostCommentCreated payload');
-        await this.enforcement?.observeComment(event.aggregateId, event.comment.commentId, event.activityVersion ?? 1);
+        await this.enforcement?.observeComment(
+          event.aggregateId,
+          event.comment.commentId,
+          event.activityVersion ?? 1,
+        );
         if (
           !(await this.lifecycle.canModerateComment(
             event.aggregateId,
@@ -91,7 +105,12 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
       case 'PostCommentDeleted':
         if (!event.comment)
           throw new Error('Invalid PostCommentDeleted payload');
-        await this.enforcement?.observeComment(event.aggregateId, event.comment.commentId, event.activityVersion!, true);
+        await this.enforcement?.observeComment(
+          event.aggregateId,
+          event.comment.commentId,
+          event.activityVersion!,
+          true,
+        );
         await this.lifecycle.recordComment(
           event.aggregateId,
           event.comment.commentId,

@@ -23,7 +23,7 @@
 
 ## 콘텐츠 제재 결정
 
-현재 게시글·댓글 결과는 Moderation Redis에 저장하고 moderation:content-events에 CONTENT_MODERATION_EVALUATED v1로 발행한다. 검사 결과는 확정 제재 결정과 다르다. `CONTENT_MODERATION_DECIDED`의 합의된 wire/수신 consumer와 자동 조치 API가 없다. Post의 운영 CLI에서 검토된 moderationDecisionId를 사용해 삭제하는 기능이 있다는 사실은 네트워크 결정 소비 계약이 있다는 뜻이 아니다. flagged만으로 자동 삭제하지 않는다.
+현재 게시글·댓글 결과는 moderation:content-events에 CONTENT_MODERATION_EVALUATED v1로 발행한다. 2026-11-11 QA 이슈 8에서 사용자 확정 정책인 flagged=true → HIDE의 별도 CONTENT_MODERATION_DECIDED 생산자를 구현했으며 기본 OFF다. [결정 wire](content-enforcement-events.md)를 따른다. Post 소비자·실제 숨김·적용 피드백은 미구현이다. 기존 운영 CLI 삭제 기능을 HIDE에 임의 연결하지 않는다.
 
 합의할 결정 event 또는 command에는 다음이 필요하다.
 
@@ -87,8 +87,8 @@ WS Gateway는 참가 시 Post status가 ACTIVE인지 확인한다. 2026-10-25 de
    아직 Moderation에 도착하지 않은 활동을 포함한 완결성을 보장하지 않는다. 원본 snapshot·revision·
    gRPC 조회가 필요한 정책을 먼저 정한다. 이는 현재 단방향 종료 연결의 선행 작업이 아니다.
 4. **성공/거부 피드백**: PostExpired는 발행하지만 별도 결정 적용/거부 이벤트 및 Moderation 재평가는 없다.
-5. **콘텐츠 제재**: AI flagged는 검토 대기, 확정 제재만 적용하는 정책을 따른다. 검토 Case·승인 경로·
-   콘텐츠 버전 검증·결정 이벤트가 아직 없으므로 기존 댓글 검사만으로 자동 삭제하지 않는다.
+5. **콘텐츠 제재**: 2026-11-11에 flagged=true의 HIDE 결정 발행 정책을 확정·구현했다. 기능은 기본 OFF다.
+   Post는 현재 원본 버전 검증·멱등 receipt·숨김 상태·적용 피드백 소비 계약을 구현해야 한다.
 6. **운영 영속성**: 결정 감사 보존, Redis 유실/trim 이후 복구와 저장소 문서 정합성은 별도 설계한다.
    이번 작업에서 Moderation 저장소를 PostgreSQL로 이전하거나 gRPC를 추가하지 않는다.
 

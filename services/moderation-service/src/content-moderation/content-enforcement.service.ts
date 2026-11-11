@@ -7,6 +7,7 @@ import {
   parseEnforcementPolicy,
   policyFingerprint,
   type EnforcementPolicy,
+  DEFAULT_ENFORCEMENT_POLICY_VERSION,
 } from './enforcement-policy.js';
 import type { StoredModerationResult } from './moderation-result.js';
 
@@ -30,7 +31,8 @@ export class ContentEnforcementService implements OnModuleDestroy {
       'moderation:content-decisions';
     if (enabled === 'true') {
       this.policy = parseEnforcementPolicy(
-        config.get<unknown>('contentEnforcement.policy'),
+        config.get<string>('contentEnforcement.policyVersion') ??
+          DEFAULT_ENFORCEMENT_POLICY_VERSION,
       );
       if (!config.get<string>('redis.url'))
         throw new Error('Content enforcement requires explicit Redis URL');
@@ -74,6 +76,22 @@ export class ContentEnforcementService implements OnModuleDestroy {
     version: number,
     deleted = false,
   ): Promise<void> {
+    await this.observeVersion(
+      this.targetKey(postId, commentId),
+      version,
+      deleted,
+    );
+  }
+
+  async observePost(postId: string, version: number): Promise<void> {
+    await this.observeVersion(this.postTargetKey(postId), version, false);
+  }
+
+  private async observeVersion(
+    key: string,
+    version: number,
+    deleted: boolean,
+  ): Promise<void> {
     if (!this.policy) return;
     if (!Number.isSafeInteger(version) || version < 1)
       throw new Error('Content version required');
@@ -94,7 +112,7 @@ export class ContentEnforcementService implements OnModuleDestroy {
       redis.call('SET',KEYS[1],cjson.encode({version=ARGV[1],deleted=deleted})); return 1
     `,
       {
-        keys: [this.targetKey(postId, commentId)],
+        keys: [key],
         arguments: [String(version), deleted ? '1' : '0'],
       },
     );
@@ -116,8 +134,13 @@ export class ContentEnforcementService implements OnModuleDestroy {
   async decide(result: StoredModerationResult): Promise<void> {
     if (!this.policy) return;
     const decision = contentDecision(result, this.policy);
-    await this.ready();
+    if (!decision) return;
+    const version =
+      result.targetType === 'POST'
+        ? result.postVersion
+        : result.activityVersion!;
     try {
+      await this.ready();
       const outcome = await this.redis.eval(
         `
         for i=1,5 do
@@ -133,7 +156,8 @@ export class ContentEnforcementService implements OnModuleDestroy {
         if redis.call('EXISTS',KEYS[4])==1 then return 'POST_TERMINAL' end
         if not target then return redis.error_reply('CONTENT_TARGET_UNOBSERVED') end
         local state=cjson.decode(target)
-        if state.deleted or tonumber(state.version)~=tonumber(incoming.activityVersion) then return 'STALE' end
+        local version=incoming.postVersion or incoming.activityVersion
+        if state.deleted or tonumber(state.version)~=tonumber(version) then return 'STALE' end
         local raw=redis.call('GET',KEYS[2]) or ARGV[1]
         if raw~=ARGV[1] then return redis.error_reply('CONTENT_DECISION_CONFLICT') end
         redis.call('SET',KEYS[5],ARGV[2])
@@ -145,7 +169,9 @@ export class ContentEnforcementService implements OnModuleDestroy {
       `,
         {
           keys: [
-            this.targetKey(result.postId, result.commentId),
+            result.targetType === 'POST'
+              ? this.postTargetKey(result.postId)
+              : this.targetKey(result.postId, result.commentId),
             `moderation:content-decision:${decision.moderationDecisionId}`,
             `moderation:content-decision-published:${decision.moderationDecisionId}`,
             `moderation:content-post-terminal:${result.postId}`,
@@ -160,7 +186,7 @@ export class ContentEnforcementService implements OnModuleDestroy {
         postId: result.postId,
         commentId: result.commentId,
         correlationId: decision.correlationId,
-        entityVersion: result.activityVersion,
+        entityVersion: version,
         status: outcome,
       };
       if (outcome === 'PUBLISHED')
@@ -194,6 +220,10 @@ export class ContentEnforcementService implements OnModuleDestroy {
 
   private targetKey(postId: string, commentId: string) {
     return `moderation:content-target:${postId}:${commentId}`;
+  }
+
+  private postTargetKey(postId: string) {
+    return `moderation:content-post-target:${postId}`;
   }
 
   async isReady(): Promise<boolean> {

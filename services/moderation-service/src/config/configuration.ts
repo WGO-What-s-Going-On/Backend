@@ -43,7 +43,9 @@ export function configuration() {
     },
     contentEnforcement: {
       enabled: process.env.MODERATION_CONTENT_ENFORCEMENT_ENABLED ?? 'false',
-      policy: process.env.MODERATION_CONTENT_ENFORCEMENT_POLICY_JSON,
+      policyVersion:
+        process.env.MODERATION_CONTENT_ENFORCEMENT_POLICY_VERSION ??
+        'openai-flagged-hide-v1',
     },
   };
 }

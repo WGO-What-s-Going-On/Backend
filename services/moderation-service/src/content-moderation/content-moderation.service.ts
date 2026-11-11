@@ -70,7 +70,9 @@ export class ContentModerationService {
         (existing.targetType ?? 'COMMENT') !== input.targetType ||
         (input.targetType === 'POST'
           ? existing.postVersion !== input.postVersion
-          : existing.commentId !== input.commentId) ||
+          : existing.commentId !== input.commentId ||
+            (existing.activityVersion !== undefined &&
+              existing.activityVersion !== input.activityVersion)) ||
         (existing.sourceHash && existing.sourceHash !== sourceHash)
       )
         throw new Error('Invalid conflicting moderation source event');
@@ -108,6 +110,8 @@ export class ContentModerationService {
           }),
     };
     await this.repository.save(stored);
+    // Concurrent workers may compute different answers; only the immutable
+    // canonical evaluation is allowed to produce a decision.
     const canonical = (await this.repository.find(input.eventId)) ?? stored;
     await this.enforcement?.decide(canonical);
     this.logger.success(

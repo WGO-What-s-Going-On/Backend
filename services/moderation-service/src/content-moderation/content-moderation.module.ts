@@ -19,6 +19,10 @@ import { ContentEnforcementService } from './content-enforcement.service.js';
     },
     ContentModerationService,
   ],
-  exports: [ContentModerationService, RedisModerationResultRepository, ContentEnforcementService],
+  exports: [
+    ContentModerationService,
+    RedisModerationResultRepository,
+    ContentEnforcementService,
+  ],
 })
 export class ContentModerationModule {}
