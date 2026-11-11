@@ -43,6 +43,30 @@ Moderation과 Gateway는 해당 테스트의 Redis를 사용한다. 로컬 Compo
 
 ## 로컬 확인
 
+서비스 변경의 완료 검증은 CI와 같은 `npm run verify:ci -- <service>`를 사용한다.
+이 명령은 정의된 typecheck/lint, 전체 단위·저장소 통합 테스트, build를 실행한다.
+Post는 Map 설치·빌드와 `RUN_INTEGRATION=1`, `RUN_SEMANTIC_INTEGRATION=1`도 함께 적용한다.
+일반 `npm test`나 일부 파일만 실행한 결과는 이 검증을 대체하지 않는다.
+Node 24와 pnpm 10.33.0을 사용하고, 기존 컨테이너와 포트가 충돌하지 않는지 먼저 확인한다.
+Compose에 지정된 로컬 이미지를 재사용하며, 없는 이미지만 내려받는다.
+
+```bash
+(
+  set -e
+  export CI=true
+  export GITHUB_RUN_ID="local-verify-$(date +%s)-$$"
+  export GITHUB_RUN_ATTEMPT=1
+  service=post-service
+  trap 'node scripts/ci-dependencies.mjs stop "$service"' EXIT
+  node scripts/ci-run.mjs "$service" install
+  node scripts/ci-dependencies.mjs start "$service"
+  npm run verify:ci -- "$service"
+)
+```
+
+이 명령은 서비스 검증 작업과 범위를 맞춘다. 변경 영향 감지·포맷·교차 서비스 작업과
+런타임 변경 시 Dockerfile 빌드는 별도 CI 작업이므로 해당 변경이 있으면 추가로 실행한다.
+
 ```bash
 node --test scripts/ci.test.mjs
 node scripts/ci.mjs detect <base-sha> HEAD --pr
