@@ -2,7 +2,10 @@
 
 ## Responsibility and input
 
-Moderation evaluates content; it does not determine or execute sanctions. Input is
+Moderation evaluates content; it never executes Post state changes. The optional,
+default-OFF [decision producer](content-enforcement-events.md) emits HIDE decisions
+only for canonical flagged=true POST/COMMENT results. Evaluation facts below keep
+their existing wire, independently of the decision feature flag. Input is
 Post's `post:events` v1 flat envelope, transmitted as Redis fields `eventId`,
 `eventType`, `data`. Existing schema/producer/identifier/time validation applies.
 No Post DB access, automatic deletion, credit deduction, account suspension or direct push occurs.

@@ -2,6 +2,14 @@
 
 Post 이벤트를 소비해 게시글 제목·본문과 댓글을 검사하고 게시판 Lifecycle을 판단하는 NestJS 서비스입니다. Node.js 24 / pnpm 10을 사용합니다.
 
+게시글·댓글 입력부터 검사 결과(`EVALUATED`)와 숨김 결정(`DECIDED`) 발행, Post 소비 요구사항까지는 [콘텐츠 이벤트 발행 통합 안내](contracts/content-event-publishing-guide.md)에 정리되어 있습니다.
+
+## QA 이슈 8: 자동 숨김 결정 (2026-11-11)
+
+기존 게시글·댓글 검사와 `CONTENT_MODERATION_EVALUATED`를 유지합니다. `MODERATION_CONTENT_ENFORCEMENT_ENABLED=true`일 때만 canonical `flagged=true` 결과로 `CONTENT_MODERATION_DECIDED`를 `moderation:content-decisions`에 발행합니다. 정상 결과는 결정 이벤트를 발행하지 않습니다. 결정은 POST의 postVersion 또는 COMMENT의 activityVersion과 `decision: HIDE`, `reason`, 정책 버전, 원본 eventId를 보존하며 원문은 포함하지 않습니다.
+
+기본 설정은 OFF입니다. `MODERATION_CONTENT_ENFORCEMENT_POLICY_VERSION` 기본값은 `openai-flagged-hide-v1`이며 이전 초안의 POLICY_JSON/카테고리 규칙은 사용하지 않습니다. [결정 계약과 Post 소비 요구](contracts/content-enforcement-events.md), [Post 팀 인계](contracts/post-content-contract-request.md), [검증 보고](QA8_CONTENT_ENFORCEMENT_REPORT.md)를 참고하세요. Post DB·실제 숨김·FE와 적용 결과 피드백은 이번 범위에 없습니다.
+
 ## 실행
 
 ```bash
@@ -14,7 +22,7 @@ HTTP 기본값은 `http://localhost:3005`, liveness는 `GET /health/live`입니�
 
 ## 입력 계약과 실제 처리
 
-현재 기준은 `origin/dev` `326b7c4`, [Post 이벤트 계약](../post-service/contracts/post-events.md)과 실제 `post-event-envelope.ts`/Outbox producer입니다. Stream은 `post:events`, group은 `post-moderation`입니다.
+현재 기준은 `origin/dev` `4f3cbb2`, [Post 이벤트 계약](../post-service/contracts/post-events.md)과 실제 `post-event-envelope.ts`/Outbox producer입니다. Stream은 `post:events`, group은 `post-moderation`입니다.
 
 ```text
 XADD post:events * eventId <id> eventType <type> data <full JSON envelope>

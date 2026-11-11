@@ -26,6 +26,9 @@ export function configuration() {
       contentEventStream:
         process.env.MODERATION_CONTENT_EVENT_STREAM ??
         'moderation:content-events',
+      contentDecisionStream:
+        process.env.MODERATION_CONTENT_DECISION_STREAM ??
+        'moderation:content-decisions',
       moderationConsumerGroup:
         process.env.MODERATION_CONSUMER_GROUP ?? 'post-moderation',
     },
@@ -37,6 +40,12 @@ export function configuration() {
     },
     openai: {
       apiKey: process.env.OPENAI_API_KEY,
+    },
+    contentEnforcement: {
+      enabled: process.env.MODERATION_CONTENT_ENFORCEMENT_ENABLED ?? 'false',
+      policyVersion:
+        process.env.MODERATION_CONTENT_ENFORCEMENT_POLICY_VERSION ??
+        'openai-flagged-hide-v1',
     },
   };
 }
