@@ -85,6 +85,35 @@ export class CassandraLocationStore implements LocationStore {
     return saved;
   }
 
+  async recent(userId: number, now: Date): Promise<Location[]> {
+    const since = new Date(now.getTime() - 60000);
+    const days = [...new Set([dayBucket(now), dayBucket(since)])];
+    const samples: Location[] = [];
+    // Bound both partitions and rows; high update volume can deny creation, never bypass it.
+    for (const day of days) {
+      const result = await this.db.execute(
+        'SELECT latitude, longitude, updated_at FROM user_location_history WHERE user_id = ? AND day_bucket = ? AND update_id >= minTimeuuid(?) LIMIT 256',
+        [cassandra.types.Long.fromNumber(userId), day, since],
+        { prepare: true },
+      );
+      for (const row of result.rows) {
+        const latitude: unknown = row.get('latitude');
+        const longitude: unknown = row.get('longitude');
+        const updatedAt: unknown = row.get('updated_at');
+        if (
+          typeof latitude !== 'number' ||
+          typeof longitude !== 'number' ||
+          !(updatedAt instanceof Date)
+        )
+          throw new Error('Invalid location history');
+        samples.push({ latitude, longitude, updatedAt });
+      }
+    }
+    return samples
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+      .slice(0, 256);
+  }
+
   async get(userId: number): Promise<Location | null> {
     const cached = await this.cache
       .get(`map:location:${userId}`)

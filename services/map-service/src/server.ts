@@ -1,3 +1,4 @@
+import { decideMovement } from './movement.js';
 import { requestContext, withLogContext } from './observability/logging.js';
 import { observeHttp, observeRpc, rpcContext } from './logging.js';
 import { resolveRegion } from './region.js';
@@ -114,7 +115,25 @@ export function createGrpcServer(
             message: 'Invalid location check',
           });
         try {
-          callback(null, decide(await store.get(userId), input, input.radiusM));
+          if (participation) {
+            callback(
+              null,
+              decide(await store.get(userId), input, input.radiusM),
+            );
+          } else {
+            const now = new Date();
+            const history = await store.recent(userId, now);
+            const location = decide(
+              history[0] ?? null,
+              input,
+              input.radiusM,
+              now,
+            );
+            callback(
+              null,
+              location.allowed ? decideMovement(history, now) : location,
+            );
+          }
         } catch {
           callback({
             code: status.UNAVAILABLE,
