@@ -39,7 +39,7 @@ export function mediaConfig(env = process.env) {
     enabled,
     bucket: env.GCS_MEDIA_BUCKET ?? '',
     uploadSeconds: integer(env, 'GCS_MEDIA_UPLOAD_TTL_SECONDS', 300, 900, 5),
-    readSeconds: integer(env, 'GCS_MEDIA_READ_TTL_SECONDS', 300, 900, 5),
+    readSeconds: integer(env, 'GCS_MEDIA_READ_TTL_SECONDS', 3600, 3600, 5),
     imageBytes: integer(
       env,
       'GCS_MEDIA_IMAGE_MAX_BYTES',

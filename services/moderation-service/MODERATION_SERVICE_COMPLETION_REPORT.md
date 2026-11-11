@@ -5,6 +5,12 @@ Branch: `feat/moderation-completion`. Freshly fetched `origin/dev` base:
 committed/clean. No Notification commits, merges or cherry-picks are included.
 No push, PR, issue closure or production deployment was performed.
 
+This is the historical 2026-10-27 report. The 2026-11-09 post-content change
+supersedes its post-body gap and comment-only service name. PostCreated and
+content-edit PostUpdated snapshots now use ContentModerationService. See the
+[current contract](contracts/content-moderation-events.md). Other historical
+verification claims below describe the original change.
+
 ## A. Implemented
 
 - Comment evaluation now publishes **both** flagged=true/false outcomes to

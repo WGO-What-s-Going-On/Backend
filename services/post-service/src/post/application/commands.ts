@@ -83,6 +83,8 @@ export class CreatePost {
           {
             post: {
               postId: post.postId,
+              title: post.title,
+              content: post.content,
               authorId,
               latitude: input.latitude,
               longitude: input.longitude,

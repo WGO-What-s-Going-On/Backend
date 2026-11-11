@@ -85,7 +85,7 @@ describe('KakaoOAuthClient', () => {
   });
 });
 
-function createClient(): KakaoOAuthClient {
+function createClient(redirectUris?: string): KakaoOAuthClient {
   return new KakaoOAuthClient(
     new ConfigService({
       auth: {
@@ -93,8 +93,54 @@ function createClient(): KakaoOAuthClient {
           restApiKey: 'kakao-rest-api-key',
           clientSecret: 'kakao-client-secret',
           redirectUri: 'https://example.test/callback',
+          redirectUris,
         },
       },
     }),
   );
 }
+
+it.each([
+  'http://localhost:5173/auth/kakao/callback',
+  'https://example.test/callback',
+])('exchanges with the exact requested allowlisted URI %s', async (uri) => {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(new Response('{"access_token":"token"}'));
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    await createClient(
+      'https://example.test/callback,http://localhost:5173/auth/kakao/callback',
+    ).exchangeAuthorizationCode('code', uri);
+    expect(fetchMock.mock.calls[0]?.[1].body.get('redirect_uri')).toBe(uri);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+it.each([
+  'https://evil.test/callback',
+  'https://example.test/callback/extra',
+  'https://example.test/callback?next=evil',
+  ' https://example.test/callback',
+  '',
+])('rejects unapproved URI before contacting Kakao: %s', async (uri) => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    await expect(
+      createClient().exchangeAuthorizationCode('code', uri),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+it.each([
+  '',
+  'https://*.example.test',
+  'http://example.test/callback',
+  'https://a:b@example.test/callback',
+  'https://example.test/callback#fragment',
+])('rejects unsafe allowlist configuration %s', (uri) => {
+  expect(() => createClient(uri)).toThrow();
+});

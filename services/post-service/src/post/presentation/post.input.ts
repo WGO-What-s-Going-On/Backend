@@ -55,6 +55,7 @@ export function postInput(raw: unknown): PostInput {
     'longitude',
     'radiusM',
     'mediaIds',
+    'coverFocus',
   ]);
   if (body.anonymous !== undefined && typeof body.anonymous !== 'boolean')
     throw new BadRequestException('anonymous must be a boolean');
@@ -63,6 +64,9 @@ export function postInput(raw: unknown): PostInput {
     ...(body.mediaIds === undefined
       ? {}
       : { mediaIds: mediaIds(body.mediaIds) }),
+    ...(body.coverFocus === undefined
+      ? {}
+      : { coverFocus: coverFocus(body.coverFocus) }),
     anonymous: (body.anonymous as boolean | undefined) ?? false,
     title: string(body.title, 'title'),
     content: string(body.content, 'content'),
@@ -134,4 +138,16 @@ export function parentCommentInput(raw: unknown): string | null {
   if (typeof value !== 'string')
     throw new BadRequestException('Invalid parentCommentId');
   return commentId(value);
+}
+
+function coverFocus(raw: unknown) {
+  const value = object(raw);
+  fields(value, ['x', 'y']);
+  const x = number(value.x, 'coverFocus.x');
+  const y = number(value.y, 'coverFocus.y');
+  if (![x, y].every((n) => Number.isInteger(n) && n >= 0 && n <= 100))
+    throw new BadRequestException(
+      'coverFocus coordinates must be integers between 0 and 100',
+    );
+  return { x, y };
 }

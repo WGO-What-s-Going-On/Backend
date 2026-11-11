@@ -195,3 +195,9 @@ Capacitor 앱은 `CORS_ORIGINS`에 `capacitor://localhost`를 명시한다. `.en
 GKE에서는 `webOrigins`에 등록한다. WebSocket 연결에는 별도 `websocketOrigins` 등록이 필요하다.
 5173이 사용 중이면 Vite가 다음 포트를 선택할 수 있으므로 프런트는
 `npm run dev -- --port 5173 --strictPort`로 실행하는 것을 권장한다.
+
+### WebSocket 티켓 발급
+
+`POST /api/v1/realtime/tickets`는 User Access Bearer를 검증하여 `201 { ticket, expiresAt }`를 반환한다. body는 필요 없고 사용자 ID는 검증한 JWT에서만 가져온다. 수명은 최대 45초이며 Access JWT 만료를 넘지 않는다. 응답은 `Cache-Control: no-store`다. 인증 오류 401, 인증 설정 누락 503, 기존 전역 IP rate limit 초과 429. 쿠키만으로 발급하지 않는다.
+
+이 API는 Gateway가 직접 제공하는 연결 인증 기능이며 OpenAPI 병합 결과에도 포함된다. 새 도메인 서비스나 데이터베이스를 추가하지 않는다. 사용법·Redis 소비·배포 순서는 [WS 티켓 계약](../ws-gateway/README.md#일회용-websocket-티켓)을 따른다.

@@ -115,7 +115,7 @@ JWT_SECRET/JWT_ISSUER/JWT_AUDIENCE는 새 JWT_ACCESS_* 이름으로 이전해야
 
 로컬에서는 세 서비스의 JWT_ACCESS_*를 같은 값으로 설정하고 기존 User 로그인 응답의 accessToken으로 접속한다.
 Node 클라이언트는 Authorization: Bearer를, 브라우저는 허용된 Origin에서 접근 가능한 wgo_access_token 쿠키를 사용한다.
-로그인 응답 자체가 이 쿠키를 자동 설정한다는 의미는 아니다. URL query 토큰은 지원하지 않는다.
+로그인 응답 자체가 이 쿠키를 자동 설정한다는 의미는 아니다. Access JWT를 URL query로 보내는 방식은 지원하지 않는다. 쿠키 제한 환경은 아래 일회용 티켓을 사용한다.
 실제 User 토큰 교차 검증은 두 Gateway 빌드 후 User에서 `RUN_GATEWAY_INTEGRATION=1 pnpm exec vitest run test/auth.integration.test.ts`로 실행한다.
 이 테스트는 PostgreSQL·Redis가 필요하며 CI의 user-gateway 작업에서도 실행한다.
 
@@ -188,3 +188,15 @@ HTTP/WS의 도메인, `JWT_COOKIE_NAME`, 허용 Origin과 사용자 JWT 설정�
 Gateway 인스턴스에도 같은 규칙을 적용한다. 클라이언트는 새 버전으로 캐시를
 갱신하거나 댓글 목록을 재조회한다. 재검열용 Moderation 소비자와 이 Gateway를
 Post 수정 API보다 먼저 배포한다.
+
+### 일회용 WebSocket 티켓
+
+HTTP Gateway의 `POST /api/v1/realtime/tickets`에 User Access Bearer를 보내면 `201 { ticket, expiresAt }`를 받는다. 응답은 `Cache-Control: no-store`이며 본문은 필요 없다. 티켓은 최대 45초, 원래 Access Token 만료 이내만 유효하다. `wss://<ws-host>/ws/v1?ticket=<encodeURIComponent(ticket)>`로 연결한다. HTTP 발급 API는 기존 Gateway CORS·IP rate limit을 사용한다.
+
+티켓은 `typ=wgo-ws-ticket+jwt`, issuer `wgo-http-gateway`, audience `wgo-ws-gateway`인 전용 HS256 JWT다. 두 Gateway가 이미 공유하는 JWT_ACCESS_SECRET을 사용하며 일반 Access JWT로 대체할 수 없다. WS는 서명·claim·만료·45초 수명 제한을 검증한 후 Redis의 `SET ws:ticket:used:<jti> 1 NX EX 60` 성공자만 허용한다. 모든 WS 인스턴스가 같은 Redis를 사용해야 한다. Redis에는 티켓 원문 대신 사용한 임의 jti만 60초 저장한다. Redis 데이터 유실·failover로 사용 기록이 사라지면 남은 짧은 유효기간의 재사용 방어도 유실될 수 있으므로 이 키를 임의 삭제하지 않는다.
+
+잘못된·만료·중복 티켓은 401, Redis 장애는 `503 WS_TICKET_UNAVAILABLE`, 금지 Origin은 403이다. 티켓이 있으면 쿠키로 우회하지 않으며 중복 ticket query와 Authorization 헤더 동시 전달은 거부한다. Origin 검증을 먼저 수행한다. 티켓은 연결 시도에 소비되므로 실패나 재연결에는 새 티켓을 발급받는다. Room 참여와 댓글 작성의 기존 Post 인가는 그대로 적용한다. 연결 이후 즉시 로그아웃/정지 차단 정책은 기존과 같다.
+
+애플리케이션 로그는 URL query를 기록하지 않는다. 배포 프록시·LB·분석 도구에서도 query 및 티켓 응답 본문을 기록하지 않도록 확인한다. WS 버전을 먼저 배포하고 HTTP 발급 API·프론트를 연결한다. 실제 Safari·iOS 및 배포 Redis 연결은 별도 검증한다.
+
+로컬 Redis가 6380에 있을 때 `RUN_REDIS_TICKET_INTEGRATION=1 npm test -- test/tickets.test.ts`로 두 Gateway의 동시 소비·Room 인가·장애 검증을 실행한다.

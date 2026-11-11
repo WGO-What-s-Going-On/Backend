@@ -44,9 +44,13 @@ export class AuthService {
   async loginWithKakao(
     authorizationCode: string,
     correlationId: string = randomUUID(),
+    redirectUri?: string,
   ): Promise<KakaoLoginResponse> {
     const kakaoAccessToken =
-      await this.kakaoOAuthClient.exchangeAuthorizationCode(authorizationCode);
+      await this.kakaoOAuthClient.exchangeAuthorizationCode(
+        authorizationCode,
+        redirectUri,
+      );
     const providerUserId =
       await this.kakaoOAuthClient.getUserId(kakaoAccessToken);
     const loginUser = await this.findOrCreateUser(

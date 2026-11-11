@@ -138,7 +138,7 @@ export class GcsMediaStorage {
             preconditionOpts: { ifGenerationMatch: 0 },
             contentType: record.contentType,
             contentDisposition: 'inline',
-            cacheControl: 'private, max-age=60',
+            cacheControl: 'private, max-age=86400',
             contentEncoding: 'identity',
           },
         );
@@ -156,7 +156,14 @@ export class GcsMediaStorage {
   }
 
   async read(record: MediaRecord) {
-    const expires = this.expiry(this.config.readSeconds);
+    this.requireEnabled();
+    // 서명 시작과 만료를 함께 고정해야 다른 요청·Pod에서도 같은 URL이 나온다.
+    // 반 TTL마다 갱신하여 구간 끝에서도 다운로드할 유효시간을 남긴다.
+    const windowMs = Math.floor(this.config.readSeconds / 2) * 1000;
+    const accessibleAt = new Date(Math.floor(Date.now() / windowMs) * windowMs);
+    const expires = new Date(
+      accessibleAt.getTime() + this.config.readSeconds * 1000,
+    );
     try {
       const [url] = await this.client
         .bucket(this.config.bucket)
@@ -164,10 +171,11 @@ export class GcsMediaStorage {
         .getSignedUrl({
           version: 'v4',
           action: 'read',
+          accessibleAt,
           expires,
           responseType: record.contentType,
           responseDisposition: 'inline',
-          queryParams: { 'response-cache-control': 'private, max-age=60' },
+          queryParams: { 'response-cache-control': 'private, max-age=86400' },
         });
       return {
         mediaId: record.mediaId,

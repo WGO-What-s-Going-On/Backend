@@ -1,3 +1,5 @@
+import { postInput } from '../src/post/presentation/post.input.js';
+import { createPost } from '../src/post/domain/post.js';
 import { expect, it } from 'vitest';
 import { activityLevel } from '../src/post/activity.controller.js';
 import { nearbyInput } from '../src/post/nearby.controller.js';
@@ -31,4 +33,50 @@ it('binds nearby cursors to coordinates and filters', () => {
   expect(() =>
     nearbyInput({ latitude: '37', longitude: '127', limit: '101' }),
   ).toThrow();
+});
+
+const draft = {
+  title: 'test',
+  content: 'test',
+  category: 'NEWS',
+  latitude: 37,
+  longitude: 127,
+  radiusM: 100,
+};
+it('accepts cover focus percentages and preserves omission as null', () => {
+  expect(
+    createPost(postInput(draft), 1, 'test', new Date()).coverFocus,
+  ).toBeNull();
+  const input = postInput({
+    ...draft,
+    mediaIds: ['media_123e4567-e89b-42d3-a456-426614174000'],
+    coverFocus: { x: 0, y: 100 },
+  });
+  expect(createPost(input, 1, 'test', new Date()).coverFocus).toEqual({
+    x: 0,
+    y: 100,
+  });
+});
+it.each([
+  null,
+  [],
+  {},
+  { x: 1 },
+  { x: -1, y: 1 },
+  { x: 101, y: 1 },
+  { x: 1.5, y: 1 },
+  { x: '1', y: 1 },
+  { x: 1, y: 1, z: 1 },
+])('rejects invalid cover focus %j', (coverFocus) => {
+  expect(() => postInput({ ...draft, coverFocus })).toThrow();
+});
+it('rejects cover focus without attachments', () => {
+  expect(() =>
+    createPost(
+      postInput({ ...draft, coverFocus: { x: 50, y: 50 } }),
+      1,
+      'test',
+      new Date(),
+    ),
+  ).toThrow('coverFocus requires mediaIds');
 });

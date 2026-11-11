@@ -10,6 +10,13 @@
 | moderation:report-events | moderation-report-notification | notification:report:dead | 본인 신고 접수/취소 |
 | moderation:content-events | moderation-content-notification | notification:content:dead | AI 관찰 receipt만, 제재/완료 알림 없음 |
 
+`CONTENT_MODERATION_EVALUATED`는 `targetType`별로 검증한다. `POST`는 양의 안전 정수
+`postVersion`, `COMMENT`는 비어 있지 않은 `commentId`가 필수다. 댓글의 `activityVersion`은
+기존 계약대로 선택 필드다. targetType 누락·미지원 값과 필수 대상 정보 오류는 DLQ로 격리한다.
+정상 결과는 flagged 값과 관계없이 PostgreSQL receipt를 저장하고 ACK하며 알림·Push를 만들지 않는다.
+동일 eventId의 재전달은 receipt를 중복 저장하지 않는다. 게시물 검사 배포는 Notification 소비자,
+Moderation, Post 생산자 순서로 진행한다.
+
 ## 알림함과 Push
 
 - 댓글·답글·게시글/댓글 공감: 알림함+Push. 본인 행동 제외, User 권위 양방향 차단 검사. 종류별 기존 2분 묶음, 댓글 공감은 댓글·반응 종류별, 답글은 부모별. 게시글 작성자와 부모 작성자가 같으면 답글 한 건. 댓글 삭제/반응 취소는 기여분 차감과 tombstone, 부모 삭제는 자식 알림 취소. 본문/공개용 actor 신원은 푸시에 넣지 않는다.

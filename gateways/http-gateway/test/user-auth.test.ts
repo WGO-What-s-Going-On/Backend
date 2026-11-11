@@ -357,3 +357,67 @@ describe('User route authentication', () => {
     expect(response.statusCode).toBe(404);
   });
 });
+
+describe('WebSocket ticket issuance', () => {
+  it('issues a distinct short-lived ticket for the verified user and does not cache it', async () => {
+    const app = await setup();
+    const now = Math.floor(Date.now() / 1000);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/realtime/tickets',
+      headers: {
+        authorization: `Bearer ${await access({ exp: now + 15 })}`,
+        'x-user-id': '999',
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.headers['cache-control']).toBe('no-store');
+    const body = response.json();
+    const { payload } = await jwtVerify(body.ticket, secret, {
+      typ: 'wgo-ws-ticket+jwt',
+      issuer: 'wgo-http-gateway',
+      audience: 'wgo-ws-gateway',
+    });
+    expect(payload.sub).toBe('42');
+    expect(payload.sid).toBe(sid);
+    expect(payload.exp).toBe(now + 15);
+    expect(body.expiresAt).toBe(new Date((now + 15) * 1000).toISOString());
+    const again = await app.inject({
+      method: 'POST',
+      url: '/api/v1/realtime/tickets',
+      headers: { authorization: `Bearer ${await access()}` },
+    });
+    const next = await jwtVerify(again.json().ticket, secret);
+    expect(next.payload.exp! - next.payload.iat!).toBe(45);
+    expect(next.payload.jti).not.toBe(payload.jti);
+    const replayAsAccess = await app.inject({
+      method: 'POST',
+      url: '/api/v1/realtime/tickets',
+      headers: { authorization: `Bearer ${body.ticket}` },
+    });
+    expect(replayAsAccess.statusCode).toBe(401);
+  });
+  it('rejects missing, expired and cookie-only credentials', async () => {
+    const app = await setup();
+    for (const headers of [
+      {},
+      { cookie: `wgo_access_token=${await access()}` },
+      { authorization: `Bearer ${await access({ exp: 1 })}` },
+    ]) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/realtime/tickets',
+        headers,
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.headers['cache-control']).toBe('no-store');
+    }
+  });
+  it('fails closed when authentication is unconfigured', async () => {
+    const app = await setup(false);
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/v1/realtime/tickets' }))
+        .statusCode,
+    ).toBe(503);
+  });
+});

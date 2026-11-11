@@ -74,6 +74,7 @@ suite('Frontend contracts against MongoDB', () => {
           anonymous: i === 1,
         })
         .expect(201);
+      expect(result.body.coverFocus).toBeNull();
       ids.push(result.body.postId);
     }
     const base = `/api/v1/posts/${ids[0]}`;

@@ -1,3 +1,4 @@
+import { registerRealtimeTickets } from './realtime-tickets.js';
 import {
   loggingOptions,
   registerRequestLogging,
@@ -202,6 +203,7 @@ export async function buildApp(
     },
   );
 
+  registerRealtimeTickets(app, config.userAuth);
   await registerDocs(app, config);
 
   for (const route of proxyRoutes) {

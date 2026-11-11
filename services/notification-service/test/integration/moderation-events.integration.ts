@@ -7,6 +7,8 @@ import { PostgresEventStore } from '../../src/persistence/postgres-event.store.j
 import { NotificationEventWriter } from '../../src/persistence/notification-event.writer.js';
 import { parsePostEvent } from '../../src/event-consumer/post-event.js';
 import { wire } from '../helpers/post-events.js';
+import { moderationEvaluation } from '../helpers/moderation-events.js';
+import { DurableStreamConsumer } from '../../src/event-consumer/durable-stream.consumer.js';
 
 describe('Moderation decisions and confirmed Post applications', () => {
   let h: Awaited<ReturnType<typeof harness>>,
@@ -116,14 +118,104 @@ describe('Moderation decisions and confirmed Post applications', () => {
     expect(await items()).toHaveLength(1);
     expect(await store.deliveries(postId)).toHaveLength(0);
   });
+  it.each(['POST', 'COMMENT'] as const)(
+    'records receipts and ACKs actual %s evaluations without notifications or dead letters',
+    async (targetType) => {
+      const stream = 'moderation:content-events';
+      const group = 'moderation-content-notification';
+      const dead = 'notification:content:dead';
+      h.ownedKeys.add(stream);
+      h.ownedKeys.add(dead);
+      const consumer = new DurableStreamConsumer(
+        h.database,
+        {
+          url: h.config.get<string>('redis.url')!,
+          stream,
+          group,
+          dead,
+          blockMs: 1,
+        },
+        (fields) => handler.handle(stream, fields),
+      );
+      try {
+        await consumer.initialize();
+        for (const flagged of [false, true]) {
+          const event = await moderationEvaluation(targetType, flagged);
+          for (let delivery = 0; delivery < 2; delivery++) {
+            await h.redis.xAdd(stream, '*', event);
+            await consumer.pollOnce();
+            expect((await h.redis.xPending(stream, group)).pending).toBe(0);
+          }
+        }
+        expect(await h.redis.xLen(dead)).toBe(0);
+        expect(
+          (
+            await h.database.pool.query(
+              'SELECT * FROM notification_event_inbox WHERE source_stream=$1',
+              [stream],
+            )
+          ).rowCount,
+        ).toBe(2);
+        expect(
+          (await h.database.pool.query('SELECT * FROM notifications')).rowCount,
+        ).toBe(0);
+        expect(await store.deliveries()).toHaveLength(0);
+        expect(send).not.toHaveBeenCalled();
+      } finally {
+        await consumer.onModuleDestroy();
+      }
+    },
+  );
+  it('still quarantines invalid evaluation identities and ACKs them without a receipt', async () => {
+    const stream = 'moderation:content-events';
+    const group = 'moderation-content-notification';
+    const dead = 'notification:content:dead';
+    h.ownedKeys.add(stream);
+    h.ownedKeys.add(dead);
+    const consumer = new DurableStreamConsumer(
+      h.database,
+      {
+        url: h.config.get<string>('redis.url')!,
+        stream,
+        group,
+        dead,
+        blockMs: 1,
+      },
+      (fields) => handler.handle(stream, fields),
+    );
+    try {
+      await consumer.initialize();
+      for (const targetType of ['POST', 'COMMENT'] as const) {
+        const event = await moderationEvaluation(targetType);
+        const data = JSON.parse(event.data!);
+        delete data[targetType === 'POST' ? 'postVersion' : 'commentId'];
+        await h.redis.xAdd(stream, '*', {
+          ...event,
+          data: JSON.stringify(data),
+        });
+        await consumer.pollOnce();
+      }
+      expect((await h.redis.xPending(stream, group)).pending).toBe(0);
+      const quarantined = await h.redis.xRange(dead, '-', '+');
+      expect(quarantined).toHaveLength(2);
+      expect(
+        quarantined.every((entry) => entry.message.reason === 'INVALID_EVENT'),
+      ).toBe(true);
+      expect(
+        (await h.database.pool.query('SELECT * FROM notification_event_inbox'))
+          .rowCount,
+      ).toBe(0);
+      expect(
+        (await h.database.pool.query('SELECT * FROM notifications')).rowCount,
+      ).toBe(0);
+    } finally {
+      await consumer.onModuleDestroy();
+    }
+  });
   it('never emits sanctions from AI flagged or report review-shaped events', async () => {
     await handler.handle(
       'moderation:content-events',
-      fields('CONTENT_MODERATION_EVALUATED', {
-        postId,
-        commentId: 'comment_1',
-        flagged: true,
-      }),
+      await moderationEvaluation('COMMENT', true),
     );
     const data = {
       reportId: 'report_1',

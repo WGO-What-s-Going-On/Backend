@@ -178,6 +178,18 @@ export function serializePostEvent(row: Record<string, any>): string {
     )
       throw new Error('Invalid comment content or state');
     if (
+      ['PostCreated', 'PostUpdated'].includes(value.eventType) &&
+      ('title' in target || 'content' in target) &&
+      (typeof target.title !== 'string' ||
+        target.title.length < 1 ||
+        target.title.length > 120 ||
+        typeof target.content !== 'string' ||
+        target.content.length < 1 ||
+        target.content.length > 5000 ||
+        !user(value.postVersion))
+    )
+      throw new Error('Invalid post content snapshot');
+    if (
       value.eventType === 'PostUpdated' &&
       !(target.closedAt === null || date(target.closedAt))
     )

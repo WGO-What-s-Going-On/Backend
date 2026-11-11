@@ -99,7 +99,7 @@ jobs:
       - name: Typecheck, lint, unit/integration tests and build
         env:
           SERVICE: ${{ matrix.name }}
-        run: node scripts/ci-run.mjs "$SERVICE"
+        run: npm run verify:ci -- "$SERVICE"
       - name: Build changed runtime image
         if: matrix.build_image
         env:

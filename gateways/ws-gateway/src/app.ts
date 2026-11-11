@@ -1,3 +1,9 @@
+import {
+  authenticateTicket,
+  RedisTicketUses,
+  TicketStoreUnavailableError,
+  type TicketUses,
+} from './realtime/ticket-authentication.js';
 import { safeError, withLogContext } from './observability/logging.js';
 import {
   loggingOptions,
@@ -53,6 +59,7 @@ export interface BuildAppOptions {
   postClient?: PostClient;
   realtimeBus?: RealtimeBus;
   enableEvents?: boolean;
+  ticketUses?: TicketUses;
 }
 
 const socketLogs = new WeakMap<WebSocket, FastifyBaseLogger>();
@@ -146,6 +153,7 @@ export async function buildApp(
   registerRequestLogging(app);
   const authenticator =
     options.authenticator ?? new JwtAuthenticator(config.jwt);
+  const ticketUses = options.ticketUses ?? new RedisTicketUses(config.redisUrl);
   const postClient =
     options.postClient ?? new HttpPostClient(config.postService);
   const boardAccessAuthorizer =
@@ -227,9 +235,37 @@ export async function buildApp(
         }
 
         try {
-          const user = await authenticator.authenticate(request);
+          const tickets = new URL(
+            request.url,
+            'http://localhost',
+          ).searchParams.getAll('ticket');
+          if (
+            tickets.length > 1 ||
+            (tickets.length && request.headers.authorization !== undefined)
+          )
+            throw new AuthenticationError(
+              'Provide exactly one WebSocket ticket without Authorization.',
+            );
+          const user = tickets.length
+            ? await authenticateTicket(
+                tickets[0]!,
+                config.jwt.secret,
+                ticketUses,
+              )
+            : await authenticator.authenticate(request);
           (request as AuthenticatedRequest).authenticatedUser = user;
         } catch (error) {
+          if (error instanceof TicketStoreUnavailableError) {
+            requestFailure(
+              request,
+              'WS_TICKET_UNAVAILABLE',
+              'Ticket verification unavailable.',
+            );
+            return reply.code(503).send({
+              code: 'WS_TICKET_UNAVAILABLE',
+              message: 'Ticket verification unavailable.',
+            });
+          }
           if (error instanceof AuthenticationError) {
             requestFailure(
               request,
@@ -559,6 +595,7 @@ export async function buildApp(
   connections.startHeartbeat();
   app.addHook('onClose', async () => {
     connections.stopHeartbeat();
+    await ticketUses.close();
     if (bus) await bus.close();
   });
 

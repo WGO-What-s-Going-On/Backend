@@ -96,7 +96,10 @@ export function parseModerationEvent(
       v.eventType === 'CONTENT_MODERATION_EVALUATED' &&
         typeof v.flagged === 'boolean' &&
         text(v.postId) &&
-        text(v.commentId),
+        ((v.targetType === 'POST' &&
+          natural(v.postVersion) &&
+          v.postVersion > 0) ||
+          (v.targetType === 'COMMENT' && text(v.commentId))),
       'AI evaluation',
     );
     // An AI observation never becomes a sanction or report-review notification.

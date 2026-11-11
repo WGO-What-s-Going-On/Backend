@@ -125,43 +125,9 @@ export async function userAuthentication(
     delete request.headers['x-session-id'];
     if (policy === 'user') {
       try {
-        const count = request.raw.rawHeaders.filter(
-          (_, i, all) =>
-            i % 2 === 0 && all[i]?.toLowerCase() === 'authorization',
-        ).length;
-        const token =
-          typeof request.headers.authorization === 'string'
-            ? /^Bearer (\S+)$/i.exec(request.headers.authorization)?.[1]
-            : undefined;
-        if (!token || count !== 1) throw new Error();
-        const { payload } = await jwtVerify(
-          token,
-          new TextEncoder().encode(config.accessSecret),
-          {
-            algorithms: ['HS256'],
-            issuer: config.issuer,
-            audience: config.audience,
-            typ: 'JWT',
-            requiredClaims: ['sub', 'sid', 'iat', 'exp'],
-          },
-        );
-        if (
-          typeof payload.sub !== 'string' ||
-          !/^[1-9][0-9]{0,15}$/.test(payload.sub) ||
-          BigInt(payload.sub) > 9007199254740991n ||
-          typeof payload.sid !== 'string' ||
-          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-            payload.sid,
-          ) ||
-          !Number.isInteger(payload.iat) ||
-          !Number.isInteger(payload.exp) ||
-          payload.iat! < 0 ||
-          payload.iat! > Math.floor(Date.now() / 1000) + 5 ||
-          payload.exp! <= payload.iat!
-        )
-          throw new Error();
-        request.headers['x-user-id'] = payload.sub;
-        request.headers['x-session-id'] = payload.sid;
+        const user = await verifyAccessToken(request, config);
+        request.headers['x-user-id'] = user.userId;
+        request.headers['x-session-id'] = user.sessionId;
       } catch (error) {
         const code = !request.headers.authorization
           ? 'AUTH_TOKEN_MISSING'
@@ -194,5 +160,52 @@ export async function userAuthentication(
       .setIssuedAt()
       .setExpirationTime('30s')
       .sign(key)}`;
+  };
+}
+
+export async function verifyAccessToken(
+  request: FastifyRequest,
+  config: UserAuthConfig,
+) {
+  const count = request.raw.rawHeaders.filter(
+    (_, i, all) => i % 2 === 0 && all[i]?.toLowerCase() === 'authorization',
+  ).length;
+  const token =
+    typeof request.headers.authorization === 'string'
+      ? /^Bearer (\S+)$/i.exec(request.headers.authorization)?.[1]
+      : undefined;
+  if (!token || count !== 1) throw new Error();
+  const { payload } = await jwtVerify(
+    token,
+    new TextEncoder().encode(config.accessSecret),
+    {
+      algorithms: ['HS256'],
+      issuer: config.issuer,
+      audience: config.audience,
+      typ: 'JWT',
+      requiredClaims: ['sub', 'sid', 'iat', 'exp'],
+    },
+  );
+  if (
+    typeof payload.sub !== 'string' ||
+    !/^[1-9][0-9]{0,15}$/.test(payload.sub) ||
+    BigInt(payload.sub) > 9007199254740991n ||
+    typeof payload.sid !== 'string' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      payload.sid,
+    ) ||
+    typeof payload.iat !== 'number' ||
+    !Number.isInteger(payload.iat) ||
+    typeof payload.exp !== 'number' ||
+    !Number.isInteger(payload.exp) ||
+    payload.iat < 0 ||
+    payload.iat > Math.floor(Date.now() / 1000) + 5 ||
+    payload.exp <= payload.iat
+  )
+    throw new Error();
+  return {
+    userId: payload.sub,
+    sessionId: payload.sid,
+    expiresAt: payload.exp,
   };
 }

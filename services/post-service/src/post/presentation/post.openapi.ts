@@ -11,7 +11,17 @@ const dateTime = {
   example: '2026-09-26T04:00:00.000Z',
 } as const;
 
+export class CoverFocusBody {
+  @ApiProperty({ type: 'integer', minimum: 0, maximum: 100 }) x!: number;
+  @ApiProperty({ type: 'integer', minimum: 0, maximum: 100 }) y!: number;
+}
+
 export class CreatePostBody {
+  @ApiPropertyOptional({
+    type: CoverFocusBody,
+    description: '대표 사진의 가로·세로 초점(%). mediaIds가 있을 때만 지정.',
+  })
+  coverFocus?: CoverFocusBody;
   @ApiPropertyOptional({ default: false }) anonymous?: boolean;
   @ApiPropertyOptional({
     type: [String],
@@ -114,6 +124,8 @@ export class CountersResponse {
 }
 
 export class PostResponse {
+  @ApiProperty({ type: CoverFocusBody, nullable: true })
+  coverFocus!: CoverFocusBody | null;
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
   closedAt?: string | null;
   @ApiPropertyOptional({ type: String, nullable: true }) authorNickname?:

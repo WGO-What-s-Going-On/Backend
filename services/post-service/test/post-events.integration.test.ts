@@ -1,3 +1,4 @@
+import { serializePostEvent } from '../src/post/infrastructure/post-event-envelope.js';
 import { UserProfiles } from '../src/post/infrastructure/user-profiles.js';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -104,6 +105,104 @@ suite('post activity event contracts', () => {
     }
     await app?.close();
     vi.unstubAllEnvs();
+  });
+
+  it('publishes complete create and partial-edit snapshots accepted by Moderation', async () => {
+    const source = new URL(
+      '../../moderation-service/src/event-consumer/post-event.ts',
+      import.meta.url,
+    );
+    const { parsePostEvent } = await import(/* @vite-ignore */ source.href);
+    const id = await create();
+    let expected = { title: input.title, content: input.content };
+    const created = (await events(id, 'PostCreated'))[0]!;
+    expect(created.payload).toMatchObject({ post: expected, postVersion: 1 });
+    expect(
+      parsePostEvent({
+        eventId: created.eventId,
+        eventType: created.eventType,
+        data: serializePostEvent(created),
+      }).postContent,
+    ).toEqual({ ...expected, authorId: 123, postVersion: 1 });
+    const edits = [
+      { title: 'Edited title' },
+      { content: 'Edited body' },
+      { title: 'Both title', content: 'Both body' },
+    ];
+    for (const [index, details] of edits.entries()) {
+      await lifecycle.update(id, 123, details);
+      expected = { ...expected, ...details };
+      const version = index + 2;
+      const row = await outbox
+        .findOne({
+          aggregateId: id,
+          eventType: 'PostUpdated',
+          'payload.postVersion': version,
+        })
+        .lean();
+      const stored = await db.model('Post').findOne({ postId: id }).lean();
+      expect(stored).toMatchObject({ ...expected, postVersion: version });
+      expect(row!.payload).toMatchObject({
+        post: expected,
+        postVersion: version,
+      });
+      expect(
+        parsePostEvent({
+          eventId: row!.eventId,
+          eventType: row!.eventType,
+          data: serializePostEvent(row!),
+        }).postContent,
+      ).toEqual({ ...expected, authorId: 123, postVersion: version });
+    }
+    await lifecycle.setClosed(id, 123, true);
+    const closed = await outbox
+      .findOne({
+        aggregateId: id,
+        eventType: 'PostUpdated',
+        'payload.postVersion': 5,
+      })
+      .lean();
+    expect(closed!.payload.post).not.toHaveProperty('content');
+    expect(
+      parsePostEvent({
+        eventId: closed!.eventId,
+        eventType: closed!.eventType,
+        data: serializePostEvent(closed!),
+      }),
+    ).not.toHaveProperty('postContent');
+  });
+
+  it('keeps a legacy post revision and its edit snapshot identical', async () => {
+    const id = await create();
+    await db
+      .model('Post')
+      .collection.updateOne({ postId: id }, { $unset: { postVersion: '' } });
+    await lifecycle.update(id, 123, { title: 'Legacy edit' });
+    expect(await db.model('Post').findOne({ postId: id }).lean()).toMatchObject(
+      { title: 'Legacy edit', content: input.content, postVersion: 2 },
+    );
+    expect((await events(id, 'PostUpdated'))[0]!.payload).toMatchObject({
+      post: { title: 'Legacy edit', content: input.content },
+      postVersion: 2,
+    });
+  });
+
+  it('rolls back edited content and version if its Outbox snapshot cannot be saved', async () => {
+    const id = await create();
+    const append = vi
+      .spyOn(outbox, 'create')
+      .mockRejectedValueOnce(new Error('snapshot write failed'));
+    try {
+      await expect(
+        lifecycle.update(id, 123, { content: 'Must roll back' }),
+      ).rejects.toThrow('snapshot write failed');
+    } finally {
+      append.mockRestore();
+    }
+    expect(await db.model('Post').findOne({ postId: id }).lean()).toMatchObject(
+      { title: input.title, content: input.content, postVersion: 1 },
+    );
+    expect(await events(id, 'PostUpdated')).toHaveLength(0);
   });
 
   it('persists author context and monotonically versions concurrent reaction toggles', async () => {
@@ -899,6 +998,11 @@ suite('post activity event contracts', () => {
   });
 
   it('publishes activity contracts and safely replays quarantined events with the same ID', async () => {
+    const editedPostId = await create();
+    await lifecycle.update(editedPostId, 123, {
+      title: 'Published title',
+      content: 'Published body',
+    });
     const worker = new OutboxWorker(outbox);
     try {
       await worker.publishPending();
@@ -906,6 +1010,7 @@ suite('post activity event contracts', () => {
       expect(new Set(entries.map((entry) => entry.message.eventType))).toEqual(
         new Set([
           'PostCreated',
+          'PostUpdated',
           'PostCommentReactionCreated',
           'PostCommentReactionRemoved',
           'PostCommentCreated',
@@ -917,6 +1022,19 @@ suite('post activity event contracts', () => {
           'PostParticipantLeft',
           'PostExpired',
         ]),
+      );
+      expect(
+        entries.map((entry) => JSON.parse(entry.message.data!)),
+      ).toContainEqual(
+        expect.objectContaining({
+          eventType: 'PostUpdated',
+          postVersion: 2,
+          post: expect.objectContaining({
+            postId: editedPostId,
+            title: 'Published title',
+            content: 'Published body',
+          }),
+        }),
       );
       for (const entry of entries) {
         const data = JSON.parse(entry.message.data!);
