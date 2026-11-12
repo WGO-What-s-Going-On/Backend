@@ -174,7 +174,10 @@ export class PostResponse {
   @ApiProperty({ example: 'INCIDENT' }) category!: string;
   @ApiProperty({ example: '현장 상황' }) title!: string;
   @ApiProperty({ example: '현재 교통 상황을 공유합니다.' }) content!: string;
-  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED'], example: 'ACTIVE' })
+  @ApiProperty({
+    enum: ['ACTIVE', 'EXPIRED', 'DELETED', 'HIDDEN'],
+    example: 'ACTIVE',
+  })
   status!: string;
   @ApiProperty({ type: () => LocationResponse })
   locationSnapshot!: LocationResponse;
@@ -279,7 +282,8 @@ export class BatchGetResponse {
 
 export class PostMetaResponse {
   @ApiProperty({ example: postIdExample }) postId!: string;
-  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED'] }) status!: string;
+  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED', 'HIDDEN'] })
+  status!: string;
   @ApiProperty({ example: 'INCIDENT' }) category!: string;
   @ApiProperty({ type: () => LocationResponse })
   locationSnapshot!: LocationResponse;
@@ -291,7 +295,8 @@ export class PostMetaResponse {
 
 export class PostStatusResponse {
   @ApiProperty({ example: postIdExample }) postId!: string;
-  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED'] }) status!: string;
+  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED', 'HIDDEN'] })
+  status!: string;
   @ApiProperty({ ...dateTime, nullable: true, example: null }) expiresAt!:
     | string
     | null;

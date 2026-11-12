@@ -1,7 +1,12 @@
+import { advanceMovement, type MovementState } from './movement.js';
 import { cassandraOptions } from './cassandra-config.js';
 import cassandra from 'cassandra-driver';
 import { createClient } from 'redis';
-import type { Location, LocationStore } from './location.js';
+import {
+  validCoordinates,
+  type Location,
+  type LocationStore,
+} from './location.js';
 
 const latestCacheScript = `
 local current = redis.call('GET', KEYS[1])
@@ -68,6 +73,8 @@ export class CassandraLocationStore implements LocationStore {
     // 같은 좌표나 HTTP 재시도도 별도 이력이 되도록 서버가 매번 새 정렬 키를 만든다.
     const updateId = cassandra.types.TimeUuid.now();
     const saved = { ...location, updatedAt: updateId.getDate() };
+    // Persist authorization state first: a history/cache failure must not lose a detected block.
+    await this.recordMovement(userId, saved);
     await this.db.execute(
       'INSERT INTO user_location_history (user_id, day_bucket, update_id, latitude, longitude, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
       [
@@ -83,6 +90,85 @@ export class CassandraLocationStore implements LocationStore {
     // Cassandra 기록이 성공한 뒤에만 캐시를 바꾸고, 역순 완료된 쓰기는 Lua에서 거른다.
     await this.cacheLatest(userId, saved, updateId, 300).catch(() => undefined);
     return saved;
+  }
+
+  private async readMovement(userId: number) {
+    const result = await this.db.execute(
+      'SELECT * FROM user_movement_state WHERE user_id = ?',
+      [cassandra.types.Long.fromNumber(userId)],
+      { prepare: true, consistency: cassandra.types.consistencies.localSerial },
+    );
+    const row = result.first();
+    if (!row) return null;
+    const location = (prefix: string): Location => {
+      const latitude: unknown = row.get(`${prefix}latitude`);
+      const longitude: unknown = row.get(`${prefix}longitude`);
+      const updatedAt: unknown = row.get(prefix ? 'stop_at' : 'updated_at');
+      if (
+        typeof latitude !== 'number' ||
+        typeof longitude !== 'number' ||
+        !(updatedAt instanceof Date) ||
+        !Number.isFinite(updatedAt.getTime()) ||
+        !validCoordinates(latitude, longitude)
+      )
+        throw new Error('Invalid movement state');
+      return { latitude, longitude, updatedAt };
+    };
+    const reason: unknown = row.get('reason');
+    const version: unknown = row.get('version');
+    if (
+      (reason !== '' &&
+        reason !== 'USER_MOVING' &&
+        reason !== 'MOVEMENT_UNCONFIRMED') ||
+      !(version instanceof cassandra.types.Uuid)
+    )
+      throw new Error('Invalid movement state');
+    const state: MovementState = {
+      location: location(''),
+      stop: location('stop_'),
+      reason,
+    };
+    return { state, version };
+  }
+
+  async movement(userId: number): Promise<MovementState | null> {
+    return (await this.readMovement(userId))?.state ?? null;
+  }
+
+  private async recordMovement(
+    userId: number,
+    location: Location,
+  ): Promise<void> {
+    // Cassandra CAS keeps concurrent Map instances from clearing a newer movement block.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const previous = await this.readMovement(userId);
+      const state = advanceMovement(previous?.state ?? null, location);
+      if (state === previous?.state) return;
+      const values = [
+        cassandra.types.Uuid.random(),
+        state.location.latitude,
+        state.location.longitude,
+        state.location.updatedAt,
+        state.stop.latitude,
+        state.stop.longitude,
+        state.stop.updatedAt,
+        state.reason,
+        cassandra.types.Long.fromNumber(userId),
+      ];
+      const result = previous
+        ? await this.db.execute(
+            'UPDATE user_movement_state SET version = ?, latitude = ?, longitude = ?, updated_at = ?, stop_latitude = ?, stop_longitude = ?, stop_at = ?, reason = ? WHERE user_id = ? IF version = ?',
+            [...values, previous.version],
+            { prepare: true },
+          )
+        : await this.db.execute(
+            'INSERT INTO user_movement_state (version, latitude, longitude, updated_at, stop_latitude, stop_longitude, stop_at, reason, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS',
+            values,
+            { prepare: true },
+          );
+      if (result.wasApplied()) return;
+    }
+    throw new Error('Concurrent movement update; retry location update');
   }
 
   async get(userId: number): Promise<Location | null> {

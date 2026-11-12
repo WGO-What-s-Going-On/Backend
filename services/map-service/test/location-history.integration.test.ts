@@ -1,5 +1,5 @@
 import cassandra from 'cassandra-driver';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CassandraLocationStore, dayBucket } from '../src/store.js';
 
 const suite = process.env.RUN_INTEGRATION === '1' ? describe : describe.skip;
@@ -52,6 +52,65 @@ suite('location history in Cassandra', () => {
       300,
     );
     expect(await store.get(userId + 2)).toMatchObject({ latitude: 38 });
+  });
+
+  it('persists detection across instances and midnight, then releases after ten seconds', async () => {
+    const actor = userId + 5;
+    const now = new Date();
+    now.setUTCHours(0, 0, 5, 0);
+    const clock = vi.spyOn(cassandra.types.TimeUuid, 'now');
+    const write = async (age: number, longitude = 127) => {
+      clock.mockReturnValue(
+        cassandra.types.TimeUuid.fromDate(new Date(now.getTime() - age)),
+      );
+      return store.put(actor, { latitude: 37.5, longitude, updatedAt: now });
+    };
+    const other = new CassandraLocationStore();
+    await other.connect();
+    try {
+      await write(20000, 126.999);
+      expect((await other.movement(actor))?.reason).toBe('');
+      await write(10000);
+      expect((await other.movement(actor))?.reason).toBe('USER_MOVING');
+      await write(1);
+      expect((await other.movement(actor))?.reason).toBe(
+        'MOVEMENT_UNCONFIRMED',
+      );
+      await write(0);
+      expect((await other.movement(actor))?.reason).toBe('');
+      await write(-10000, 127.001);
+      await write(-120000, 127.001);
+      expect((await other.movement(actor))?.reason).toBe(
+        'MOVEMENT_UNCONFIRMED',
+      );
+      // A delayed observation cannot clear a newer block.
+      await write(0);
+      expect((await other.movement(actor))?.reason).toBe(
+        'MOVEMENT_UNCONFIRMED',
+      );
+      await write(-130000, 127.001);
+      expect((await other.movement(actor))?.reason).toBe('');
+    } finally {
+      clock.mockRestore();
+      await other.close();
+    }
+  });
+
+  it('serializes simultaneous first observations without losing the movement state', async () => {
+    const actor = userId + 6;
+    await Promise.all([
+      store.put(actor, {
+        latitude: 37.5,
+        longitude: 127,
+        updatedAt: new Date(),
+      }),
+      store.put(actor, {
+        latitude: 37.5,
+        longitude: 127.001,
+        updatedAt: new Date(),
+      }),
+    ]);
+    expect((await store.movement(actor))?.reason).toBe('USER_MOVING');
   });
 
   it('has seven-day default TTL and excludes expired rows', async () => {

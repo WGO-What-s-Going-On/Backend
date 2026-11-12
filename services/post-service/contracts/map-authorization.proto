@@ -25,7 +25,7 @@ message ParticipationCheck {
 
 message LocationDecision {
   bool allowed = 1;
-  string reason = 2; // LOCATION_MISSING, LOCATION_STALE, OUTSIDE_RADIUS
+  string reason = 2; // LOCATION_MISSING, LOCATION_STALE, OUTSIDE_RADIUS, USER_MOVING, MOVEMENT_UNCONFIRMED
 }
 
 service MapPostQuery {

@@ -66,6 +66,13 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
   const signal = () => AbortSignal.timeout(10000);
   const url = (file: string) =>
     pathToFileURL(resolve('../map-service/dist', file)).href;
+  async function refreshLocation() {
+    await locationStore.put(912341, {
+      latitude,
+      longitude,
+      updatedAt: new Date(),
+    });
+  }
   beforeAll(async () => {
     vi.stubEnv('NODE_ENV', 'test');
     vi.stubEnv('KAKAO_LOCAL_REST_API_KEY', 'semantic-test');
@@ -228,13 +235,18 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
       (b: { messages: StreamEntry[] }) => b.messages,
     ) as StreamEntry[];
   };
-  const similar = (extra = {}) =>
-    request(app.getHttpServer())
+  const similar = async (expectedStatus = 200) => {
+    await refreshLocation();
+    return request(app.getHttpServer())
       .post('/api/v1/posts/similar')
       .set('X-User-Id', '912341')
-      .send({ ...draft, latitude, longitude, ...extra });
+      .send({ ...draft, latitude, longitude })
+      .expect(expectedStatus);
+  };
   it('indexes real creation/outbox events and ranks candidate 200 while excluding candidate 201', async () => {
     for (let i = 0; i < 201; i++) {
+      // The first create uses only the initial location: ordinary users do not wait for a stop.
+      if (i > 0) await refreshLocation();
       const response = await request(app.getHttpServer())
         .post('/api/v1/posts')
         .set('X-User-Id', '912341')
@@ -269,14 +281,14 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
     expect(entries).toHaveLength(201);
     for (const entry of entries) await consumer.process(entry);
     await index.refresh();
-    const response = await similar().expect(200);
+    const response = await similar();
     expect(response.body.items[0].postId).toBe(ids[199]);
     expect(response.body.items[0].similarityPercent).toBe(100);
     expect(response.body.items.map((p: any) => p.postId)).not.toContain(
       ids[200],
     );
     expect(response.body.partialReasons).toEqual(['CANDIDATE_LIMIT']);
-    expect((await similar().expect(200)).body.items).toHaveLength(3);
+    expect((await similar()).body.items).toHaveLength(3);
     expect(
       (await mapIndex.nearby({ latitude, longitude, radiusM: 150, limit: 200 }))
         .items,
@@ -307,9 +319,7 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
     ).rejects.toMatchObject({ code: 3 });
     await index.remove(ids[199]!, signal());
     await index.refresh();
-    expect((await similar().expect(200)).body.partialReasons).toContain(
-      'INDEX_LAG',
-    );
+    expect((await similar()).body.partialReasons).toContain('INDEX_LAG');
     await consumer.indexing.execute(ids[199]!);
     await posts.updateOne(
       { postId: ids[199] },
@@ -317,7 +327,7 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
     );
     await index.refresh();
     expect(
-      (await similar().expect(200)).body.items.map((p: any) => p.postId),
+      (await similar()).body.items.map((p: any) => p.postId),
     ).not.toContain(ids[199]);
   }, 120000);
   const publish = async () => {
@@ -334,6 +344,7 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
       .toBe(0);
   };
   const createLifecyclePost = async () => {
+    await refreshLocation();
     const response = await request(app.getHttpServer())
       .post('/api/v1/posts')
       .set('X-User-Id', '912341')
@@ -434,7 +445,7 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
       await mapConsumer.process(created[0]);
       expect(await cellCount()).toBe(0);
       expect(
-        (await similar().expect(200)).body.items.map((p: any) => p.postId),
+        (await similar()).body.items.map((p: any) => p.postId),
       ).not.toContain(id);
     },
     30000,
@@ -450,7 +461,7 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
       await expect(client.search(latitude, longitude)).rejects.toMatchObject({
         code: 8,
       });
-      const response = await similar().expect(503);
+      const response = await similar(503);
       expect(response.body.code).toBe('SIMILARITY_CHECK_UNAVAILABLE');
       expect(response.body).not.toHaveProperty('items');
     } finally {
@@ -489,7 +500,7 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
         return read;
       });
     try {
-      const response = await similar().expect(503);
+      const response = await similar(503);
       expect(reads.length).toBeGreaterThan(0);
       expect(response.body.code).toBe('SIMILARITY_CHECK_UNAVAILABLE');
       expect(response.body).not.toHaveProperty('items');
@@ -715,6 +726,7 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
         realApp = module.createNestApplication();
         await realApp.init();
         const record = (await source.batch([ids[0]!]))[0]!;
+        await refreshLocation();
         const response = await request(realApp.getHttpServer())
           .post('/api/v1/posts/similar')
           .set('X-User-Id', '912341')

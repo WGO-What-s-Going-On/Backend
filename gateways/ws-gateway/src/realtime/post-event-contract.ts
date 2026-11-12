@@ -3,6 +3,8 @@ export interface PostRealtimeMessage {
   type:
     | 'comment.created'
     | 'comment.updated'
+    | 'comment.hidden'
+    | 'post.hidden'
     | 'comment.deleted'
     | 'post.updated'
     | 'post.created'
@@ -17,12 +19,15 @@ export interface PostRealtimeMessage {
   postVersion?: number;
   activityVersion?: number;
   comment?: Record<string, unknown>;
+  hiddenAt?: string;
   deletedAt?: string;
   expiredAt?: string;
   closedAt?: string | null;
 }
 export class InvalidPostEvent extends Error {}
 const types: Record<string, PostRealtimeMessage['type']> = {
+  PostHidden: 'post.hidden',
+  PostCommentHidden: 'comment.hidden',
   PostUpdated: 'post.updated',
   PostCreated: 'post.created',
   PostDeleted: 'post.deleted',
@@ -78,6 +83,7 @@ export function realtimePostEvent(
     if (
       message.type === 'comment.created' ||
       message.type === 'comment.updated' ||
+      message.type === 'comment.hidden' ||
       message.type === 'comment.deleted'
     ) {
       const comment = value.comment;
@@ -93,7 +99,14 @@ export function realtimePostEvent(
       )
         throw new Error();
       message.activityVersion = version(value.activityVersion);
-      if (message.type === 'comment.deleted') {
+      if (message.type === 'comment.hidden') {
+        if (!date(comment.hiddenAt)) throw new Error();
+        message.comment = {
+          postId: message.postId,
+          commentId: comment.commentId,
+          hiddenAt: comment.hiddenAt,
+        };
+      } else if (message.type === 'comment.deleted') {
         if (!date(comment.deletedAt)) throw new Error();
         // 삭제된 본문과 내부 제재 정보는 클라이언트로 전달하지 않는다.
         message.comment = {
@@ -110,6 +123,16 @@ export function realtimePostEvent(
           throw new Error();
         message.comment = comment;
       }
+    }
+    if (message.type === 'post.hidden') {
+      if (
+        !object(value.post) ||
+        value.post.postId !== message.postId ||
+        !date(value.post.hiddenAt)
+      )
+        throw new Error();
+      message.hiddenAt = value.post.hiddenAt;
+      message.postVersion = version(value.postVersion);
     }
     if (message.type === 'post.updated') {
       if (

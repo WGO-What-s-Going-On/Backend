@@ -114,7 +114,27 @@ export function createGrpcServer(
             message: 'Invalid location check',
           });
         try {
-          callback(null, decide(await store.get(userId), input, input.radiusM));
+          if (participation) {
+            callback(
+              null,
+              decide(await store.get(userId), input, input.radiusM),
+            );
+          } else {
+            const now = new Date();
+            const movement = await store.movement(userId);
+            const location = decide(
+              movement?.location ?? (await store.get(userId)),
+              input,
+              input.radiusM,
+              now,
+            );
+            callback(
+              null,
+              location.allowed && movement?.reason
+                ? { allowed: false, reason: movement.reason }
+                : location,
+            );
+          }
         } catch {
           callback({
             code: status.UNAVAILABLE,

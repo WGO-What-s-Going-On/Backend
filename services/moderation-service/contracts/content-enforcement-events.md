@@ -2,7 +2,7 @@
 
 2026-11-11. 최신 dev의 게시글·댓글 검사와 CONTENT_MODERATION_EVALUATED를 재사용한다.
 이 문서는 이전 작업 브랜치의 카테고리 규칙/HIDE_COMMENT/NO_ACTION 초안을 대체한다.
-그 초안은 운영 비활성·미배포 상태였으며 최신 dev에 결정 소비자는 없다.
+그 초안은 운영 비활성·미배포 상태였으며 Post 결정 소비자는 #132에서 추가했다.
 
 Moderation은 **숨김 결정 발행까지만** 수행한다. Post DB·소비자·실제 가시성·FE는 변경하지 않는다.
 
@@ -107,7 +107,7 @@ DLQ 원본의 동일 sourceEventId 재발행으로 완료한다. 완료 marker�
 5. **HIDE를 기존 영구 삭제 함수에 자동 매핑하지 않는다.** 숨김 상태·목록/상세/답글/미디어/검색·
    실시간 가시성과 복구 규칙은 Post가 확정해야 한다. Moderation은 Post DB를 접근하지 않는다.
 6. 결정 ID·대상 버전·적용/거부 사유·처리 시각을 추적할 결과 피드백 계약을 합의한다.
-   이 피드백 생산자/소비자는 이번에 구현하지 않았다. Notification은 결정 발행만으로 조치 완료를 알리지 않는다.
+   Post 피드백 생산자는 #132에서 추가했으며 Moderation/Notification 피드백 소비자는 미구현이다. Notification은 결정 발행만으로 조치 완료를 알리지 않는다.
 
 ## 운영 제약
 
@@ -120,3 +120,5 @@ moderation:content-decision-published:, moderation:content-policy:다.
 한 Redis primary/DB와 내구성·AOF/복제/백업/noeviction 설정이 필요하다. untagged multi-key Lua는
 Redis Cluster를 지원하지 않는다. 이번 검증은 운영 장애 내구성 보장이 아니다.
 readiness는 활성화 시 결정 stream TYPE과 정책 fingerprint도 검사하며 Post 적용 성공을 뜻하지 않는다.
+
+Post 구현·조회·복구 규칙: [콘텐츠 숨김 소비 계약](../../post-service/contracts/content-decisions.md).

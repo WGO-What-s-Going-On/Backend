@@ -1,3 +1,4 @@
+import type { ContentDecision, DecisionOutcome } from './content-decision.js';
 import type { ModerationLifecycleEvent } from './moderation.js';
 import type {
   CommentRecord,
@@ -14,6 +15,9 @@ import type {
 } from '../domain/post.js';
 
 export type EventType =
+  | 'PostHidden'
+  | 'PostCommentHidden'
+  | 'ContentModerationApplied'
   | 'PostCommentReactionCreated'
   | 'PostCommentReactionRemoved'
   | 'PostVoteWon'
@@ -143,6 +147,17 @@ export interface PostReadQueries {
 }
 
 export interface PostCommands {
+  recordContentDecision(
+    input: ContentDecision,
+    outcome: DecisionOutcome,
+  ): Promise<{ recorded: boolean; outcome: DecisionOutcome }>;
+  hidePost(postId: string, now: Date, postVersion: number): Promise<void>;
+  hideComment(
+    postId: string,
+    commentId: string,
+    now: Date,
+    activityVersion: number,
+  ): Promise<void>;
   updateComment(
     postId: string,
     commentId: string,
