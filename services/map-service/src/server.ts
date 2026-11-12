@@ -1,4 +1,3 @@
-import { decideMovement } from './movement.js';
 import { requestContext, withLogContext } from './observability/logging.js';
 import { observeHttp, observeRpc, rpcContext } from './logging.js';
 import { resolveRegion } from './region.js';
@@ -122,16 +121,18 @@ export function createGrpcServer(
             );
           } else {
             const now = new Date();
-            const history = await store.recent(userId, now);
+            const movement = await store.movement(userId);
             const location = decide(
-              history[0] ?? null,
+              movement?.location ?? (await store.get(userId)),
               input,
               input.radiusM,
               now,
             );
             callback(
               null,
-              location.allowed ? decideMovement(history, now) : location,
+              location.allowed && movement?.reason
+                ? { allowed: false, reason: movement.reason }
+                : location,
             );
           }
         } catch {

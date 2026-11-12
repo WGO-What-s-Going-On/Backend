@@ -26,14 +26,9 @@ const jwk = {
 process.env.MAP_SERVICE_TRUSTED_JWKS = JSON.stringify({ keys: [jwk] });
 const locations = new Map<number, Location>();
 const store: LocationStore = {
-  async recent(userId) {
+  async movement(userId) {
     const location = locations.get(userId);
-    return location
-      ? [0, 10000, 20000, 30000].map((age) => ({
-          ...location,
-          updatedAt: new Date(location.updatedAt.getTime() - age),
-        }))
-      : [];
+    return location ? { location, stop: location, reason: '' } : null;
   },
   async put(userId, location) {
     locations.set(userId, location);
@@ -199,16 +194,13 @@ describe('Map HTTP and gRPC contract', () => {
       longitude: 127,
       radiusM: 250,
     };
-    const recent = vi.spyOn(store, 'recent');
+    const recent = vi.spyOn(store, 'movement');
     try {
-      recent.mockResolvedValue([
-        { latitude: 37.5, longitude: 127, updatedAt: now },
-        {
-          latitude: 37.5,
-          longitude: 127.001,
-          updatedAt: new Date(now.getTime() - 10000),
-        },
-      ]);
+      recent.mockResolvedValue({
+        location: locations.get(789)!,
+        stop: locations.get(789)!,
+        reason: 'USER_MOVING',
+      });
       expect(await call('CheckPostCreation', fields)).toMatchObject({
         allowed: false,
         reason: 'USER_MOVING',

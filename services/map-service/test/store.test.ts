@@ -4,7 +4,9 @@ import { CassandraLocationStore, dayBucket } from '../src/store.js';
 describe('Cassandra location history', () => {
   it('writes every request before updating the latest Redis cache', async () => {
     const store = new CassandraLocationStore();
-    const execute = vi.fn().mockResolvedValue({ first: () => null });
+    const execute = vi
+      .fn()
+      .mockResolvedValue({ first: () => null, wasApplied: () => true });
     const evalCache = vi.fn().mockResolvedValue(1);
     (store.db as any).execute = execute;
     (store.cache as any).eval = evalCache;
@@ -12,15 +14,11 @@ describe('Cassandra location history', () => {
 
     await Promise.all([store.put(123, location), store.put(123, location)]);
 
-    expect(execute).toHaveBeenCalledTimes(2);
-    expect(
-      execute.mock.calls.every(([query]) =>
-        query.startsWith('INSERT INTO user_location_history'),
-      ),
-    ).toBe(true);
-    expect(execute.mock.calls[0]![1][2].toString()).not.toBe(
-      execute.mock.calls[1]![1][2].toString(),
+    const writes = execute.mock.calls.filter(([query]) =>
+      query.startsWith('INSERT INTO user_location_history'),
     );
+    expect(writes).toHaveLength(2);
+    expect(writes[0]![1][2].toString()).not.toBe(writes[1]![1][2].toString());
     expect(evalCache).toHaveBeenCalledTimes(2);
     expect(evalCache.mock.invocationCallOrder[0]).toBeGreaterThan(
       execute.mock.invocationCallOrder[0]!,

@@ -1,6 +1,5 @@
-import { decideMovement } from '../src/movement.js';
 import cassandra from 'cassandra-driver';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CassandraLocationStore, dayBucket } from '../src/store.js';
 
 const suite = process.env.RUN_INTEGRATION === '1' ? describe : describe.skip;
@@ -55,31 +54,63 @@ suite('location history in Cassandra', () => {
     expect(await store.get(userId + 2)).toMatchObject({ latitude: 38 });
   });
 
-  it('reads a bounded stop across midnight from source history', async () => {
+  it('persists detection across instances and midnight, then releases after ten seconds', async () => {
+    const actor = userId + 5;
     const now = new Date();
     now.setUTCHours(0, 0, 5, 0);
-    const actor = userId + 5;
-    for (const age of [0, 10000, 20000, 30000]) {
-      const at = new Date(now.getTime() - age);
-      await store.db.execute(
-        'INSERT INTO user_location_history (user_id, day_bucket, update_id, latitude, longitude, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [
-          cassandra.types.Long.fromNumber(actor),
-          dayBucket(at),
-          cassandra.types.TimeUuid.fromDate(at),
-          37.5,
-          127,
-          at,
-        ],
-        { prepare: true },
+    const clock = vi.spyOn(cassandra.types.TimeUuid, 'now');
+    const write = async (age: number, longitude = 127) => {
+      clock.mockReturnValue(
+        cassandra.types.TimeUuid.fromDate(new Date(now.getTime() - age)),
       );
+      return store.put(actor, { latitude: 37.5, longitude, updatedAt: now });
+    };
+    const other = new CassandraLocationStore();
+    await other.connect();
+    try {
+      await write(20000, 126.999);
+      expect((await other.movement(actor))?.reason).toBe('');
+      await write(10000);
+      expect((await other.movement(actor))?.reason).toBe('USER_MOVING');
+      await write(1);
+      expect((await other.movement(actor))?.reason).toBe(
+        'MOVEMENT_UNCONFIRMED',
+      );
+      await write(0);
+      expect((await other.movement(actor))?.reason).toBe('');
+      await write(-10000, 127.001);
+      await write(-120000, 127.001);
+      expect((await other.movement(actor))?.reason).toBe(
+        'MOVEMENT_UNCONFIRMED',
+      );
+      // A delayed observation cannot clear a newer block.
+      await write(0);
+      expect((await other.movement(actor))?.reason).toBe(
+        'MOVEMENT_UNCONFIRMED',
+      );
+      await write(-130000, 127.001);
+      expect((await other.movement(actor))?.reason).toBe('');
+    } finally {
+      clock.mockRestore();
+      await other.close();
     }
-    const history = await store.recent(actor, now);
-    expect(history).toHaveLength(4);
-    expect(decideMovement(history, now).allowed).toBe(true);
-    expect(await store.recent(actor, new Date(now.getTime() + 120000))).toEqual(
-      [],
-    );
+  });
+
+  it('serializes simultaneous first observations without losing the movement state', async () => {
+    const actor = userId + 6;
+    await Promise.all([
+      store.put(actor, {
+        latitude: 37.5,
+        longitude: 127,
+        updatedAt: new Date(),
+      }),
+      store.put(actor, {
+        latitude: 37.5,
+        longitude: 127.001,
+        updatedAt: new Date(),
+      }),
+    ]);
+    expect((await store.movement(actor))?.reason).toBe('USER_MOVING');
   });
 
   it('has seven-day default TTL and excludes expired rows', async () => {
