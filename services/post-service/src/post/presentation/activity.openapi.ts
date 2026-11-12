@@ -1,4 +1,4 @@
-import { CoverFocusBody } from './post.openapi.js';
+import { CoverFocusBody, DisplayPositionBody } from './post.openapi.js';
 import { ApiProperty } from '@nestjs/swagger';
 import type { PostStatus } from '../domain/post.js';
 
@@ -32,6 +32,8 @@ export class RankingResponse {
 }
 
 export class ActivityItemResponse {
+  @ApiProperty({ type: DisplayPositionBody, nullable: true })
+  displayPosition!: DisplayPositionBody | null;
   @ApiProperty({ type: CoverFocusBody, nullable: true })
   coverFocus!: CoverFocusBody | null;
   @ApiProperty({

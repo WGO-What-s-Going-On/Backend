@@ -72,9 +72,13 @@ suite('Frontend contracts against MongoDB', () => {
           longitude: 127,
           radiusM: 150,
           anonymous: i === 1,
+          ...(i === 0 ? { displayPosition: { x: -12.5, y: 42 } } : {}),
         })
         .expect(201);
       expect(result.body.coverFocus).toBeNull();
+      expect(result.body.displayPosition).toEqual(
+        i === 0 ? { x: -12.5, y: 42 } : null,
+      );
       ids.push(result.body.postId);
     }
     const base = `/api/v1/posts/${ids[0]}`;
@@ -111,6 +115,7 @@ suite('Frontend contracts against MongoDB', () => {
       .set(headers)
       .expect(200);
     expect(detail.body).toMatchObject({
+      displayPosition: { x: -12.5, y: 42 },
       authorNickname: 'nickname-777',
       anonymous: false,
       myReaction: 'CURIOUS',
