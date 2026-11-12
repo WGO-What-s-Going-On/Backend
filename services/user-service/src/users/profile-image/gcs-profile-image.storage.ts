@@ -9,6 +9,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import type { ProfileImageUploadEntity } from '../../database/entities/profile-image-upload.entity.js';
 import {
   IMAGE_URL_SECONDS,
+  IMAGE_UPLOAD_ID,
   profileImageConfig,
 } from './profile-image.config.js';
 
@@ -36,8 +37,21 @@ export class GcsProfileImageStorage {
       );
   }
 
+  private requireManagedRecord(record: ProfileImageUploadEntity) {
+    // Check both keys before any remote effect, including cleanup of corrupted rows.
+    if (
+      !IMAGE_UPLOAD_ID.test(record.id) ||
+      record.uploadKey !== `user-profiles/pending/${record.id}` ||
+      record.objectKey !== `user-profiles/objects/${record.id}`
+    )
+      throw new ServiceUnavailableException(
+        'Invalid managed profile image record',
+      );
+  }
+
   async upload(record: ProfileImageUploadEntity) {
     this.requireEnabled();
+    this.requireManagedRecord(record);
     const expires = record.expiresAt;
     const headers = {
       'Content-Type': record.contentType,
@@ -136,6 +150,7 @@ export class GcsProfileImageStorage {
 
   async verifyAndPromote(record: ProfileImageUploadEntity) {
     this.requireEnabled();
+    this.requireManagedRecord(record);
     try {
       // A copy may succeed even when its response or the following DB commit is lost.
       try {
@@ -192,8 +207,10 @@ export class GcsProfileImageStorage {
     }
   }
 
-  async remove(key: string) {
+  async remove(record: ProfileImageUploadEntity, kind: 'pending' | 'object') {
     this.requireEnabled();
+    this.requireManagedRecord(record);
+    const key = kind === 'pending' ? record.uploadKey : record.objectKey;
     try {
       await this.client
         .bucket(this.config.bucket)

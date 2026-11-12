@@ -167,6 +167,14 @@ GCS 직접 업로드와 서버 검증 완료 API를 통해서만 가능하다. �
 API 예제, 프론트 연동, 마이그레이션, 버킷/IAM 및 복구 절차는
 [프로필 이미지 구현·운영 인계 문서](PROFILE_IMAGE_GCS_IMPLEMENTATION_REPORT.md)를 따른다.
 
+2026-11-11 기준 재검증 결과, FE 요청 순서와 운영 추가 확인 항목은
+[QA #12 프로필 이미지 로컬 검증 보고](QA12_PROFILE_IMAGE_VERIFICATION.md)에 정리했다.
+
+2026-11-12 공유 버킷 정책에서는 `GCS_PROFILE_BUCKET`에 Post와 같은 media 버킷을 명시한다.
+현재 대상은 `project-103a7af1-0f7c-4697-972-wgo-demo-media`다. 쓰기·복사·삭제는
+`user-profiles/pending/<UUID>`와 `user-profiles/objects/<UUID>`가 업로드 ID와 일치해야 한다.
+공유 IAM·레거시 호환성·운영 잔여 작업은 [공유 버킷 변경 보고](SHARED_PROFILE_IMAGE_REPORT.md)를 따른다.
+
 온보딩 미완료 사용자가 유효한 nickname을 직접 제출하면 최초 완료로 처리한다.
 이미 저장된 임시 닉네임과 동일한 값을 제출해도 명시적인 설정으로 인정한다.
 이미지만 수정하면 온보딩은 계속 미완료이며 이벤트를 생성하지 않는다.

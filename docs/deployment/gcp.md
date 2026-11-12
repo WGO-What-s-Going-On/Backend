@@ -4,7 +4,7 @@
 Elasticsearch는 ECK, MongoDB·Redis·Cassandra는 PVC를 사용하는 단일 노드 StatefulSet이다.
 MongoDB는 `rs0` replica set이다. Atlas와 Memorystore는 사용하지 않는다.
 Cloud SQL PostgreSQL 인스턴스 하나에 `wgo_user`와 `wgo_notification` DB 및 IAM 사용자를 분리한다.
-Cloud Storage 버킷은 비공개이다. Post는 기존 media 버킷을, User는 별도 profiles 버킷을 사용하며 서로의 버킷 권한을 부여하지 않는다.
+Cloud Storage는 기존 비공개 media 버킷을 Post와 User가 공유한다. Post는 `post-media/`, User는 `user-profiles/` prefix를 사용한다. 별도 profiles 버킷은 생성하지 않는다.
 
 ## 설정과 권한을 준비한다
 
@@ -28,7 +28,8 @@ Pod 계정과 분리하고 GitHub OIDC provider의 repository 및 main ref 조�
 앱별 GSA에 필요한 자기 secret의 `secretAccessor`를 부여한다.
 User와 Notification에는 Cloud SQL Client 및 Instance User를 부여한다.
 Post에는 미디어 버킷 객체 권한과 서명용 GSA의 `iam.serviceAccounts.signBlob` 권한을 부여한다.
-User에는 profiles 버킷에 한정한 `storage.objects.create/get/delete` custom role과 자기 GSA의 `signBlob` 전용 custom role을 부여한다.
+User에는 공유 media 버킷의 `user-profiles/` 객체로 제한한 `storage.objects.create/get/delete` custom role과 자기 GSA의 `signBlob` 전용 custom role을 부여한다. 객체 list 권한은 사용하지 않는다.
+조건부 allow는 기존의 더 넓은 allow를 제한하지 않는다. bootstrap은 변경 전에 직접 User/public project·bucket grant를 검사해 넓은 권한이면 중단하며, custom role의 권한 drift도 덮어쓰지 않는다. 그룹·상위 folder/organization·직접 KSA principal grant 및 deny 정책까지 포함한 최종 유효 권한은 별도로 검토한다. Post의 기존 권한은 유지한다.
 User 설정·마이그레이션·프론트 연동·운영 확인은 [프로필 이미지 인계 문서](../../services/user-service/PROFILE_IMAGE_GCS_IMPLEMENTATION_REPORT.md)를 따른다.
 서비스 계정 JSON key를 생성하지 않는다.
 
@@ -70,7 +71,7 @@ node scripts/gcp-bootstrap.mjs --apply
 클러스터는 private node와 IAM으로 접근하는 DNS control-plane endpoint를 사용한다.
 Secret Manager CSI의 KSA principal 권한과 SDK용 GSA 권한을 각각 설정한다.
 `webOrigins`에는 실제 프런트엔드 HTTPS origin과 앱의 `capacitor://localhost`를 넣는다.
-HTTP Gateway와 GCS 버킷 CORS에 적용된다. Capacitor origin은 정확히 `capacitor://localhost`만 허용한다.
+HTTP Gateway와 신규 GCS 버킷 CORS에 적용된다. 기존 공유 버킷의 CORS·lifecycle·versioning은 bootstrap이 덮어쓰지 않는다. Capacitor origin은 정확히 `capacitor://localhost`만 허용한다.
 `websocketOrigins`에는 WebSocket에 접속할 웹과 앱의 정확한 origin을 모두 넣는다.
 예를 들어 `["https://demo.example.com", "capacitor://localhost"]`를 지정한다.
 이 필드를 생략한 기존 환경은 `webOrigins`를 그대로 사용한다.
@@ -80,6 +81,7 @@ HTTP Gateway와 GCS 버킷 CORS에 적용된다. Capacitor origin은 정확히 `
 환경 파일에 HTTP와 WebSocket 허용 목록을 각각 등록한다. 한쪽 목록만 바꾸면 다른 쪽에는 반영되지 않는다.
 설정을 변경한 뒤 해당 HTTP Gateway와 WS Gateway를 배포해야 실행 중인 Pod에 반영된다.
 기존 GCS 버킷에도 앱 업로드를 허용하려면 버킷 CORS를 별도로 갱신한다. Gateway 배포만으로 기존 버킷 설정은 바뀌지 않는다.
+별도 승인 후 현재 규칙을 보존하여 필요한 origin/헤더만 추가한다. pending 정리 backstop도 `user-profiles/pending/`에만 적용하고 기존 Post lifecycle과 합친다. 신규 버킷에만 초기 CORS·versioning·프로필 pending lifecycle을 설정한다. 최종 객체는 User DB 참조와 worker로 정리한다.
 허용 origin으로 인증 후 연결과 재연결을 확인하고, 미등록 origin이 `403 WS_ORIGIN_FORBIDDEN`인지 확인한다.
 
 클러스터 인증을 얻은 뒤 foundation을 적용한다. 프로젝트와 클러스터 이름은 환경 파일과 일치시킨다.

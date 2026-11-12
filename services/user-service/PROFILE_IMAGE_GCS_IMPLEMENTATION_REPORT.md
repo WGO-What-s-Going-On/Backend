@@ -2,6 +2,8 @@
 
 작성일: 2026-11-02 (Asia/Seoul).
 
+정책 갱신: 2026-11-12. 팀 결정에 따라 Post의 media 버킷을 공유한다. 아래 브랜치·테스트 기록은 초기 구현 이력이며, 최신 변경·검증은 [공유 버킷 보고](SHARED_PROFILE_IMAGE_REPORT.md)를 따른다.
+
 ## 1. 브랜치와 기준
 
 - 기존 `feat/user-profile-presigned-URL`에서 작업했다. 새 브랜치를 만들지 않았다.
@@ -20,11 +22,11 @@ Post의 `gcs-media.storage.ts`, `media.service.ts`, `media.controller.ts`, `medi
 
 `PATCH /api/v1/users/me`의 **모든 non-null profileImageKey 입력은 400**이다. 빈 문자열이나 자기 키 재입력도 허용하지 않는다. HTTP와 UsersService 양쪽에서 강제한다. `profileImageKey: null` 제거는 유지한다. 기존 nickname/realName 처리, 이벤트 형식, JWT/OAuth/차단/신고/탈퇴 처리는 보존한다. 문자열 설정을 사용하던 클라이언트는 아래 업로드 흐름으로 전환해야 한다.
 
-기존 DB 키는 삭제·변환·검증 강제하지 않는다. 정리 대상도 새 업로드 테이블이 소유하는 객체에 한정한다. 기존 키의 실제 객체 위치는 코드에 정의되어 있지 않으므로, 운영자는 기존 객체가 새 전용 버킷에 있는지 확인하거나 별도의 이관 계획을 세워야 한다. 이 작업은 기존 버킷 객체를 자동 이관하지 않는다. 기존 키가 다른 버킷을 가리키는 환경에서는 그 키의 GET URL로 실제 파일을 읽는 것을 보장하지 않는다.
+기존 DB 키의 조회 형식은 유지하고 삭제·변환하지 않는다. 정리는 업로드 UUID와 두 관리 키가 일치하는 이력만 처리한다. 레거시 객체는 자동 이관·삭제하지 않는다. `user-profiles/` 밖의 레거시 키는 별도 읽기 권한 검토가 필요하며, 호환성을 이유로 User에 `post-media/` 전체 접근권을 부여하지 않는다. 다른 버킷에 있는 객체를 현재 버킷 URL로 읽는 것은 보장하지 않는다.
 
 ## 3. 확정한 저장·복구·동시성 설계
 
-전용 비공개 `<project>-<namespace>-profiles` 버킷을 선택했다. 기존 Post 버킷 공유는 버킷 수가 적지만, User에게 Post 객체 접근권을 주거나 복잡한 prefix 조건을 운영해야 한다. 별도 버킷 하나로 권한과 수명주기를 분리하는 편이 현재 구조에서 단순하다.
+기존 비공개 `<project>-<namespace>-media` 버킷을 공유한다. Post 객체는 `post-media/`, User 객체는 `user-profiles/`로 구분하며 User 쓰기·복사·삭제 전에 UUID와 두 객체 키의 일치를 확인한다. 별도 profiles 버킷 강제 검증은 제거했다.
 
 - 허용 형식: JPEG, PNG, WebP. 파일 크기: 1..2,097,152 bytes.
 - 업로드/조회 URL은 모두 300초. 업로드의 완료 가능 기한도 발급 후 300초다.
@@ -159,16 +161,16 @@ GCS 삭제/DB 실패 시 기록을 유지한다. tombstone은 지우지 않으�
 
 `scripts/gcp-bootstrap.mjs` dry-run 계획에만 아래 내용을 추가했다. **실제 `--apply`는 실행하지 않았다.**
 
-- 전용 비공개 profiles 버킷: Uniform Bucket Level Access, Public Access Prevention.
-- 프로젝트 custom role `wgoProfileObjects`: storage.objects.create/get/delete만. profiles 버킷에서 User GSA에만 binding. list/버킷 관리/Post 접근은 부여하지 않는다.
+- 공유 media 버킷: 기존 Uniform Bucket Level Access, Public Access Prevention과 Post 설정을 보존한다.
+- 프로젝트 custom role `wgoProfileObjects`: storage.objects.create/get/delete만. 공유 버킷에서 User GSA에 `user-profiles/` prefix 조건으로 binding. list/버킷 관리/Post 접근은 부여하지 않는다. 기존의 더 넓은 allow는 자동 축소하지 않고 운영 검토 대상으로 중단한다.
 - custom role `wgoProfileSigner`: iam.serviceAccounts.signBlob만. User GSA가 자기 자신에 대해서만 사용. JSON key나 광범위 TokenCreator를 추가하지 않는다.
 - 기존 KSA↔GSA Workload Identity와 ADC/Secret Manager 구조를 재사용한다.
 - Post의 기존 media 버킷 및 objectAdmin/서명 binding은 그대로 유지한다.
-- 기존 검증된 `webOrigins`만 GET/HEAD/PUT CORS에 적용. Content-Type, Content-Length, ETag, generation/precondition 헤더를 반영한다.
-- pending 객체 1일 lifecycle 삭제. profiles 버킷 versioning은 활성화하지 않는다.
-- GKE User ConfigMap에 `GCS_PROFILE_ENABLED=true`, `GCS_PROFILE_BUCKET=<project>-<namespace>-profiles`를 렌더링한다. 로컬 .env.example 기본값은 false다. 실제 .env/secret 값은 변경하거나 출력하지 않았다.
+- 신규 공유 버킷에 검증된 `webOrigins`의 GET/HEAD/PUT CORS와 Content-Type/Content-Length/ETag/generation 헤더를 초기 설정한다. 기존 공유 버킷의 CORS·lifecycle·versioning은 변경하지 않는다.
+- 신규 버킷만 versioning과 `user-profiles/pending/`의 1일 lifecycle을 초기 설정한다. 기존 버킷의 backstop은 별도 승인 후 현재 규칙을 보존하여 추가한다.
+- GKE User ConfigMap에 `GCS_PROFILE_ENABLED=true`, `GCS_PROFILE_BUCKET=<project>-<namespace>-media`를 렌더링한다. 로컬 .env.example 활성화 기본값은 false다. 실제 .env/Secret은 변경하지 않는다.
 
-기능 활성화 시 bucket 검증, Post 버킷과 같은 이름의 구성 거부, production의 credential JSON 파일·emulator 설정 거부를 적용했다. 기존 리소스나 custom role drift는 bootstrap이 전부 수정하지 않으므로 운영자가 IAM/UBLA/CORS/lifecycle을 확인한다. 워크로드는 storage client가 ADC로 signBlob을 사용할 수 있는 GSA email/token을 얻어야 한다.
+기능 활성화 시 bucket 이름과 production의 credential JSON 파일·emulator 설정을 검증한다. Post와 같은 버킷은 허용한다. 기존 리소스·그룹·상위 정책의 전체 drift는 운영자가 확인해야 하며, bootstrap은 직접/public storage grant와 기존 custom role 권한 drift를 검사해 자동 변경 대신 중단한다. 워크로드는 ADC로 자기 GSA의 signBlob을 사용할 수 있어야 한다.
 
 공식 근거: [GCS Signed URLs](https://docs.cloud.google.com/storage/docs/access-control/signed-urls), [request preconditions](https://docs.cloud.google.com/storage/docs/request-preconditions), [canonical signed headers](https://docs.cloud.google.com/storage/docs/authentication/canonical-requests).
 
@@ -182,8 +184,8 @@ Gateway는 HS256 Access JWT를 검증해 사용자 문맥을 만들고 ES256 서
 
 ## 9. 실제 GCP 배포 전 작업
 
-1. 기존 키의 객체 위치와 전용 버킷 이관 필요 여부를 확인한다. 기존 키를 일괄 무효화하지 않는다.
-2. 검토된 environment의 프로젝트·namespace·webOrigins를 확인하고, 별도 승인된 운영 작업으로 전용 버킷/custom role/IAM/CORS/lifecycle을 준비한다. Post 권한이 그대로인지 확인한다.
+1. 기존 키의 객체 위치와 제한된 읽기 권한 필요 여부를 확인한다. 기존 키를 일괄 무효화하거나 자동 이관하지 않는다.
+2. 검토된 environment의 프로젝트·namespace·webOrigins와 공유 media 버킷을 확인하고, 별도 승인 후 User의 prefix 조건부 객체 권한·자기 GSA signBlob을 적용한다. 기존 Post 권한·CORS·lifecycle을 보존한다.
 3. Secret Manager의 고정 버전과 GKE ConfigMap에 활성화 설정이 충돌하지 않는지 확인한다. JSON key를 만들지 않는다. 로컬 서명 실험에는 서비스 계정 impersonation 가능한 ADC를 사용한다.
 4. 새 migration을 기존 job으로 실행한 뒤 User/Gateway를 호환되는 버전으로 배포하고 통합 Swagger를 다시 수집한다. 구버전 Gateway는 새 경로를 허용하지 않는다.
 5. 실제 frontend origin에서 JPEG/PNG/WebP 업로드, exact headers/Content-Length, 5분 후 PUT 실패, 중복 PUT 412, 실제 바이트 검증과 Signed GET, 양방향 차단을 E2E 확인한다. IAM 최소 권한으로 copy/get/delete/signBlob이 동작하는지 확인한다.
