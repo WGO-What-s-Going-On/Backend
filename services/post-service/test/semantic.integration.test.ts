@@ -66,47 +66,12 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
   const signal = () => AbortSignal.timeout(10000);
   const url = (file: string) =>
     pathToFileURL(resolve('../map-service/dist', file)).href;
-  async function seedStationaryLocation() {
-    const cassandra = createRequire(resolve('../map-service/package.json'))(
-      'cassandra-driver',
-    );
-    const now = new Date();
-    const userId = cassandra.types.Long.fromNumber(912341);
-    const days = [
-      ...new Set(
-        [now, new Date(now.getTime() - 30000)].map((date) =>
-          date.toISOString().slice(0, 10),
-        ),
-      ),
-    ];
-    // Real Map authorization now needs a 30-second stop, not one latest location.
-    // Reset this fixture's history so repeated creates cannot crowd older samples out of the bounded read.
-    for (const day of days) {
-      await locationStore.db.execute(
-        'DELETE FROM user_location_history WHERE user_id = ? AND day_bucket = ?',
-        [userId, day],
-        { prepare: true },
-      );
-    }
-    await locationStore.db.batch(
-      [30000, 20000, 10000].map((age) => {
-        const at = new Date(now.getTime() - age);
-        return {
-          query:
-            'INSERT INTO user_location_history (user_id, day_bucket, update_id, latitude, longitude, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-          params: [
-            userId,
-            at.toISOString().slice(0, 10),
-            cassandra.types.TimeUuid.fromDate(at),
-            latitude,
-            longitude,
-            at,
-          ],
-        };
-      }),
-      { prepare: true },
-    );
-    await locationStore.put(912341, { latitude, longitude, updatedAt: now });
+  async function refreshLocation() {
+    await locationStore.put(912341, {
+      latitude,
+      longitude,
+      updatedAt: new Date(),
+    });
   }
   beforeAll(async () => {
     vi.stubEnv('NODE_ENV', 'test');
@@ -271,26 +236,17 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
     ) as StreamEntry[];
   };
   const similar = async (expectedStatus = 200) => {
-    await seedStationaryLocation();
+    await refreshLocation();
     return request(app.getHttpServer())
       .post('/api/v1/posts/similar')
       .set('X-User-Id', '912341')
       .send({ ...draft, latitude, longitude })
       .expect(expectedStatus);
   };
-  it('rejects creation with only one observed location before the stationary fixture is prepared', async () => {
-    const response = await request(app.getHttpServer())
-      .post('/api/v1/posts')
-      .set('X-User-Id', '912341')
-      .send({ ...draft, latitude, longitude })
-      .expect(403);
-    expect(response.body.message).toBe('MOVEMENT_UNCONFIRMED');
-    expect(await posts.countDocuments()).toBe(0);
-  });
-
   it('indexes real creation/outbox events and ranks candidate 200 while excluding candidate 201', async () => {
     for (let i = 0; i < 201; i++) {
-      await seedStationaryLocation();
+      // The first create uses only the initial location: ordinary users do not wait for a stop.
+      if (i > 0) await refreshLocation();
       const response = await request(app.getHttpServer())
         .post('/api/v1/posts')
         .set('X-User-Id', '912341')
@@ -388,7 +344,7 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
       .toBe(0);
   };
   const createLifecyclePost = async () => {
-    await seedStationaryLocation();
+    await refreshLocation();
     const response = await request(app.getHttpServer())
       .post('/api/v1/posts')
       .set('X-User-Id', '912341')
@@ -770,7 +726,7 @@ suite('semantic pipeline with real stores and Map gRPC', () => {
         realApp = module.createNestApplication();
         await realApp.init();
         const record = (await source.batch([ids[0]!]))[0]!;
-        await seedStationaryLocation();
+        await refreshLocation();
         const response = await request(realApp.getHttpServer())
           .post('/api/v1/posts/similar')
           .set('X-User-Id', '912341')

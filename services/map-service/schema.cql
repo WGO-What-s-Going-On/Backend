@@ -20,6 +20,19 @@ CREATE TABLE IF NOT EXISTS wgo_map.user_location_history (
   AND default_time_to_live = 604800
   AND compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_unit': 'HOURS', 'compaction_window_size': '6'};
 
+-- No TTL: a detected movement block survives pauses until an observed stop.
+CREATE TABLE IF NOT EXISTS wgo_map.user_movement_state (
+  user_id bigint PRIMARY KEY,
+  version uuid,
+  latitude double,
+  longitude double,
+  updated_at timestamp,
+  stop_latitude double,
+  stop_longitude double,
+  stop_at timestamp,
+  reason text
+);
+
 CREATE TABLE IF NOT EXISTS wgo_map.post_locations (
   post_id text PRIMARY KEY,
   event_id text,
