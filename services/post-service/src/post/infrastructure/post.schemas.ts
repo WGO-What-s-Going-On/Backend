@@ -6,6 +6,16 @@ const options = { versionKey: false, strict: true } as const;
 export const PostSchema = new Schema(
   {
     postId: { type: String, required: true, unique: true },
+    displayPosition: {
+      type: new Schema(
+        {
+          x: { type: Number, required: true },
+          y: { type: Number, required: true },
+        },
+        { _id: false },
+      ),
+      default: null,
+    },
     coverFocus: {
       type: new Schema(
         {
@@ -41,6 +51,7 @@ export const PostSchema = new Schema(
     voteRevision: { type: Number, default: 0 },
     bucketCount: { type: Number, required: true, default: 1 },
     postVersion: { type: Number, default: 1 },
+    hiddenAt: { type: Date, default: null },
     deletedAt: { type: Date, default: null },
     expiredAt: { type: Date, default: null },
   },
@@ -75,6 +86,7 @@ export const CommentSchema = new Schema(
     mutationId: { type: String },
     activityVersion: { type: Number, default: 1 },
     voteSelectionFence: { type: Number, default: 0 },
+    hiddenAt: { type: Date, default: null },
     deletedAt: { type: Date, default: null },
     content: { type: String, required: true },
     status: { type: String, required: true },
@@ -220,6 +232,16 @@ export const ModerationReceiptSchema = new Schema(
     occurredAt: { type: Date, required: true },
     correlationId: { type: String, required: true },
     processedAt: { type: Date, required: true },
+    moderationDecisionId: String,
+    targetType: String,
+    commentId: String,
+    postVersion: Number,
+    activityVersion: Number,
+    sourceEventId: String,
+    evaluationEventId: String,
+    policyVersion: String,
+    policyFingerprint: String,
+    outcome: String,
   },
   options,
 );

@@ -47,6 +47,7 @@ export class FrontendViews {
           reactionCounts[row._id.type] = row.count;
       return {
         ...post,
+        displayPosition: post.displayPosition ?? null,
         coverFocus: post.coverFocus ?? null,
         authorId:
           post.anonymous && post.authorId !== actor ? null : post.authorId,

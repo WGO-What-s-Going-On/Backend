@@ -11,12 +11,27 @@ const dateTime = {
   example: '2026-09-26T04:00:00.000Z',
 } as const;
 
+export class DisplayPositionBody {
+  @ApiProperty({
+    type: Number,
+    description: '화면 배치 x 좌표 (클라이언트 레이아웃 단위)',
+  })
+  x!: number;
+  @ApiProperty({
+    type: Number,
+    description: '화면 배치 y 좌표 (클라이언트 레이아웃 단위)',
+  })
+  y!: number;
+}
+
 export class CoverFocusBody {
   @ApiProperty({ type: 'integer', minimum: 0, maximum: 100 }) x!: number;
   @ApiProperty({ type: 'integer', minimum: 0, maximum: 100 }) y!: number;
 }
 
 export class CreatePostBody {
+  @ApiPropertyOptional({ type: DisplayPositionBody })
+  displayPosition?: DisplayPositionBody;
   @ApiPropertyOptional({
     type: CoverFocusBody,
     description: '대표 사진의 가로·세로 초점(%). mediaIds가 있을 때만 지정.',
@@ -124,6 +139,8 @@ export class CountersResponse {
 }
 
 export class PostResponse {
+  @ApiProperty({ type: DisplayPositionBody, nullable: true })
+  displayPosition!: DisplayPositionBody | null;
   @ApiProperty({ type: CoverFocusBody, nullable: true })
   coverFocus!: CoverFocusBody | null;
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
@@ -157,7 +174,10 @@ export class PostResponse {
   @ApiProperty({ example: 'INCIDENT' }) category!: string;
   @ApiProperty({ example: '현장 상황' }) title!: string;
   @ApiProperty({ example: '현재 교통 상황을 공유합니다.' }) content!: string;
-  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED'], example: 'ACTIVE' })
+  @ApiProperty({
+    enum: ['ACTIVE', 'EXPIRED', 'DELETED', 'HIDDEN'],
+    example: 'ACTIVE',
+  })
   status!: string;
   @ApiProperty({ type: () => LocationResponse })
   locationSnapshot!: LocationResponse;
@@ -262,7 +282,8 @@ export class BatchGetResponse {
 
 export class PostMetaResponse {
   @ApiProperty({ example: postIdExample }) postId!: string;
-  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED'] }) status!: string;
+  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED', 'HIDDEN'] })
+  status!: string;
   @ApiProperty({ example: 'INCIDENT' }) category!: string;
   @ApiProperty({ type: () => LocationResponse })
   locationSnapshot!: LocationResponse;
@@ -274,7 +295,8 @@ export class PostMetaResponse {
 
 export class PostStatusResponse {
   @ApiProperty({ example: postIdExample }) postId!: string;
-  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED'] }) status!: string;
+  @ApiProperty({ enum: ['ACTIVE', 'EXPIRED', 'DELETED', 'HIDDEN'] })
+  status!: string;
   @ApiProperty({ ...dateTime, nullable: true, example: null }) expiresAt!:
     | string
     | null;

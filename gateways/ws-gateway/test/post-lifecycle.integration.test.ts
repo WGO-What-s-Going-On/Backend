@@ -25,7 +25,7 @@ function wire(
       schemaVersion: 1,
       correlationId: 'req-test',
       occurredAt: now,
-      post: { postId, expiredAt: now, deletedAt: now },
+      post: { postId, expiredAt: now, deletedAt: now, hiddenAt: now },
       postVersion: 2,
       ...changes,
     }),
@@ -143,6 +143,7 @@ async function fixture(
 
 suite('Post lifecycle realtime delivery', () => {
   it.each([
+    ['PostHidden', 'post.hidden'],
     ['PostDeleted', 'post.deleted'],
     ['PostExpired', 'post.expired'],
   ])(
@@ -215,6 +216,80 @@ suite('Post lifecycle realtime delivery', () => {
       await f.drain();
       for (const inbox of f.inboxes) {
         expect(inbox.filter((m) => m.type === 'comment.deleted')).toHaveLength(
+          1,
+        );
+        expect(inbox.some((m) => m.type === 'comment.created')).toBe(false);
+        expect(JSON.stringify(inbox)).not.toContain('removed secret');
+      }
+      // Redis 상태는 로컬 seen 캐시와 독립적으로 남는다.
+      expect(
+        await f.redis.hGet(
+          'post:realtime:state:post-comment',
+          'deleted:comment-1',
+        ),
+      ).toBe('1');
+      expect((await f.command(0, 'comment.list', 'post-comment')).type).toBe(
+        'command.result',
+      );
+      await f.restart(0);
+      await f.command(0, 'board.join', 'post-comment');
+      await f.send(
+        wire('post-comment', 'PostCommentCreated', {
+          activityVersion: 1,
+          comment: {
+            commentId: 'comment-1',
+            postId: 'post-comment',
+            content: 'old body',
+            createdAt: now,
+          },
+        }),
+      );
+      await f.send(wire('post-comment', 'PostReactionCreated'));
+      await vi.waitFor(() =>
+        expect(
+          f.inboxes[0]!.some((m) => m.type === 'post.reaction.created'),
+        ).toBe(true),
+      );
+      expect(f.inboxes[0]!.some((m) => m.type === 'comment.created')).toBe(
+        false,
+      );
+    });
+  });
+
+  it('does not resurrect a hidden comment from duplicate or late creation events, using persisted consumer state', async () => {
+    await fixture(async (f) => {
+      for (let i = 0; i < 2; i++)
+        await f.command(i, 'board.join', 'post-comment');
+      const now = new Date().toISOString();
+      const deleted = wire('post-comment', 'PostCommentHidden', {
+        activityVersion: 2,
+        comment: {
+          commentId: 'comment-1',
+          postId: 'post-comment',
+          hiddenAt: now,
+          content: 'removed secret',
+        },
+      });
+      await f.send(deleted);
+      await vi.waitFor(() => {
+        for (const inbox of f.inboxes)
+          expect(inbox.some((m) => m.type === 'comment.hidden')).toBe(true);
+      });
+      await f.send(deleted);
+      await f.send(
+        wire('post-comment', 'PostCommentCreated', {
+          activityVersion: 1,
+          comment: {
+            commentId: 'comment-1',
+            postId: 'post-comment',
+            content: 'old body',
+            createdAt: now,
+          },
+        }),
+      );
+      await f.drain();
+      for (const inbox of f.inboxes) {
+        expect(inbox.filter((m) => m.type === 'comment.hidden')).toHaveLength(
           1,
         );
         expect(inbox.some((m) => m.type === 'comment.created')).toBe(false);

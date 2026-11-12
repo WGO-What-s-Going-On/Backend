@@ -127,7 +127,11 @@ export class CreateComment {
         authorId,
         mutationId,
       );
-      if (existing) return existing;
+      if (existing) {
+        if (existing.status !== 'ACTIVE')
+          throw new PostNotFoundError('Comment not found');
+        return existing;
+      }
     }
     const participant = await this.queries.findParticipant(postId, authorId);
     if (!participant || participant.leftAt !== null)
@@ -198,7 +202,11 @@ export class CreateComment {
             authorId,
             mutationId,
           );
-          if (existing) return existing;
+          if (existing) {
+            if (existing.status !== 'ACTIVE')
+              throw new PostNotFoundError('Comment not found');
+            return existing;
+          }
         }
         const participant = await transaction.queries.findParticipant(
           postId,
@@ -241,7 +249,11 @@ export class CreateComment {
           authorId,
           mutationId,
         );
-        if (existing) return existing;
+        if (existing) {
+          if (existing.status !== 'ACTIVE')
+            throw new PostNotFoundError('Comment not found');
+          return existing;
+        }
       }
       throw error;
     }

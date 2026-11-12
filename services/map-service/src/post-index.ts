@@ -83,7 +83,9 @@ export function parsePostStatus(
   }
   if (
     !object(value) ||
-    !['PostExpired', 'PostDeleted'].includes(String(value.eventType)) ||
+    !['PostExpired', 'PostDeleted', 'PostHidden'].includes(
+      String(value.eventType),
+    ) ||
     value.eventType !== fields.eventType ||
     value.schemaVersion !== 1 ||
     value.producer !== 'post-service' ||
@@ -98,7 +100,7 @@ export function parsePostStatus(
     throw new Error('Invalid post status event');
   return {
     postId: value.aggregateId,
-    status: value.eventType === 'PostDeleted' ? 'DELETED' : 'EXPIRED',
+    status: value.eventType === 'PostExpired' ? 'EXPIRED' : 'DELETED',
     occurredAt: new Date(value.occurredAt),
   };
 }

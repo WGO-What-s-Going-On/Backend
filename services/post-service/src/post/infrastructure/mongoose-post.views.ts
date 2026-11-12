@@ -87,7 +87,7 @@ export class MongoosePostViews implements OnModuleInit {
             .findOne({ postId: input.postId })
             .session(session)
             .lean();
-          if (!post || post.status === 'DELETED')
+          if (!post || post.status === 'DELETED' || post.status === 'HIDDEN')
             throw new PostNotFoundError('Post not found');
           const receipt = await this.views.updateOne(
             { postId: input.postId, userId: input.userId, day },

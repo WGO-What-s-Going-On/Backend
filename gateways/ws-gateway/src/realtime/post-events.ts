@@ -19,7 +19,7 @@ const deadStream = 'post-realtime:dead';
 const publishOrdered = `
 local m=cjson.decode(ARGV[1])
 local terminal=redis.call('HGET',KEYS[1],'status')
-local ending=m.type=='post.deleted' or m.type=='post.expired'
+local ending=m.type=='post.hidden' or m.type=='post.deleted' or m.type=='post.expired'
 if terminal and not ending then return 0 end
 if ending then
   if terminal=='post.deleted' or terminal==m.type then return 0 end
@@ -28,7 +28,7 @@ if ending then
 elseif m.type=='post.updated' then
   local prior=tonumber(redis.call('HGET',KEYS[1],'updateVersion') or '0')
   if prior>=tonumber(m.postVersion) then return 0 end
-elseif m.type=='comment.created' or m.type=='comment.updated' or m.type=='comment.deleted' then
+elseif m.type=='comment.created' or m.type=='comment.updated' or (m.type=='comment.deleted' or m.type=='comment.hidden') then
   local field='comment:'..m.comment.commentId
   local deleted=redis.call('HGET',KEYS[1],'deleted:'..m.comment.commentId)
   if deleted then return 0 end
@@ -42,9 +42,9 @@ if ending then
   redis.call('HSET',KEYS[1],'status',m.type,'postVersion',tostring(m.postVersion))
 elseif m.type=='post.updated' then
   redis.call('HSET',KEYS[1],'updateVersion',tostring(m.postVersion))
-elseif m.type=='comment.created' or m.type=='comment.updated' or m.type=='comment.deleted' then
+elseif m.type=='comment.created' or m.type=='comment.updated' or (m.type=='comment.deleted' or m.type=='comment.hidden') then
   redis.call('HSET',KEYS[1],'comment:'..m.comment.commentId,tostring(m.activityVersion))
-  if m.type=='comment.deleted' then redis.call('HSET',KEYS[1],'deleted:'..m.comment.commentId,'1') end
+  if (m.type=='comment.deleted' or m.type=='comment.hidden') then redis.call('HSET',KEYS[1],'deleted:'..m.comment.commentId,'1') end
 end
 return delivered
 `;
@@ -326,7 +326,9 @@ export class PostEvents implements RealtimeBus {
         this.seen.delete(this.seen.keys().next().value!);
       this.seen.set(message.eventId, now);
       const terminal =
-        message.type === 'post.deleted' || message.type === 'post.expired';
+        message.type === 'post.hidden' ||
+        message.type === 'post.deleted' ||
+        message.type === 'post.expired';
       const sockets = [...this.subscriptions.socketsForBoard(message.boardId)];
       // 인가 await 중의 join도 먼저 무효화한다. 다른 Room·영속 참여 정보는 변경하지 않는다.
       if (terminal || (message.type === 'post.updated' && message.closedAt))

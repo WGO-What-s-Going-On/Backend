@@ -5,9 +5,11 @@ import { MODERATION_PROVIDER } from './moderation-provider.js';
 import { MODERATION_RESULT_REPOSITORY } from './moderation-result.repository.js';
 import { OpenAiModerationAdapter } from './openai-moderation.adapter.js';
 import { RedisModerationResultRepository } from './redis-moderation-result.repository.js';
+import { ContentEnforcementService } from './content-enforcement.service.js';
 
 @Module({
   providers: [
+    ContentEnforcementService,
     OpenAiModerationAdapter,
     RedisModerationResultRepository,
     { provide: MODERATION_PROVIDER, useExisting: OpenAiModerationAdapter },
@@ -17,6 +19,10 @@ import { RedisModerationResultRepository } from './redis-moderation-result.repos
     },
     ContentModerationService,
   ],
-  exports: [ContentModerationService, RedisModerationResultRepository],
+  exports: [
+    ContentModerationService,
+    RedisModerationResultRepository,
+    ContentEnforcementService,
+  ],
 })
 export class ContentModerationModule {}

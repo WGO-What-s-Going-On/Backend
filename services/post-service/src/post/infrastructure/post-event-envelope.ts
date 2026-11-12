@@ -42,7 +42,28 @@ export function serializePostEvent(row: Record<string, any>): string {
       !date(value.occurredAt)
     )
       throw new Error('Invalid envelope');
+    if (value.eventType === 'ContentModerationApplied') {
+      const decision = value.decision;
+      if (
+        !object(decision) ||
+        decision.postId !== value.aggregateId ||
+        !/^decision_[0-9a-f]{64}$/.test(decision.moderationDecisionId) ||
+        ![
+          'APPLIED',
+          'STALE',
+          'NOT_FOUND',
+          'ALREADY_HIDDEN',
+          'TERMINAL',
+        ].includes(decision.outcome) ||
+        !user(decision.reviewedVersion) ||
+        !date(decision.processedAt)
+      )
+        throw new Error('Invalid content decision feedback');
+      return data;
+    }
     const types: Record<string, string> = {
+      PostHidden: 'post',
+      PostCommentHidden: 'comment',
       PostCommentReactionCreated: 'commentReaction',
       PostCommentReactionRemoved: 'commentReaction',
       PostVoteWon: 'vote',
@@ -134,6 +155,8 @@ export function serializePostEvent(row: Record<string, any>): string {
     )
       throw new Error('Invalid vote region');
     const requiredDates: Record<string, string[]> = {
+      PostHidden: ['hiddenAt'],
+      PostCommentHidden: ['hiddenAt'],
       PostCommentReactionCreated: ['createdAt'],
       PostCommentReactionRemoved: ['createdAt', 'removedAt'],
       PostVoteWon: ['closedAt'],
@@ -214,7 +237,9 @@ export function serializePostEvent(row: Record<string, any>): string {
         throw new Error('Invalid deletion reason');
     }
     if (
-      ['PostDeleted', 'PostExpired', 'PostUpdated'].includes(value.eventType) &&
+      ['PostHidden', 'PostDeleted', 'PostExpired', 'PostUpdated'].includes(
+        value.eventType,
+      ) &&
       !user(value.postVersion)
     )
       throw new Error('Missing post version');
@@ -222,6 +247,7 @@ export function serializePostEvent(row: Record<string, any>): string {
       [
         'PostReactionRemoved',
         'PostCommentDeleted',
+        'PostCommentHidden',
         'PostParticipantLeft',
       ].includes(value.eventType) &&
       (!user(value.activityVersion) || !user(value.postAuthorId))

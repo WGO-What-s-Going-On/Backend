@@ -762,3 +762,8 @@ CLI는 누락된 비삭제 게시물을 한 번에 최대 1,000개 처리하며 
 # Notification 답글 문맥 확장
 
 `PostCommentCreated.comment.parentCommentId`가 있으면 새 생산자는 최상위 부모를 검증하고 fence한 동일 MongoDB 트랜잭션에서 읽은 `parentCommentAuthorId`(양의 안전한 정수)를 top-level에 추가한다. 부모 없음에는 필드를 넣지 않는다. 기존 v1 envelope와 과거 Outbox의 필드 누락은 호환된다. Notification은 검증된 부모 작성자만 사용하며 과거 문맥 누락은 관찰된 부모 fact로 재조정하거나 Pending/DLQ로 보낸다. 사용자 신원을 공개 API 응답에 추가하는 계약은 아니다.
+
+## 콘텐츠 숨김 및 적용 결과
+
+`PostHidden`, `PostCommentHidden`, `ContentModerationApplied` v1을 추가한다.
+필드·원자성·소비자 배포 순서는 [콘텐츠 숨김 계약](content-decisions.md)을 따른다.

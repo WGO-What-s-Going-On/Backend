@@ -2,6 +2,9 @@ export type Location = { latitude: number; longitude: number; updatedAt: Date };
 export interface LocationStore {
   put(userId: number, location: Location): Promise<Location>;
   get(userId: number): Promise<Location | null>;
+  movement(
+    userId: number,
+  ): Promise<import('./movement.js').MovementState | null>;
 }
 
 const maxAgeMs = 5 * 60 * 1000;
