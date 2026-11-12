@@ -2,10 +2,18 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { applications, readEnvironment, serviceAccount } from './gke-lib.mjs';
+import {
+  applications,
+  readEnvironment,
+  serviceAccount,
+  profileObjectExpression,
+  assertProfileGrantIsolation,
+} from './gke-lib.mjs';
 const config = readEnvironment(process.env.GCP_ENV_FILE);
 const execute = process.argv.includes('--apply');
 const project = config.project;
+const bucket = `${project}-${config.namespace}-media`;
+const profileExpression = profileObjectExpression(bucket);
 function run(args, { read = false } = {}) {
   if (!execute) {
     console.log(JSON.stringify(['gcloud', ...args, '--project', project]));
@@ -29,8 +37,69 @@ function ensure(listArgs, name, createArgs) {
     !existing.some(
       (item) => item.name === name || item.name.endsWith(`/${name}`),
     )
-  )
+  ) {
     run(createArgs);
+    return true;
+  }
+  return false;
+}
+
+// Check known additive grants before any --apply mutation. Never revoke existing
+// access automatically, and never treat a read/role lookup failure as safe.
+if (execute) {
+  const policies = [
+    JSON.parse(
+      run(['projects', 'get-iam-policy', project, '--format=json'], {
+        read: true,
+      }),
+    ),
+  ];
+  const buckets = JSON.parse(
+    run(['storage', 'buckets', 'list', '--format=json(name)'], { read: true }),
+  );
+  if (buckets.some((b) => b.name === bucket || b.name === `gs://${bucket}`))
+    policies.push(
+      JSON.parse(
+        run(
+          [
+            'storage',
+            'buckets',
+            'get-iam-policy',
+            `gs://${bucket}`,
+            '--format=json',
+          ],
+          { read: true },
+        ),
+      ),
+    );
+  const member = `serviceAccount:${serviceAccount(config, 'user-service')}`;
+  const roles = {};
+  for (const policy of policies)
+    for (const binding of policy.bindings ?? []) {
+      if (
+        !(binding.members ?? []).some((m) =>
+          [member, 'allUsers', 'allAuthenticatedUsers'].includes(m),
+        )
+      )
+        continue;
+      if (roles[binding.role]) continue;
+      const custom = /^projects\/([^/]+)\/roles\/([^/]+)$/.exec(binding.role);
+      if (custom && custom[1] !== project)
+        throw new Error(
+          'Cross-project profile IAM role requires operator review',
+        );
+      const args = [
+        'iam',
+        'roles',
+        'describe',
+        custom ? custom[2] : binding.role,
+        '--format=json',
+      ];
+      roles[binding.role] = JSON.parse(
+        run(args, { read: true }),
+      ).includedPermissions;
+    }
+  assertProfileGrantIsolation(policies, member, profileExpression, roles);
 }
 run([
   'services',
@@ -289,18 +358,16 @@ for (const [name] of applications) {
     ]);
   }
 }
-const bucket = `${project}-${config.namespace}-media`;
-const profileBucket = `${project}-${config.namespace}-profiles`;
-ensure(['storage', 'buckets', 'list'], profileBucket, [
+const mediaCreated = ensure(['storage', 'buckets', 'list'], bucket, [
   'storage',
   'buckets',
   'create',
-  `gs://${profileBucket}`,
+  `gs://${bucket}`,
   `--location=${config.region}`,
   '--uniform-bucket-level-access',
   '--public-access-prevention',
 ]);
-// The User GSA can access only its own bucket. Signing grants signBlob alone,
+// User object access is restricted to its prefix in the shared bucket. Signing grants signBlob alone,
 // rather than the broader token-minting permissions of TokenCreator.
 for (const [id, permissions] of [
   [
@@ -309,22 +376,39 @@ for (const [id, permissions] of [
   ],
   ['wgoProfileSigner', 'iam.serviceAccounts.signBlob'],
 ]) {
-  ensure(['iam', 'roles', 'list'], `projects/${project}/roles/${id}`, [
-    'iam',
-    'roles',
-    'create',
-    id,
-    `--permissions=${permissions}`,
-    '--stage=GA',
-  ]);
+  const created = ensure(
+    ['iam', 'roles', 'list'],
+    `projects/${project}/roles/${id}`,
+    [
+      'iam',
+      'roles',
+      'create',
+      id,
+      `--permissions=${permissions}`,
+      '--stage=GA',
+    ],
+  );
+  if (execute && !created) {
+    const role = JSON.parse(
+      run(['iam', 'roles', 'describe', id, '--format=json'], { read: true }),
+    );
+    if (
+      JSON.stringify([...(role.includedPermissions ?? [])].sort()) !==
+      JSON.stringify(permissions.split(',').sort())
+    )
+      throw new Error(
+        'Existing profile IAM role differs; operator review required',
+      );
+  }
 }
 run([
   'storage',
   'buckets',
   'add-iam-policy-binding',
-  `gs://${profileBucket}`,
+  `gs://${bucket}`,
   `--member=serviceAccount:${serviceAccount(config, 'user-service')}`,
   `--role=projects/${project}/roles/wgoProfileObjects`,
+  `--condition=expression=${profileExpression},title=wgo_profile_prefix`,
 ]);
 run([
   'iam',
@@ -334,16 +418,8 @@ run([
   `--member=serviceAccount:${serviceAccount(config, 'user-service')}`,
   `--role=projects/${project}/roles/wgoProfileSigner`,
 ]);
-ensure(['storage', 'buckets', 'list'], bucket, [
-  'storage',
-  'buckets',
-  'create',
-  `gs://${bucket}`,
-  `--location=${config.region}`,
-  '--uniform-bucket-level-access',
-  '--public-access-prevention',
-]);
-run(['storage', 'buckets', 'update', `gs://${bucket}`, '--versioning']);
+if (mediaCreated)
+  run(['storage', 'buckets', 'update', `gs://${bucket}`, '--versioning']);
 run([
   'storage',
   'buckets',
@@ -368,63 +444,59 @@ run([
   '--role=roles/firebasecloudmessaging.admin',
   '--condition=None',
 ]);
-const corsDirectory = mkdtempSync(join(tmpdir(), 'wgo-gcs-cors-'));
-try {
-  const path = join(corsDirectory, 'cors.json');
-  writeFileSync(
-    path,
-    JSON.stringify([
-      {
-        origin: config.webOrigins,
-        method: ['GET', 'HEAD', 'PUT'],
-        responseHeader: [
-          'Content-Type',
-          'Content-Length',
-          'ETag',
-          'x-goog-generation',
-          'x-goog-if-generation-match',
-        ],
-        maxAgeSeconds: 3600,
-      },
-    ]),
-  );
-  run([
-    'storage',
-    'buckets',
-    'update',
-    `gs://${bucket}`,
-    `--cors-file=${path}`,
-  ]);
-  run([
-    'storage',
-    'buckets',
-    'update',
-    `gs://${profileBucket}`,
-    `--cors-file=${path}`,
-    '--public-access-prevention',
-  ]);
-  const lifecyclePath = join(corsDirectory, 'profile-lifecycle.json');
-  writeFileSync(
-    lifecyclePath,
-    JSON.stringify({
-      rule: [
+// Existing shared buckets may contain Post-specific CORS/lifecycle/versioning.
+// Do not replace them; operators review any missing additive rules separately.
+if (mediaCreated) {
+  const corsDirectory = mkdtempSync(join(tmpdir(), 'wgo-gcs-cors-'));
+  try {
+    const path = join(corsDirectory, 'cors.json');
+    writeFileSync(
+      path,
+      JSON.stringify([
         {
-          action: { type: 'Delete' },
-          condition: { age: 1, matchesPrefix: ['user-profiles/pending/'] },
+          origin: config.webOrigins,
+          method: ['GET', 'HEAD', 'PUT'],
+          responseHeader: [
+            'Content-Type',
+            'Content-Length',
+            'ETag',
+            'x-goog-generation',
+            'x-goog-if-generation-match',
+          ],
+          maxAgeSeconds: 3600,
         },
-      ],
-    }),
-  );
-  // Backstop for late PUTs. Final objects are reconciled against PostgreSQL references.
-  run([
-    'storage',
-    'buckets',
-    'update',
-    `gs://${profileBucket}`,
-    `--lifecycle-file=${lifecyclePath}`,
-  ]);
-} finally {
-  rmSync(corsDirectory, { recursive: true });
+      ]),
+    );
+    run([
+      'storage',
+      'buckets',
+      'update',
+      `gs://${bucket}`,
+      `--cors-file=${path}`,
+    ]);
+    const lifecyclePath = join(corsDirectory, 'profile-lifecycle.json');
+    writeFileSync(
+      lifecyclePath,
+      JSON.stringify({
+        rule: [
+          {
+            action: { type: 'Delete' },
+            condition: { age: 1, matchesPrefix: ['user-profiles/pending/'] },
+          },
+        ],
+      }),
+    );
+    // Backstop for late PUTs. Final objects are reconciled against PostgreSQL references.
+    run([
+      'storage',
+      'buckets',
+      'update',
+      `gs://${bucket}`,
+      `--lifecycle-file=${lifecyclePath}`,
+    ]);
+  } finally {
+    rmSync(corsDirectory, { recursive: true });
+  }
 }
 const snapshotAccount = `${config.namespace}-es-snapshots@${project}.iam.gserviceaccount.com`;
 ensure(['iam', 'service-accounts', 'list'], snapshotAccount, [

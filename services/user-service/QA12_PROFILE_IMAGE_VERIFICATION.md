@@ -2,6 +2,8 @@
 
 검증일: 2026-11-11 (Asia/Seoul).
 
+2026-11-12 정책 갱신: Post의 기존 media 버킷을 공유한다. 아래 테스트 수치는 11월 11일 이력이며, 현재 수정 및 운영 진단 결과는 [공유 버킷 변경 보고](SHARED_PROFILE_IMAGE_REPORT.md)를 따른다.
+
 ## 1. 결론과 작업 범위
 
 최신 `origin/dev`의 기존 프로필 이미지 구현을 검증했다. **로컬 PostgreSQL과 GCS 테스트 대역으로
@@ -151,18 +153,18 @@ FE의 실패·재시도 처리:
 아래는 별도 승인된 후속 작업에서 확인할 항목이다.
 
 - [ ] 실행 중인 User/Gateway 이미지 SHA와 공개 API 경로가 이번에 확인한 dev 계약을 포함하는가.
-- [ ] User의 최종 런타임 설정이 `GCS_PROFILE_ENABLED=true`, `GCS_PROFILE_BUCKET=<project>-<namespace>-profiles`인가.
+- [ ] User의 최종 런타임 설정이 `GCS_PROFILE_ENABLED=true`, `GCS_PROFILE_BUCKET=<project>-<namespace>-media`인가.
       ConfigMap과 runtime Secret 간 우선순위·이전 값 덮어쓰기도 확인한다. 로컬 기본값은 false다.
-- [ ] 해당 전용 비공개 버킷이 실제 존재하고 Post media 버킷과 분리됐는가.
+- [ ] Post가 실제 사용하는 비공개 media 버킷과 일치하고 객체 prefix는 분리됐는가.
       UBLA/public-access-prevention, pending prefix 수명주기를 확인한다. final 객체에 일괄 age 삭제를 걸지 않는다.
 - [ ] User KSA↔GSA Workload Identity/ADC와 `iamcredentials.googleapis.com`이 준비됐는가.
-      버킷의 create/get/delete 및 자기 GSA에 대한 signBlob 권한이 저장소 계획과 일치하는가.
-      JSON key·production emulator·Post 버킷 권한 추가로 우회하지 않는다.
+      `user-profiles/`로 제한된 create/get/delete 및 자기 GSA의 signBlob 권한이 각각 있는가. 기존 넓은 grant·그룹/상위 상속·직접 KSA 권한도 검토한다.
+      JSON key·production emulator·User에 대한 Post 객체 전체 권한으로 우회하지 않는다.
 - [ ] GCS CORS가 실제 FE origin의 GET/HEAD/PUT과 필요한 Content-Type·generation 조건을 지원하는가.
       Gateway CORS와 GCS CORS는 별개다. curl PUT 성공만으로 브라우저 CORS 통과를 판단하지 않는다.
 - [ ] 운영 DB migration 이력에 `AddProfileImageUploads1793570000000`이 있고 테이블·제약·인덱스가 존재하는가.
       앱은 `synchronize:false`이므로 실행 중인 Pod만으로 migration 적용을 추정하지 않는다.
-- [ ] 기존 `users.profile_image_key`의 객체가 전용 버킷에서 실제 조회 가능한가.
+- [ ] 기존 `users.profile_image_key`의 객체가 현재 공유 버킷과 권한 범위에서 실제 조회 가능한가.
       기존 키는 호환 보존하지만 자동 이관하지 않으며, 다른 버킷의 레거시 객체 문제는 별도 이관 판단이 필요하다.
 - [ ] 승인된 테스트 계정·이미지로 실제 FE origin에서 JPEG/PNG/WebP PUT → complete → DB 참조 → Signed GET 바이트를 확인한다.
       URL 발급 성공만 확인하지 말고 이미지 HTTP 응답과 바이트까지 확인한다.

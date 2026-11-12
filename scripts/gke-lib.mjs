@@ -141,6 +141,51 @@ const resource = (apiVersion, kind, name, namespace, spec) => ({
 export function serviceAccount(config, name) {
   return `${config.namespace}-${name.replace('-service', '').replace('-gateway', '-gw')}@${config.project}.iam.gserviceaccount.com`;
 }
+
+export function profileObjectExpression(bucket) {
+  return `resource.name.startsWith('projects/_/buckets/${bucket}/objects/user-profiles/')`;
+}
+
+// IAM allow bindings are additive: adding a prefix condition cannot restrict an
+// existing broader grant. This audit covers direct/public project and bucket grants;
+// group/ancestor/deny policies still need the operator's effective-access review.
+export function assertProfileGrantIsolation(
+  policies,
+  member,
+  expression,
+  roles,
+) {
+  const allowed = new Set([
+    'storage.objects.create',
+    'storage.objects.get',
+    'storage.objects.delete',
+  ]);
+  for (const policy of policies) {
+    for (const binding of policy.bindings ?? []) {
+      if (
+        !(binding.members ?? []).some((m) =>
+          [member, 'allUsers', 'allAuthenticatedUsers'].includes(m),
+        )
+      )
+        continue;
+      const permissions = roles[binding.role];
+      if (!Array.isArray(permissions))
+        throw new Error('Profile IAM role permissions unavailable');
+      const storage = permissions.filter(
+        (p) => p === '*' || p.startsWith('storage.'),
+      );
+      if (!storage.length) continue;
+      if (
+        binding.condition?.expression !== expression ||
+        storage.some((p) => !allowed.has(p))
+      )
+        throw new Error(
+          'Existing broad User storage grant requires operator review',
+        );
+    }
+  }
+}
+
 export function appResources(config, name, image) {
   validateEnvironment(config);
   const app = applications.find(([n]) => n === name);
@@ -183,7 +228,7 @@ export function appResources(config, name, image) {
   if (name === 'user-service')
     Object.assign(settings, {
       GCS_PROFILE_ENABLED: 'true',
-      GCS_PROFILE_BUCKET: `${config.project}-${config.namespace}-profiles`,
+      GCS_PROFILE_BUCKET: `${config.project}-${config.namespace}-media`,
     });
   if (sql)
     Object.assign(settings, {

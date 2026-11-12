@@ -197,7 +197,7 @@ export class ProfileImageService {
             upload.status = 'EXPIRED';
           if (upload.status !== 'APPLIED' && upload.status !== 'EXPIRED')
             return;
-          await this.storage.remove(upload.uploadKey);
+          await this.storage.remove(upload, 'pending');
           // Only managed, irreversible uploads are collected. Legacy keys have no record.
           // A defensive global reference check preserves even pre-existing shared keys.
           const referenced = await manager
@@ -208,7 +208,7 @@ export class ProfileImageService {
             upload.retiredAt &&
             upload.retiredAt.getTime() + CLEANUP_GRACE_MS <= now.getTime()
           )
-            await this.storage.remove(upload.objectKey);
+            await this.storage.remove(upload, 'object');
           else if (!referenced && !upload.retiredAt) upload.retiredAt = now;
           else if (referenced) upload.retiredAt = null;
           // Keep tombstones and reconcile again: remote copies/PUTs can finish after
