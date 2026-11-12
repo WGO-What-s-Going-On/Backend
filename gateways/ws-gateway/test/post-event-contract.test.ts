@@ -20,6 +20,7 @@ function fields(type: string, extra: object = {}) {
         postId,
         deletedAt: new Date().toISOString(),
         expiredAt: new Date().toISOString(),
+        hiddenAt: new Date().toISOString(),
       },
       postVersion: 2,
       comment: {
@@ -27,6 +28,7 @@ function fields(type: string, extra: object = {}) {
         commentId: `comment_${randomUUID()}`,
         deletedAt: new Date().toISOString(),
         content: 'private removed body',
+        hiddenAt: new Date().toISOString(),
       },
       activityVersion: 2,
       ...extra,
@@ -35,6 +37,8 @@ function fields(type: string, extra: object = {}) {
 }
 describe('Post realtime contract', () => {
   it.each([
+    ['PostHidden', 'post.hidden'],
+    ['PostCommentHidden', 'comment.hidden'],
     ['PostDeleted', 'post.deleted'],
     ['PostExpired', 'post.expired'],
     ['PostCommentDeleted', 'comment.deleted'],

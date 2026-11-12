@@ -8,6 +8,8 @@ import { MediaService } from './media/media.service.js';
 import { GcsMediaStorage } from './media/gcs-media.storage.js';
 import { MediaCleanupWorker } from './media/media.worker.js';
 import { MediaController } from './media/media.controller.js';
+import { ApplyContentDecision } from './application/content-decision.js';
+import { ContentDecisionWorker } from './infrastructure/content-decision-consumer.js';
 import { ApplyModerationLifecycle } from './application/moderation.js';
 import { ModerationWorker } from './infrastructure/moderation-consumer.js';
 import { PostLifecycle } from './application/lifecycle.js';
@@ -208,6 +210,12 @@ import {
         new ApplyModerationLifecycle(unitOfWork),
       inject: [POST_UNIT_OF_WORK],
     },
+    {
+      provide: ApplyContentDecision,
+      useFactory: (uow: PostUnitOfWork) => new ApplyContentDecision(uow),
+      inject: [POST_UNIT_OF_WORK],
+    },
+    ContentDecisionWorker,
     ModerationWorker,
     ExpirationWorker,
     VoteWorker,

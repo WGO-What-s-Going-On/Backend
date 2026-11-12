@@ -193,6 +193,107 @@ class MongoCommands implements PostCommands {
     private readonly media: Model<MediaRecord>,
   ) {}
 
+  async recordContentDecision(
+    input: import('../application/content-decision.js').ContentDecision,
+    outcome: import('../application/content-decision.js').DecisionOutcome,
+  ) {
+    const existing = await this.moderationReceipts
+      .findOne({ eventId: input.eventId })
+      .session(this.session)
+      .lean();
+    if (existing) return { recorded: false, outcome: existing.outcome };
+    await this.moderationReceipts.create(
+      [{ ...input, outcome, processedAt: new Date() }],
+      { session: this.session },
+    );
+    return { recorded: true, outcome };
+  }
+
+  async hidePost(
+    postId: string,
+    now: Date,
+    postVersion: number,
+  ): Promise<void> {
+    // Preserve content and attachments for review; hiding must not award a vote winner.
+    const post = await this.posts
+      .findOne({ postId })
+      .session(this.session)
+      .lean();
+    await this.posts.updateOne(
+      { postId },
+      {
+        $set: {
+          status: 'HIDDEN',
+          hiddenAt: now,
+          updatedAt: now,
+          postVersion,
+          vote: {
+            ...post?.vote,
+            status: 'CANCELLED',
+            closedAt: now,
+            winner: null,
+          },
+        },
+        $inc: { voteRevision: 1 },
+      },
+      { session: this.session },
+    );
+  }
+
+  async hideComment(
+    postId: string,
+    commentId: string,
+    now: Date,
+    activityVersion: number,
+  ): Promise<void> {
+    await this.comments.updateOne(
+      { postId, commentId },
+      {
+        $set: {
+          status: 'HIDDEN',
+          hiddenAt: now,
+          updatedAt: now,
+          activityVersion,
+        },
+      },
+      { session: this.session },
+    );
+    const post = await this.posts
+      .findOne({ postId })
+      .session(this.session)
+      .lean();
+    if (
+      post?.vote?.candidates?.some(
+        (candidate: { commentId: string }) => candidate.commentId === commentId,
+      )
+    ) {
+      // Candidate snapshots also contain the body, including after voting closes.
+      await this.posts.updateOne(
+        { postId },
+        {
+          $set: {
+            vote: {
+              ...post.vote,
+              candidates: post.vote.candidates.filter(
+                (candidate: { commentId: string }) =>
+                  candidate.commentId !== commentId,
+              ),
+              status:
+                post.vote.status === 'OPEN' ? 'CANCELLED' : post.vote.status,
+              closedAt: post.vote.status === 'OPEN' ? now : post.vote.closedAt,
+              winner:
+                post.vote.winner?.commentId === commentId
+                  ? null
+                  : post.vote.winner,
+            },
+          },
+          $inc: { voteRevision: 1 },
+        },
+        { session: this.session },
+      );
+    }
+  }
+
   async recordModerationEvent(
     input: ModerationLifecycleEvent,
   ): Promise<boolean> {

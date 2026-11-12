@@ -128,7 +128,9 @@ export class PostConsumer {
     };
     if (
       fields.eventType &&
-      !['PostCreated', 'PostExpired', 'PostDeleted'].includes(fields.eventType)
+      !['PostCreated', 'PostExpired', 'PostDeleted', 'PostHidden'].includes(
+        fields.eventType,
+      )
     ) {
       await this.index.redis.xAck(POST_STREAM, POST_GROUP, entry.id);
       log.skipped('consumer.event.acknowledged', 'UNSUPPORTED_EVENT', context);
@@ -136,6 +138,7 @@ export class PostConsumer {
     }
     try {
       if (
+        fields.eventType === 'PostHidden' ||
         fields.eventType === 'PostExpired' ||
         fields.eventType === 'PostDeleted'
       )

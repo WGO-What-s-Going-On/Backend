@@ -322,12 +322,13 @@ export class PostLifecycle {
       const activityVersion = (comment.activityVersion ?? 1) + 1;
       await tx.commands.deleteComment(postId, commentId, now, activityVersion);
       await tx.commands.cancelVoteForComment(postId, commentId, now);
-      await tx.commands.increment(
-        postId,
-        comment.bucketId ?? 0,
-        'commentCount',
-        -1,
-      );
+      if (comment.status === 'ACTIVE')
+        await tx.commands.increment(
+          postId,
+          comment.bucketId ?? 0,
+          'commentCount',
+          -1,
+        );
       await tx.commands.appendEvent(
         event(
           postId,

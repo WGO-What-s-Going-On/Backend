@@ -23,7 +23,7 @@
 
 ## 콘텐츠 제재 결정
 
-현재 게시글·댓글 결과는 moderation:content-events에 CONTENT_MODERATION_EVALUATED v1로 발행한다. 2026-11-11 QA 이슈 8에서 사용자 확정 정책인 flagged=true → HIDE의 별도 CONTENT_MODERATION_DECIDED 생산자를 구현했으며 기본 OFF다. [결정 wire](content-enforcement-events.md)를 따른다. Post 소비자·실제 숨김·적용 피드백은 미구현이다. 기존 운영 CLI 삭제 기능을 HIDE에 임의 연결하지 않는다.
+현재 게시글·댓글 결과는 moderation:content-events에 CONTENT_MODERATION_EVALUATED v1로 발행한다. 2026-11-11 QA 이슈 8에서 사용자 확정 정책인 flagged=true → HIDE의 별도 CONTENT_MODERATION_DECIDED 생산자를 구현했으며 기본 OFF다. [결정 wire](content-enforcement-events.md)를 따른다. Post 소비자·실제 숨김·피드백 Outbox는 #132에서 구현했다. [Post 소비 계약](../../post-service/contracts/content-decisions.md)에 따라 별도 활성화하며 Moderation의 피드백 소비는 미구현이다. 기존 운영 CLI 삭제 기능을 HIDE에 임의 연결하지 않는다.
 
 합의할 결정 event 또는 command에는 다음이 필요하다.
 
