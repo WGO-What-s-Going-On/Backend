@@ -41,6 +41,40 @@ MongoDB·Redis·Cassandra private key는 앱 mount 대상이 아니다. `wgo-sto
 MongoDB는 모든 데이터와 journal을 `/data/db`, Redis는 AOF와 RDB를 `/data`, Cassandra는 commitlog와 SSTable을 `/var/lib/cassandra` PVC에 저장한다.
 Redis `appendfsync always`와 `noeviction`은 demo에서 이벤트·세션의 조용한 유실을 막기 위한 선택이다. 디스크 포화는 쓰기 오류로 드러난다.
 
+## 기존 Cassandra에 이동 상태 테이블을 적용한다
+
+Map의 이동 상태 기능은 `wgo_map.user_movement_state`를 사용한다.
+앱 CD와 ConfigMap 갱신은 실행 중인 Cassandra에 CQL을 적용하지 않는다.
+`cassandra-start.sh`는 DB 시작 시에만 schema를 실행하므로, 기존 환경에는
+테이블을 먼저 적용한 뒤 해당 기능을 배포한다. 이미 배포된 환경은 아래 순서로 복구한다.
+
+1. 대상 프로젝트·클러스터·namespace와 Map image digest를 확인한다.
+   `system_schema.tables`와 `system_schema.columns`로 기존 테이블 유무와 타입을 확인한다.
+   이미 존재하는 테이블의 정의가 다르면 중단한다. `IF NOT EXISTS`는 타입 차이를 수정하지 않는다.
+2. `services/map-service/schema.cql`에서
+   `CREATE TABLE IF NOT EXISTS wgo_map.user_movement_state` 문장만 추출하여 적용한다.
+   기존 테이블의 변경·삭제나 이력 backfill은 하지 않는다. TTL도 추가하지 않는다.
+   이동 차단 상태는 관측된 정지로만 해제해야 하므로 자동 만료시키면 안 된다.
+3. `cassandra-0` 내부의 `cqlsh --ssl`을 사용한다. `/tmp/cqlshrc`는
+   SELECT/MODIFY 전용 앱 계정이므로 DDL에 사용하지 않는다.
+   Pod에 이미 마운트된 `/credentials/cassandra-admin-password`와 `/tls/ca.pem`으로
+   권한 600의 임시 관리자 설정을 만들고, 비밀번호를 출력하거나 CLI 인자로 전달하지 않는다.
+   실행 성공·실패 모두 임시 설정을 삭제한다. 앱 계정에 CREATE 권한을 추가하지 않는다.
+4. 앱 계정으로 새 테이블의 조회와 조건부 쓰기(LWT)를 확인한다.
+   기존 keyspace SELECT/MODIFY 권한이 새 테이블에도 적용되는지 확인한다.
+   검증 전용 행을 사용했다면 해당 행만 정리한다.
+5. 운영 `wgo-storage-bootstrap` ConfigMap의 `data["schema.cql"]`만 수정된 파일로 갱신한다.
+   다른 bootstrap 파일, Secret, StatefulSet과 PVC는 유지한다.
+   ConfigMap을 다시 읽어 새 정의가 포함됐는지 확인한다. Cassandra 재시작은 필요하지 않다.
+6. 정상 인증된 테스트 계정으로 위치 갱신 API의 200을 확인한 뒤, 같은 위치에서
+   게시물 작성과 생성된 게시물 조회를 확인한다. 이동 차단 응답이 나오면 배포된
+   정지 확인 규칙에 따라 위치를 갱신하며 재검증한다. 인증·이동 검증을 우회하지 않는다.
+   요청 correlation ID로 Map/Post/Gateway 로그를 대조하여 503 해소를 확인한다.
+   생성한 테스트 게시물은 서비스의 정상 삭제 API로 정리한다.
+
+추가 테이블은 기존 코드와 공존할 수 있다. 앱 rollback이 필요해도 테이블은 보존하고,
+새로 저장된 이동 상태를 삭제하는 `DROP TABLE`을 rollback 절차로 사용하지 않는다.
+
 ## Elasticsearch 키와 snapshot을 준비한다
 
 ECK의 `elasticsearch-es-elastic-user` 비밀번호는 관리 작업에서만 사용한다.
