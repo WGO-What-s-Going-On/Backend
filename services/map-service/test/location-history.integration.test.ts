@@ -1,3 +1,4 @@
+import { decideMovement } from '../src/movement.js';
 import cassandra from 'cassandra-driver';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CassandraLocationStore, dayBucket } from '../src/store.js';
@@ -52,6 +53,33 @@ suite('location history in Cassandra', () => {
       300,
     );
     expect(await store.get(userId + 2)).toMatchObject({ latitude: 38 });
+  });
+
+  it('reads a bounded stop across midnight from source history', async () => {
+    const now = new Date();
+    now.setUTCHours(0, 0, 5, 0);
+    const actor = userId + 5;
+    for (const age of [0, 10000, 20000, 30000]) {
+      const at = new Date(now.getTime() - age);
+      await store.db.execute(
+        'INSERT INTO user_location_history (user_id, day_bucket, update_id, latitude, longitude, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          cassandra.types.Long.fromNumber(actor),
+          dayBucket(at),
+          cassandra.types.TimeUuid.fromDate(at),
+          37.5,
+          127,
+          at,
+        ],
+        { prepare: true },
+      );
+    }
+    const history = await store.recent(actor, now);
+    expect(history).toHaveLength(4);
+    expect(decideMovement(history, now).allowed).toBe(true);
+    expect(await store.recent(actor, new Date(now.getTime() + 120000))).toEqual(
+      [],
+    );
   });
 
   it('has seven-day default TTL and excludes expired rows', async () => {

@@ -26,6 +26,15 @@ const jwk = {
 process.env.MAP_SERVICE_TRUSTED_JWKS = JSON.stringify({ keys: [jwk] });
 const locations = new Map<number, Location>();
 const store: LocationStore = {
+  async recent(userId) {
+    const location = locations.get(userId);
+    return location
+      ? [0, 10000, 20000, 30000].map((age) => ({
+          ...location,
+          updatedAt: new Date(location.updatedAt.getTime() - age),
+        }))
+      : [];
+  },
   async put(userId, location) {
     locations.set(userId, location);
     return location;
@@ -179,6 +188,46 @@ describe('Map HTTP and gRPC contract', () => {
     expect(
       (await call('CheckPostCreation', { ...fields, userId: '456' })).reason,
     ).toBe('LOCATION_MISSING');
+  });
+
+  it('denies moving creation, preserves participation and fails closed on history errors', async () => {
+    const now = new Date();
+    locations.set(789, { latitude: 37.5, longitude: 127, updatedAt: now });
+    const fields = {
+      userId: '789',
+      latitude: 37.5,
+      longitude: 127,
+      radiusM: 250,
+    };
+    const recent = vi.spyOn(store, 'recent');
+    try {
+      recent.mockResolvedValue([
+        { latitude: 37.5, longitude: 127, updatedAt: now },
+        {
+          latitude: 37.5,
+          longitude: 127.001,
+          updatedAt: new Date(now.getTime() - 10000),
+        },
+      ]);
+      expect(await call('CheckPostCreation', fields)).toMatchObject({
+        allowed: false,
+        reason: 'USER_MOVING',
+      });
+      expect(
+        (
+          await call('CheckPostParticipation', {
+            ...fields,
+            postId: `post_${'a'.repeat(36)}`,
+          })
+        ).allowed,
+      ).toBe(true);
+      recent.mockRejectedValue(new Error('database unavailable'));
+      await expect(call('CheckPostCreation', fields)).rejects.toMatchObject({
+        code: status.UNAVAILABLE,
+      });
+    } finally {
+      recent.mockRestore();
+    }
   });
 
   it('rejects invalid service JWT', async () => {
