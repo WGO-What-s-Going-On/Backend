@@ -174,6 +174,41 @@ describe('content decisions through Post wire, model adapter port and real Redis
     expect(await decisions()).toHaveLength(1);
     expect(moderate).toHaveBeenCalledOnce();
   });
+
+  it('evaluates and decides a new comment after internal lifecycle closure without reopening it', async () => {
+    const f = await fixture();
+    await h.lifecycle.evaluate(f.postId, new Date('2026-01-01T01:00:00.000Z'));
+    await h.lifecycle.evaluate(f.postId, new Date('2026-01-01T01:10:00.000Z'));
+    expect(await h.repository.find(f.postId)).toMatchObject({
+      state: 'CLOSED',
+    });
+    const original = comment(f);
+    const message = {
+      ...original,
+      data: JSON.stringify({
+        ...JSON.parse(original.data),
+        occurredAt: '2026-01-01T01:11:00.000Z',
+      }),
+    };
+    await h.send(message);
+    await h.send(message);
+    expect(moderate).toHaveBeenCalledOnce();
+    expect(await h.results.find(message.eventId)).toMatchObject({
+      flagged: true,
+      activityVersion: 1,
+    });
+    expect(await decisions()).toMatchObject([
+      { sourceEventId: message.eventId, decision: 'HIDE' },
+    ]);
+    expect(await h.redis.xLen('moderation:content-events')).toBe(1);
+    expect((await h.redis.xPending(stream, group)).pending).toBe(0);
+    expect(await h.repository.find(f.postId)).toMatchObject({
+      state: 'CLOSED',
+      lastMeaningfulActivityAt: '2026-01-01T00:00:00.000Z',
+      comments: { [f.commentId]: { version: 1, deleted: false } },
+    });
+    expect(await h.redis.xLen('moderation:events')).toBe(2);
+  });
   it.each([false, true])(
     'keeps POST evaluation and publishes HIDE only for flagged=%s',
     async (flagged) => {

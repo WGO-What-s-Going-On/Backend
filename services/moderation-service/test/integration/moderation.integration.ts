@@ -177,10 +177,25 @@ describe('Moderation production components with real Redis', () => {
     await h.lifecycle.evaluate(id, new Date('2026-01-01T03:00:00.000Z'));
     await h.lifecycle.evaluate(id, new Date('2026-01-01T03:10:00.000Z'));
     const closed = await h.repository.find(id);
-    await h.send(
-      h.fields('PostCommentCreated', id, '2026-01-01T03:11:00.000Z'),
-    );
-    expect(await h.repository.find(id)).toEqual(closed);
+    const late = h.fields('PostCommentCreated', id, '2026-01-01T03:11:00.000Z');
+    const callsBefore = moderate.mock.calls.length;
+    await h.send(late);
+    const afterComment = await h.repository.find(id);
+    expect(afterComment).toEqual({
+      ...closed,
+      version: closed!.version + 1,
+      comments: {
+        ...closed?.comments,
+        [JSON.parse(late.data).comment.commentId]: {
+          version: 1,
+          deleted: false,
+        },
+      },
+    });
+    expect(moderate).toHaveBeenCalledTimes(callsBefore + 1);
+    await h.send(late);
+    expect(await h.repository.find(id)).toEqual(afterComment);
+    expect(moderate).toHaveBeenCalledTimes(callsBefore + 1);
     expect(closed?.state).toBe('CLOSED');
     expect((await events()).map((e) => e.eventType)).toEqual([
       'BOARD_STALE',
