@@ -87,6 +87,84 @@ describe('LifecycleService', () => {
     ]);
   });
 
+  it('still inspects new comments after lifecycle closure and tracks versions without reopening', async () => {
+    const repository = new MemoryLifecycle();
+    const service = new LifecycleService(repository);
+    await service.initialize('post_1', '2026-01-01T00:00:00.000Z');
+    await service.evaluate('post_1', new Date('2026-01-01T01:00:00.000Z'));
+    await service.evaluate('post_1', new Date('2026-01-01T01:10:00.000Z'));
+
+    expect(await service.canModerateComment('post_1', 'comment_1', 1)).toBe(
+      true,
+    );
+    await service.recordComment(
+      'post_1',
+      'comment_1',
+      1,
+      false,
+      '2026-01-01T01:11:00.000Z',
+      'req_comment',
+    );
+    expect(await service.canModerateComment('post_1', 'comment_1', 1)).toBe(
+      false,
+    );
+    expect(await service.canModerateComment('post_1', 'comment_1', 2)).toBe(
+      true,
+    );
+    expect(await repository.find('post_1')).toMatchObject({
+      state: 'CLOSED',
+      lastMeaningfulActivityAt: '2026-01-01T00:00:00.000Z',
+      comments: { comment_1: { version: 1, deleted: false } },
+    });
+    await service.recordComment(
+      'post_1',
+      'comment_1',
+      2,
+      true,
+      '2026-01-01T01:12:00.000Z',
+      'req_delete',
+    );
+    expect(await service.canModerateComment('post_1', 'comment_1', 3)).toBe(
+      false,
+    );
+    expect(repository.events.map((event) => event.eventType)).toEqual([
+      'BOARD_STALE',
+      'BOARD_CLOSED',
+    ]);
+  });
+
+  it.each(['DELETED', 'EXPIRED'] as const)(
+    'never inspects comments after authoritative Post %s',
+    async (sourceState) => {
+      const repository = new MemoryLifecycle();
+      const service = new LifecycleService(repository);
+      await service.initialize('post_1', '2026-01-01T00:00:00.000Z');
+      await service.terminate(
+        'post_1',
+        sourceState,
+        2,
+        '2026-01-01T00:01:00.000Z',
+        'req_terminal',
+      );
+      expect(await service.canModerateComment('post_1', 'comment_1', 1)).toBe(
+        false,
+      );
+      await service.recordComment(
+        'post_1',
+        'comment_1',
+        1,
+        false,
+        '2026-01-01T00:02:00.000Z',
+        'req_comment',
+      );
+      expect(await repository.find('post_1')).toMatchObject({
+        state: 'CLOSED',
+        sourceState,
+      });
+      expect((await repository.find('post_1'))?.comments).toBeUndefined();
+    },
+  );
+
   it('reactivates STALE on a comment and emits BOARD_REACTIVATED once', async () => {
     const repository = new MemoryLifecycle();
     const service = new LifecycleService(repository);

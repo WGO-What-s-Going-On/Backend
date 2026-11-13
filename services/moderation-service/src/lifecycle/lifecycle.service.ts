@@ -89,8 +89,8 @@ export class LifecycleService {
     const current = await this.repository.find(postId);
     if (!current) throw new Error(`Lifecycle projection missing: ${postId}`);
     const comment = current.comments?.[commentId];
+    // Internal lifecycle closure is a recommendation, not authoritative Post deletion/expiry.
     return (
-      current.state !== 'CLOSED' &&
       !current.sourceState &&
       !(comment && (comment.deleted || comment.version >= version))
     );
@@ -111,7 +111,6 @@ export class LifecycleService {
       (current) => {
         if (
           current.sourceState ||
-          (current.state === 'CLOSED' && !deleted) ||
           (current.comments?.[commentId]?.version ?? 0) >= version
         )
           return { projection: current };
@@ -121,9 +120,10 @@ export class LifecycleService {
           version: current.version + 1,
         };
         // API 요청 중 삭제가 커밋되었다면 이전 생성 버전은 위 CAS 재시도에서 무시된다.
-        const decision = deleted
-          ? { projection: next }
-          : meaningfulActivity(next, new Date(occurredAt));
+        const decision =
+          deleted || current.state === 'CLOSED'
+            ? { projection: next }
+            : meaningfulActivity(next, new Date(occurredAt));
         return {
           ...decision,
           projection: { ...decision.projection, version: current.version + 1 },
