@@ -16,6 +16,8 @@ export class FakeGcs {
   signed: Array<Record<string, unknown>> = [];
   copyResponseLost = false;
   unavailable = false;
+  signingDenied = false;
+  objectAccessDenied = false;
   generation = 1;
   put(key: string, bytes: Buffer, contentType = 'image/png') {
     this.objects.set(key, {
@@ -26,7 +28,7 @@ export class FakeGcs {
   }
   bind(storage: GcsProfileImageStorage) {
     Object.defineProperty(storage, 'config', {
-      value: { enabled: true, bucket: 'test-profiles' },
+      value: { enabled: true, bucket: 'test-shared-media' },
     });
     vi.spyOn(storage.client, 'bucket').mockImplementation(
       () =>
@@ -39,6 +41,8 @@ export class FakeGcs {
   file(key: string, generation?: string) {
     const object = () => {
       if (this.unavailable) throw new Error('GCS unavailable');
+      if (this.objectAccessDenied)
+        throw Object.assign(new Error('object access denied'), { code: 403 });
       const value = this.objects.get(key);
       if (!value || (generation && generation !== value.generation))
         throw missing();
@@ -59,6 +63,8 @@ export class FakeGcs {
       createReadStream: () => Readable.from([object().bytes]),
       getSignedUrl: async (options: Record<string, unknown>) => {
         if (this.unavailable) throw new Error('signer unavailable');
+        if (this.signingDenied)
+          throw Object.assign(new Error('signBlob denied'), { code: 403 });
         this.signed.push({ key, ...options });
         return [`https://storage.invalid/${key}?fake-signature=redacted`];
       },
@@ -79,6 +85,8 @@ export class FakeGcs {
       },
       delete: async () => {
         if (this.unavailable) throw new Error('delete unavailable');
+        if (this.objectAccessDenied)
+          throw Object.assign(new Error('object access denied'), { code: 403 });
         this.objects.delete(key);
       },
     };

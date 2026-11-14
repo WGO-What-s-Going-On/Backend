@@ -14,8 +14,7 @@ export function profileImageConfig(env = process.env) {
   const bucket = env.GCS_PROFILE_BUCKET ?? '';
   if (enabled && !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket))
     throw new Error('GCS_PROFILE_BUCKET is required and must be a bucket name');
-  if (enabled && env.GCS_MEDIA_BUCKET === bucket)
-    throw new Error('Profile images require a separate bucket');
+  // Sharing Post's bucket is supported; object ownership is enforced by key and IAM prefix.
   if (enabled && env.NODE_ENV === 'production')
     for (const name of [
       'GOOGLE_APPLICATION_CREDENTIALS',

@@ -32,7 +32,27 @@ export function wire(
     correlationId: `req_${randomUUID()}`,
     occurredAt: at,
   };
-  if (['PostCreated', 'PostDeleted', 'PostExpired'].includes(type)) {
+  if (type === 'PostHidden' || type === 'PostCommentHidden') {
+    envelope.moderationDecisionId = 'decision_1';
+    if (type === 'PostHidden') {
+      envelope.postVersion = options.postVersion ?? 2;
+      envelope.post = {
+        postId,
+        authorId: author,
+        category: 'INCIDENT',
+        hiddenAt: at,
+      };
+    } else {
+      envelope.activityVersion = options.version ?? 2;
+      envelope.postAuthorId = author;
+      envelope.comment = {
+        postId,
+        commentId: options.commentId ?? 'hidden_comment',
+        authorId: actor,
+        hiddenAt: at,
+      };
+    }
+  } else if (['PostCreated', 'PostDeleted', 'PostExpired'].includes(type)) {
     envelope.post =
       type === 'PostCreated'
         ? {

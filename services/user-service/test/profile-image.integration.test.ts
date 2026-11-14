@@ -567,6 +567,9 @@ describe('Profile images: real PostgreSQL, service JWT, byte-level GCS double', 
   it('cleans abandoned/retired uploads, preserves all live references and reconciles late remote writes', async () => {
     const abandoned = await initiate();
     const live = await initiate();
+    const postKey = `post-media/objects/media_${live.id}`;
+    fake.put(postKey, png);
+    fake.put('legacy/image', png);
     fake.put(abandoned.uploadKey, png);
     fake.put(live.uploadKey, png);
     await complete(live.id).expect(200);
@@ -608,9 +611,54 @@ describe('Profile images: real PostgreSQL, service JWT, byte-level GCS double', 
     });
     await service.cleanup();
     expect(fake.objects.has(live.objectKey)).toBe(false);
+    expect(fake.objects.get(postKey)?.bytes).toEqual(png);
+    expect(fake.objects.get('legacy/image')?.bytes).toEqual(png);
     await complete(live.id)
       .expect(200)
       .expect(({ body }) => expect(body.isCurrent).toBe(false));
+  });
+  it.each(['uploadKey', 'objectKey'] as const)(
+    'refuses a corrupted %s before promotion or cleanup can touch a Post object',
+    async (field) => {
+      const upload = await initiate();
+      const postKey = `post-media/objects/media_${upload.id}`;
+      fake.put(postKey, png);
+      fake.put(upload.uploadKey, png);
+      const uploads = database.getRepository(ProfileImageUploadEntity);
+      await uploads.update(upload.id, { [field]: postKey });
+      await complete(upload.id).expect(503);
+      expect((await profile()).profileImageKey).toBeNull();
+      expect(await events()).toHaveLength(0);
+      await uploads.update(upload.id, {
+        expiresAt: new Date(0),
+        cleanupAt: new Date(0),
+      });
+      await service.cleanup();
+      expect(fake.objects.get(postKey)?.bytes).toEqual(png);
+      expect(fake.objects.get(upload.uploadKey)?.bytes).toEqual(png);
+    },
+  );
+  it('retains a legacy key on read and never collects its object after replacement/removal', async () => {
+    await database
+      .getRepository(UserEntity)
+      .update(owner, { profileImageKey: 'legacy/image' });
+    fake.put('legacy/image', png);
+    await auth(request(app.getHttpServer()).get(`${base}/url`))
+      .expect(200)
+      .expect(({ body }) => expect(body.profileImageKey).toBe('legacy/image'));
+    const upload = await initiate();
+    fake.put(upload.uploadKey, png);
+    await complete(upload.id).expect(200);
+    await auth(request(app.getHttpServer()).patch('/api/v1/users/me'))
+      .send({ profileImageKey: null })
+      .expect(200);
+    await database.getRepository(ProfileImageUploadEntity).update(upload.id, {
+      cleanupAt: new Date(0),
+      retiredAt: new Date(0),
+    });
+    await service.cleanup();
+    expect(fake.objects.get('legacy/image')?.bytes).toEqual(png);
+    expect(fake.objects.has(upload.objectKey)).toBe(false);
   });
   it('documents all four image operations and restrictive PATCH contract', async () => {
     const { body } = await request(app.getHttpServer())

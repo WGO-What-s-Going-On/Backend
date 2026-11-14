@@ -10,7 +10,9 @@ export async function confirmedPostNotifications(
   now: Date,
 ) {
   const terminal =
-    event.eventType === 'PostExpired' || event.eventType === 'PostDeleted';
+    event.eventType === 'PostExpired' ||
+    event.eventType === 'PostDeleted' ||
+    event.eventType === 'PostHidden';
   const update =
     event.eventType === 'PostUpdated' &&
     (event.postVersion ?? 0) > previous.post_version &&

@@ -17,10 +17,29 @@ const types: SupportedPostEventType[] = [
   'PostReactionRemoved',
   'PostCommentDeleted',
   'PostDeleted',
+  'PostHidden',
+  'PostCommentHidden',
   'PostParticipantLeft',
   'PostExpired',
 ];
 describe('actual Post v1 wire contract', () => {
+  it.each(['PostHidden', 'PostCommentHidden'] as const)(
+    'rejects malformed %s facts',
+    (type) => {
+      const raw = JSON.parse(wire(type).data);
+      for (const key of [
+        'moderationDecisionId',
+        type === 'PostHidden' ? 'postVersion' : 'activityVersion',
+      ]) {
+        const bad = { ...raw };
+        delete bad[key];
+        expect(() => parsePostEvent(JSON.stringify(bad))).toThrow('Invalid');
+      }
+      const target = type === 'PostHidden' ? 'post' : 'comment';
+      raw[target].hiddenAt = 'invalid';
+      expect(() => parsePostEvent(JSON.stringify(raw))).toThrow('Invalid');
+    },
+  );
   it.each(types)('recognizes %s', (type) => {
     const fields = wire(type);
     expect(parsePostEvent(fields.data, fields)).toMatchObject({
