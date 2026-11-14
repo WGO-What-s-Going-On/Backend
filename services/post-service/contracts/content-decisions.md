@@ -31,14 +31,17 @@ MongoDB 트랜잭션에서 원본 버전을 다시 읽고 receipt, HIDDEN 상태
 
 | eventType | payload | 소비자 |
 | --- | --- | --- |
-| PostHidden | post: {postId, authorId, category, hiddenAt}, postVersion, moderationDecisionId | Map, Semantic, WS |
-| PostCommentHidden | comment: {postId, commentId, authorId, hiddenAt}, activityVersion, postAuthorId, moderationDecisionId | WS |
+| PostHidden | post: {postId, authorId, category, hiddenAt}, postVersion, moderationDecisionId | Map, Semantic, WS, Moderation, Notification |
+| PostCommentHidden | comment: {postId, commentId, authorId, hiddenAt}, activityVersion, postAuthorId, moderationDecisionId | WS, Moderation, Notification |
 | ContentModerationApplied | decision: {moderationDecisionId, sourceEventId, targetType, postId, commentId?(COMMENT), reviewedVersion, outcome, processedAt} | 감사/향후 피드백 소비자 |
 
 `ContentModerationApplied`의 sourceEventId는 수신한 DECIDED eventId이며 outcome이 실제 결과다.
 이름과 무관하게 APPLIED 외 결과도 포함한다: STALE, NOT_FOUND, ALREADY_HIDDEN, TERMINAL.
 중복 전달에 새 결과 이벤트를 발행하지 않는다. 원래 검사 시각과 적용 시각(processedAt)을 구분한다.
-Moderation/Notification의 피드백 처리·사용자 알림은 이 PR에서 추가하지 않는다.
+Moderation은 `PostHidden`을 영구 CLOSED/HIDDEN tombstone으로 반영하고 라이프사이클 인덱스에서 제외한다.
+Notification은 게시물 종료 상태를 보존하고 미발송 라이프사이클 Push를 취소한다. 이후 도착한 생성·수정·라이프사이클 이벤트로 재활성화하지 않는다.
+`PostCommentHidden`은 해당 댓글의 tombstone에만 반영하며 게시물 라이프사이클을 종료하지 않는다.
+숨김 사실로 새 제재 알림을 만들거나 `ContentModerationApplied`를 새 알림으로 해석하지 않는다.
 
 Map은 HIDDEN을 파생 인덱스의 DELETED tombstone으로 변환해 제거한다. Post 원본은 HIDDEN으로 남는다.
 Semantic은 원본을 다시 확인하고 문서를 제거한다. WS는 `post.hidden`/`comment.hidden` v1을 전달한다.

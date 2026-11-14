@@ -19,7 +19,7 @@ export interface LifecycleProjection {
   reactionHistoryComplete?: boolean;
   reactionHistorySince?: string;
   comments?: Record<string, { version: number; deleted: boolean }> | undefined;
-  sourceState?: 'DELETED' | 'EXPIRED';
+  sourceState?: 'DELETED' | 'EXPIRED' | 'HIDDEN';
   postVersion?: number;
   pendingPublication?: LifecycleEvent;
 }

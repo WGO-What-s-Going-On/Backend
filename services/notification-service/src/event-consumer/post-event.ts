@@ -12,6 +12,8 @@ export type SupportedPostEventType =
   | 'PostReactionRemoved'
   | 'PostCommentDeleted'
   | 'PostDeleted'
+  | 'PostHidden'
+  | 'PostCommentHidden'
   | 'PostParticipantLeft'
   | 'PostExpired';
 // Extended producer facts retain the legacy Post envelope and state versions.
@@ -57,6 +59,8 @@ const supported = new Set<SupportedPostEventType>([
   'PostReactionRemoved',
   'PostCommentDeleted',
   'PostDeleted',
+  'PostHidden',
+  'PostCommentHidden',
   'PostParticipantLeft',
   'PostExpired',
 ]);
@@ -133,7 +137,13 @@ export function parsePostEvent(
       positive(value.postAuthorId) &&
       text(value.postCategory), 'activity context');
   if (
-    ['PostCreated', 'PostUpdated', 'PostDeleted', 'PostExpired'].includes(type)
+    [
+      'PostCreated',
+      'PostUpdated',
+      'PostDeleted',
+      'PostExpired',
+      'PostHidden',
+    ].includes(type)
   ) {
     require(record(value.post) &&
       value.post.postId === event.aggregateId &&
@@ -160,16 +170,23 @@ export function parsePostEvent(
     } else {
       require(positive(value.postVersion), 'post version');
       require(date(
-        type === 'PostDeleted' ? value.post.deletedAt : value.post.expiredAt,
+        type === 'PostDeleted'
+          ? value.post.deletedAt
+          : type === 'PostHidden'
+            ? value.post.hiddenAt
+            : value.post.expiredAt,
       ), 'terminal post time');
     }
     if (type === 'PostExpired')
       require(date(value.post.expiresAt), 'post expiry time');
   }
   if (
-    ['PostCommentCreated', 'PostCommentUpdated', 'PostCommentDeleted'].includes(
-      type,
-    )
+    [
+      'PostCommentCreated',
+      'PostCommentUpdated',
+      'PostCommentDeleted',
+      'PostCommentHidden',
+    ].includes(type)
   ) {
     require(record(value.comment) &&
       text(value.comment.commentId) &&
@@ -182,6 +199,10 @@ export function parsePostEvent(
         value.comment.updatedAt === null, 'created comment payload');
     else if (type === 'PostCommentDeleted')
       require(date(value.comment.deletedAt), 'deleted comment payload');
+    else if (type === 'PostCommentHidden')
+      require(date(value.comment.hiddenAt) &&
+        positive(value.activityVersion) &&
+        positive(value.postAuthorId), 'hidden comment payload');
     else
       require(date(value.comment.updatedAt) &&
         positive(value.activityVersion), 'updated comment payload');
@@ -284,5 +305,8 @@ export function parsePostEvent(
     event.reason = value.reason as string;
     event.actorType = value.actor.type as string;
   }
+  if (type === 'PostHidden' || type === 'PostCommentHidden')
+    require(text(value.moderationDecisionId) &&
+      value.moderationDecisionId.length <= 128, 'moderation decision');
   return event;
 }

@@ -75,6 +75,83 @@ describe('Moderation decisions and confirmed Post applications', () => {
   afterEach(async () => {
     await h.cleanup();
   });
+  it.each(['PostHidden', 'PostDeleted', 'PostExpired'] as const)(
+    'cancels unsent warnings on %s and fences replayed lifecycle/create/update events',
+    async (type) => {
+      await handler.handle('moderation:events', lifecycle());
+      const queued = (await store.deliveries(postId))[0]!;
+      // Include a leased delivery that has not yet been sent.
+      await store.acquire(queued);
+      const terminal = parsePostEvent(wire(type, { postId }).data)!;
+      await store.apply(terminal);
+      await store.apply(terminal);
+      await store.apply(
+        parsePostEvent(wire('PostCreated', { postId, postVersion: 9 }).data)!,
+      );
+      await store.apply({
+        ...terminal,
+        eventId: `evt_${randomUUID()}`,
+        eventType: 'PostUpdated',
+        postVersion: 10,
+        closedAt: null,
+      });
+      await handler.handle(
+        'moderation:events',
+        lifecycle('BOARD_REACTIVATED', 50),
+      );
+      await handler.handle('moderation:events', lifecycle('BOARD_STALE', 51));
+      expect(await store.postState(postId)).toMatchObject({
+        closed: true,
+        terminal_type: type,
+      });
+      expect(
+        (
+          await h.database.pool.query(
+            'SELECT status FROM notification_deliveries WHERE key=$1',
+            [queued.key],
+          )
+        ).rows[0].status,
+      ).toBe('CANCELED');
+      expect(
+        (await items()).filter((n) => n.type === 'BOARD_STALE'),
+      ).toHaveLength(1);
+      await delivery.dispatch(postId);
+      expect(
+        send.mock.calls.every((call) => call[0].data.type !== 'BOARD_STALE'),
+      ).toBe(true);
+    },
+  );
+  it('reconciles hidden facts previously ACKed as ignored without deleting their receipts', async () => {
+    await handler.handle('moderation:events', lifecycle());
+    const hidden = wire('PostHidden', { postId });
+    await store.recordIgnored(hidden);
+    await store.apply(parsePostEvent(hidden.data)!);
+    await store.apply(parsePostEvent(hidden.data)!);
+    expect(await store.postState(postId)).toMatchObject({
+      closed: true,
+      terminal_type: 'PostHidden',
+    });
+    expect(await store.deliveries(postId)).toHaveLength(0);
+    expect(
+      (
+        await h.database.pool.query(
+          'SELECT count(*) FROM notification_event_inbox WHERE event_id=$1',
+          [hidden.eventId],
+        )
+      ).rows[0].count,
+    ).toBe('1');
+  });
+  it('keeps a hidden-before-create post terminal and leaves comment-only hiding out of post lifecycle', async () => {
+    await store.apply(parsePostEvent(wire('PostHidden', { postId }).data)!);
+    await store.apply(parsePostEvent(wire('PostCreated', { postId }).data)!);
+    await handler.handle('moderation:events', lifecycle());
+    expect(await items()).toHaveLength(0);
+    const other = 'post_comment_hidden';
+    await store.apply(
+      parsePostEvent(wire('PostCommentHidden', { postId: other }).data)!,
+    );
+    expect(await store.postState(other)).toMatchObject({ closed: false });
+  });
   it('records STALE deadline, cancels unsent warnings on reactivation, fences reverse versions, and does not treat BOARD_CLOSED as applied', async () => {
     await handler.handle('moderation:events', lifecycle());
     expect((await items())[0]?.metadata?.scheduledCloseAt).toBeTypeOf('string');

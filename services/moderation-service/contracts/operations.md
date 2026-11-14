@@ -107,3 +107,21 @@ evidence can itself grow and needs approved retention; do not silently trim it.
 Post-applied success/failure and late outbox completeness are not observable from
 current lifecycle v1. Require Post decision-version/application feedback and a
 snapshot/watermark contract before claiming globally complete lifecycle decisions.
+
+## Hidden-post lifecycle repair
+
+PostHidden v1 now follows the PostDeleted/PostExpired terminal path. PostCommentHidden
+only tombstones its comment. Source projections and processing receipts remain intact;
+only terminal posts are removed from the active set and due sorted set.
+
+After both Moderation and Notification consumers are upgraded, replay retained
+PostHidden/PostCommentHidden facts in bounded batches using their original eventId,
+eventType and data fields on post:events. Do not reset groups, delete receipts,
+trim streams or remove projections. Previously ignored Notification receipts are
+reconciled in place; duplicate replay cannot recreate notifications. Review source
+Post snapshots for hidden records outside stream retention before planning a separate
+backfill. This change does not automatically scan another service's database.
+
+Notification cancels PENDING/SENDING lifecycle warnings and fences later lifecycle
+events once the terminal fact commits. An FCM request already accepted cannot be
+recalled; async delivery does not provide a cross-service transaction with hiding.

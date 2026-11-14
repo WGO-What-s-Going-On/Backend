@@ -9,6 +9,8 @@ export type PostEventType =
   | 'PostParticipantJoined'
   | 'PostReactionRemoved'
   | 'PostCommentDeleted'
+  | 'PostCommentHidden'
+  | 'PostHidden'
   | 'PostDeleted'
   | 'PostParticipantLeft'
   | 'PostExpired';
@@ -54,6 +56,8 @@ const eventTypes = new Set<PostEventType>([
   'PostParticipantJoined',
   'PostReactionRemoved',
   'PostCommentDeleted',
+  'PostCommentHidden',
+  'PostHidden',
   'PostDeleted',
   'PostParticipantLeft',
   'PostExpired',
@@ -107,6 +111,7 @@ export function parsePostEvent(
   const requiredActivityVersion = [
     'PostReactionRemoved',
     'PostCommentDeleted',
+    'PostCommentHidden',
     'PostParticipantLeft',
   ].includes(type);
   if (
@@ -115,7 +120,7 @@ export function parsePostEvent(
   )
     throw new Error('Invalid activity context');
   if (
-    ['PostDeleted', 'PostExpired'].includes(type) &&
+    ['PostDeleted', 'PostExpired', 'PostHidden'].includes(type) &&
     !version(value.postVersion)
   )
     throw new Error('Invalid postVersion');
@@ -159,6 +164,15 @@ export function parsePostEvent(
     throw new Error(`Invalid ${type} payload`);
   if (type === 'PostDeleted' && !date(payload.deletedAt))
     throw new Error(`Invalid ${type} payload`);
+  if (type === 'PostHidden' || type === 'PostCommentHidden') {
+    if (
+      !date(payload.hiddenAt) ||
+      !version(payload.authorId) ||
+      !text(value.moderationDecisionId) ||
+      value.moderationDecisionId.length > 128
+    )
+      throw new Error(`Invalid ${type} payload`);
+  }
   if (
     type === 'PostExpired' &&
     (!date(payload.expiredAt) || !date(payload.expiresAt))

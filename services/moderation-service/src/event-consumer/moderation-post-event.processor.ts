@@ -103,6 +103,7 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
         );
         return;
       case 'PostCommentDeleted':
+      case 'PostCommentHidden':
         if (!event.comment)
           throw new Error('Invalid PostCommentDeleted payload');
         await this.enforcement?.observeComment(
@@ -122,10 +123,15 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
         return;
       case 'PostDeleted':
       case 'PostExpired':
+      case 'PostHidden':
         await this.enforcement?.observePostTerminal(event.aggregateId);
         await this.lifecycle.terminate(
           event.aggregateId,
-          event.eventType === 'PostDeleted' ? 'DELETED' : 'EXPIRED',
+          event.eventType === 'PostDeleted'
+            ? 'DELETED'
+            : event.eventType === 'PostHidden'
+              ? 'HIDDEN'
+              : 'EXPIRED',
           event.postVersion!,
           event.occurredAt,
           event.correlationId,

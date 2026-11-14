@@ -28,6 +28,41 @@ function event(eventType: PostEvent['eventType']): PostEvent {
 }
 
 describe('ModerationPostEventProcessor', () => {
+  it('terminates hidden posts using the producer wire contract', async () => {
+    const { parsePostEvent } = await import(
+      '../src/event-consumer/post-event.js'
+    );
+    const raw = {
+      ...event('PostCreated'),
+      eventType: 'PostHidden',
+      postVersion: 2,
+      moderationDecisionId: 'decision_1',
+      post: {
+        postId: 'post_1',
+        authorId: 1,
+        category: 'GENERAL',
+        hiddenAt: '2026-01-01T00:00:00.000Z',
+      },
+    };
+    const parsed = parsePostEvent({
+      eventId: raw.eventId,
+      eventType: raw.eventType,
+      data: JSON.stringify(raw),
+    });
+    expect(parsed).not.toBeNull();
+    const terminate = vi.fn();
+    await new ModerationPostEventProcessor(
+      {} as ContentModerationService,
+      { terminate } as unknown as LifecycleService,
+    ).process(parsed!);
+    expect(terminate).toHaveBeenCalledWith(
+      'post_1',
+      'HIDDEN',
+      2,
+      raw.occurredAt,
+      raw.correlationId,
+    );
+  });
   it('initializes lifecycle for PostCreated without moderating post content', async () => {
     const moderation = {
       moderate: vi.fn(),
