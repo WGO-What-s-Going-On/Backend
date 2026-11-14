@@ -70,6 +70,28 @@ test('bootstrap preserves application ownership and durable Redis semantics', ()
     /GRANT MODIFY ON KEYSPACE wgo_map TO wgo_map/,
   );
   assert.match(configMap.data['schema.cql'], /NetworkTopologyStrategy/);
+  const movementTable = configMap.data['schema.cql'].match(
+    /CREATE TABLE IF NOT EXISTS wgo_map\.user_movement_state \(([\s\S]*?)\);/,
+  );
+  assert.ok(
+    movementTable,
+    'Map movement authorization requires its state table',
+  );
+  for (const column of [
+    'user_id bigint PRIMARY KEY',
+    'version uuid',
+    'latitude double',
+    'longitude double',
+    'updated_at timestamp',
+    'stop_latitude double',
+    'stop_longitude double',
+    'stop_at timestamp',
+    'reason text',
+  ]) {
+    assert.ok(
+      movementTable[1].split(',').some((value) => value.trim() === column),
+    );
+  }
   assert.match(configMap.data['redis-start.sh'], /appendfsync always/);
   assert.match(configMap.data['redis-start.sh'], /maxmemory-policy noeviction/);
   assert.match(configMap.data['redis-start.sh'], /port 0/);
