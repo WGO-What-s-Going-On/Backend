@@ -53,6 +53,7 @@ export async function projectExtendedPost(
     'PostCommentCreated',
     'PostCommentUpdated',
     'PostCommentDeleted',
+    'PostCommentHidden',
   ].includes(type);
   if (commentId && event.commentAuthorId) {
     const known = (
@@ -86,13 +87,13 @@ export async function projectExtendedPost(
         postId,
         commentId,
         event.activityVersion ?? 1,
-        type === 'PostCommentDeleted',
+        type === 'PostCommentDeleted' || type === 'PostCommentHidden',
         event.commentAuthorId ?? event.actorId,
         event.parentCommentId ?? null,
       ],
     );
   }
-  if (type === 'PostCommentDeleted') {
+  if (type === 'PostCommentDeleted' || type === 'PostCommentHidden') {
     const facts = (
       await client.query<Fact>(
         `SELECT * FROM notification_activities WHERE post_id=$1 AND active

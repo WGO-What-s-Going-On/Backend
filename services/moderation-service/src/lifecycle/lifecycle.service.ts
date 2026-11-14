@@ -134,7 +134,7 @@ export class LifecycleService {
 
   async terminate(
     postId: string,
-    state: 'DELETED' | 'EXPIRED',
+    state: 'DELETED' | 'EXPIRED' | 'HIDDEN',
     postVersion: number,
     occurredAt: string,
     correlationId: string,

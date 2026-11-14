@@ -239,7 +239,12 @@ export class PostgresEventStore {
         ['post:events', event.eventId],
       )
     ).rows[0];
-    if (known) {
+    // Older consumers persisted an ignored receipt for hidden facts. Reconcile
+    // those facts without deleting receipts or resetting the consumer group.
+    const hidden =
+      event.eventType === 'PostHidden' ||
+      event.eventType === 'PostCommentHidden';
+    if (known && !(known.details.ignored && hidden)) {
       if (
         known.details.eventType !== event.eventType ||
         (known.details.aggregateId &&
@@ -337,13 +342,15 @@ export class PostgresEventStore {
         );
         return processed.recipient ?? undefined;
       }
-      if (receipt) return undefined;
+      if (receipt && !(receipt.details.ignored && hidden)) return undefined;
       const recipient = event.postAuthorId ?? meta.author_id ?? undefined;
       if (event.eventType === 'PostCreated')
         await scheduleNearby(client, event);
       const previousPost = { ...meta };
       const terminal =
-        event.eventType === 'PostDeleted' || event.eventType === 'PostExpired';
+        event.eventType === 'PostDeleted' ||
+        event.eventType === 'PostExpired' ||
+        event.eventType === 'PostHidden';
       if (terminal) {
         meta.closed = true;
         if ((event.postVersion ?? 0) >= meta.post_version) {
@@ -540,7 +547,8 @@ export class PostgresEventStore {
               event.activityKey,
               version,
               active,
-              event.eventType === 'PostCommentDeleted',
+              event.eventType === 'PostCommentDeleted' ||
+                event.eventType === 'PostCommentHidden',
               notificationId ?? null,
               activityRecipient ?? null,
             ],

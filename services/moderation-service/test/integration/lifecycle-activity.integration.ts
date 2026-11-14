@@ -74,6 +74,96 @@ describe('versioned activity and frozen ENDED evidence with Redis', () => {
     expect((await h.redis.xPending(stream, group)).pending).toBe(0);
     expect(await h.redis.xLen(dead)).toBe(0);
   }
+  it.each(['PostHidden', 'PostDeleted', 'PostExpired'] as const)(
+    'removes %s posts from scheduling, preserves tombstones and fences reverse activity',
+    async (type) => {
+      const id = await create();
+      await h.lifecycle.evaluate(id, new Date(at(60)));
+      const extra =
+        type === 'PostHidden'
+          ? {
+              postVersion: 2,
+              moderationDecisionId: 'decision_1',
+              post: {
+                postId: id,
+                authorId: 1,
+                category: 'GENERAL',
+                hiddenAt: at(61),
+              },
+            }
+          : {};
+      const terminal = h.fields(type, id, at(61), '', extra);
+      await h.send(terminal);
+      await h.send(terminal);
+      await h.send(h.fields('PostCreated', id, at(0)));
+      await reaction(id, 1, 'CURIOUS', 99, true, 62, 62);
+      await h.lifecycle.evaluate(id, new Date(at(120)));
+      await state(id, 'CLOSED');
+      expect(
+        Number(await h.redis.sIsMember('moderation:lifecycle:posts', id)),
+      ).toBe(0);
+      expect(await h.redis.zScore('moderation:lifecycle:due', id)).toBeNull();
+      expect(await h.repository.find(id)).toMatchObject({
+        sourceState:
+          type === 'PostHidden'
+            ? 'HIDDEN'
+            : type === 'PostDeleted'
+              ? 'DELETED'
+              : 'EXPIRED',
+      });
+      expect(await events()).toEqual(['BOARD_STALE']);
+      const reversed = h.postId();
+      await h.send(
+        h.fields(
+          type,
+          reversed,
+          at(61),
+          '',
+          type === 'PostHidden'
+            ? {
+                postVersion: 2,
+                moderationDecisionId: 'decision_1',
+                post: {
+                  postId: reversed,
+                  authorId: 1,
+                  category: 'GENERAL',
+                  hiddenAt: at(61),
+                },
+              }
+            : {},
+        ),
+      );
+      await h.send(h.fields('PostCreated', reversed, at(0)));
+      await h.lifecycle.evaluate(reversed, new Date(at(120)));
+      await state(reversed, 'CLOSED');
+      expect(
+        await h.redis.zScore('moderation:lifecycle:due', reversed),
+      ).toBeNull();
+      expect(await events()).toEqual(['BOARD_STALE']);
+    },
+  );
+  it('records hidden comments without terminating or reactivating their post', async () => {
+    const id = await create();
+    await h.send(
+      h.fields('PostCommentHidden', id, at(10), '', {
+        activityVersion: 2,
+        moderationDecisionId: 'decision_1',
+        comment: {
+          postId: id,
+          commentId: 'hidden',
+          authorId: 1,
+          hiddenAt: at(10),
+        },
+      }),
+    );
+    await state(id, 'ACTIVE');
+    expect((await projection(id))?.comments?.hidden).toEqual({
+      version: 2,
+      deleted: true,
+    });
+    await h.lifecycle.evaluate(id, new Date(at(60)));
+    await state(id, 'STALE');
+  });
   it('does not enter early STALE with four ENDED users or five of eight users', async () => {
     const four = await create();
     await seed(four, 4);

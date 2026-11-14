@@ -176,6 +176,94 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
       )
     )[0].count;
   }
+  async function badgeEvents(code: string, action: string) {
+    return (
+      await db.query(
+        `SELECT count(*) FROM outbox_events WHERE event_type=$1
+      AND aggregate_id='1' AND payload->'payload'->>'badgeCode'=$2`,
+        [`USER_BADGE_${action}`, code],
+      )
+    )[0].count;
+  }
+  it('emits only ownership transitions across concurrent regions, replays, partial loss and reacquisition', async () => {
+    await competitors(10);
+    await competitors(10, R2);
+    const second = new RegionalRankingWorker(
+      db,
+      new TitleService(titles.settings),
+    );
+    const runs = await Promise.all([
+      ranker.recompute(R1, NOW),
+      second.recompute(R2, NOW),
+    ]);
+    expect(await badgeEvents('CLAIRVOYANT', 'GRANTED')).toBe('1');
+    expect(await history('CLAIRVOYANT', 'GRANTED')).toBe('2');
+    const apply = (
+      region: string,
+      runId: string,
+      selected: boolean,
+      eventId = 'ranking-replay',
+    ) =>
+      db.transaction((m) =>
+        titles.changeRegional(
+          m,
+          '1',
+          region,
+          runId,
+          selected,
+          { eventId, correlationId: 'regional-idempotency' },
+          { reason: 'REGIONAL_TOP_TEN_PERCENT' },
+        ),
+      );
+    await Promise.all([
+      apply(R1, runs[0]!, true),
+      apply(R2, runs[1]!, true),
+      apply(R1, runs[0]!, true),
+    ]);
+    expect(await badgeEvents('CLAIRVOYANT', 'GRANTED')).toBe('1');
+    await apply(R1, runs[0]!, false);
+    expect(await has('CLAIRVOYANT')).toBe(true);
+    expect(await badgeEvents('CLAIRVOYANT', 'REVOKED')).toBe('0');
+    await Promise.all([apply(R2, runs[1]!, false), apply(R2, runs[1]!, false)]);
+    expect(await has('CLAIRVOYANT')).toBe(false);
+    expect(await badgeEvents('CLAIRVOYANT', 'REVOKED')).toBe('1');
+    await Promise.all([
+      apply(R1, runs[0]!, true, 'reacquired'),
+      apply(R2, runs[1]!, true, 'reacquired'),
+    ]);
+    expect(await has('CLAIRVOYANT')).toBe(true);
+    expect(await badgeEvents('CLAIRVOYANT', 'GRANTED')).toBe('2');
+    expect(await history('CLAIRVOYANT', 'GRANTED')).toBe('4');
+    expect(await history('CLAIRVOYANT', 'REVOKED')).toBe('2');
+  });
+  it.each(['NEWS_SOURCE', 'REPORTER', 'CORRESPONDENT'])(
+    'makes %s grants/revocations atomic across workers and permits reacquisition',
+    async (code) => {
+      await db.transaction((m) => titles.ensurePolicy(m));
+      const apply = (qualifies: boolean, eventId: string) =>
+        db.transaction((m) =>
+          titles.changeBadge(
+            m,
+            '1',
+            code,
+            qualifies,
+            { eventId, correlationId: 'badge-idempotency' },
+            'VALID_ACTIVITY_CONDITIONS',
+          ),
+        );
+      await Promise.all([
+        apply(true, 'first'),
+        apply(true, 'first'),
+        apply(true, 'parallel'),
+      ]);
+      expect(await badgeEvents(code, 'GRANTED')).toBe('1');
+      await Promise.all([apply(false, 'revoke'), apply(false, 'revoke')]);
+      expect(await badgeEvents(code, 'REVOKED')).toBe('1');
+      await Promise.all([apply(true, 'reacquire'), apply(true, 'reacquire')]);
+      expect(await badgeEvents(code, 'GRANTED')).toBe('2');
+      expect(await has(code)).toBe(true);
+    },
+  );
   function reaction(
     c: ActivityInput,
     actorId: string,
@@ -517,6 +605,12 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
     await competitors(10, R2);
     await ranker.recompute(R1, NOW);
     await ranker.recompute(R2, NOW);
+    expect(
+      (
+        await db.query(`SELECT count(*) FROM outbox_events WHERE event_type='USER_BADGE_GRANTED'
+      AND aggregate_id='1' AND payload->'payload'->>'badgeCode'='CLAIRVOYANT'`)
+      )[0].count,
+    ).toBe('1');
     expect(
       (
         await db.query(
