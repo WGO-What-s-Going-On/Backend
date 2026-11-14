@@ -218,24 +218,23 @@ export class TitleService {
   ) {
     const b = await this.badge(m, code);
     if (!b.active) qualifies = false;
-    const [old] = await m.query(
-      'SELECT revoked_at FROM user_badges WHERE user_id=$1 AND badge_id=$2',
-      [userId, b.id],
-    );
-    if (qualifies && (!old || old.revoked_at !== null)) {
-      await m.query(
+    if (qualifies) {
+      const changed = await m.query(
         `INSERT INTO user_badges(user_id,badge_id,granted_at,revoked_at) VALUES($1,$2,now(),null)
-        ON CONFLICT(user_id,badge_id) DO UPDATE SET granted_at=now(),revoked_at=null`,
+        ON CONFLICT(user_id,badge_id) DO UPDATE SET granted_at=now(),revoked_at=null
+        WHERE user_badges.revoked_at IS NOT NULL RETURNING user_id`,
         [userId, b.id],
       );
+      if (!changed.length) return;
       await this.recordBadgeChange(m, userId, b, 'GRANTED', context, {
         reason,
       });
-    } else if (!qualifies && old?.revoked_at === null) {
-      await m.query(
-        'UPDATE user_badges SET revoked_at=now() WHERE user_id=$1 AND badge_id=$2',
+    } else {
+      const [changed] = await m.query(
+        'UPDATE user_badges SET revoked_at=now() WHERE user_id=$1 AND badge_id=$2 AND revoked_at IS NULL RETURNING user_id',
         [userId, b.id],
       );
+      if (!changed.length) return;
       await this.recordBadgeChange(m, userId, b, 'REVOKED', context, {
         reason,
       });
@@ -248,6 +247,7 @@ export class TitleService {
     action: 'GRANTED' | 'REVOKED',
     context: RewardEventContext,
     details: Record<string, unknown>,
+    publish = true,
   ) {
     await m.query(
       `INSERT INTO user_badge_history(user_id,badge_id,action,policy_version,region_code,ranking_run_id,reason) VALUES($1,$2,$3,$4,$5,$6,$7)`,
@@ -261,14 +261,15 @@ export class TitleService {
         details.reason ?? null,
       ],
     );
-    await emitRewardEvent(m, userId, context, `USER_BADGE_${action}`, {
-      badgeId: b.id,
-      policyVersion: TITLE_POLICY.version,
-      badgeCode: b.code,
-      badgeName: b.name,
-      stage: TITLE_CODES.indexOf(b.code as (typeof TITLE_CODES)[number]) + 1,
-      ...details,
-    });
+    if (publish)
+      await emitRewardEvent(m, userId, context, `USER_BADGE_${action}`, {
+        badgeId: b.id,
+        policyVersion: TITLE_POLICY.version,
+        badgeCode: b.code,
+        badgeName: b.name,
+        stage: TITLE_CODES.indexOf(b.code as (typeof TITLE_CODES)[number]) + 1,
+        ...details,
+      });
   }
   async changeRegional(
     m: EntityManager,
@@ -279,6 +280,9 @@ export class TitleService {
     context: RewardEventContext,
     details: Record<string, unknown>,
   ) {
+    // Regional eligibility and the shared badge must change under one user lock,
+    // including workers selecting the same user in different regions.
+    await m.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [userId]);
     const b = await this.badge(m, 'CLAIRVOYANT');
     if (!b.active) selected = false;
     const [old] = await m.query(
@@ -286,6 +290,10 @@ export class TitleService {
       [userId, b.id, regionCode],
     );
     if (selected && (!old || old.revoked_at !== null)) {
+      const [held] = await m.query(
+        'SELECT 1 FROM user_badges WHERE user_id=$1 AND badge_id=$2 AND revoked_at IS NULL',
+        [userId, b.id],
+      );
       await m.query(
         `INSERT INTO user_regional_badges(user_id,badge_id,region_code,run_id) VALUES($1,$2,$3,$4)
         ON CONFLICT(user_id,badge_id,region_code) DO UPDATE SET granted_at=now(),revoked_at=null,run_id=EXCLUDED.run_id`,
@@ -296,21 +304,41 @@ export class TitleService {
         achieved_stages=CASE WHEN achieved_stages?'CLAIRVOYANT' THEN achieved_stages ELSE achieved_stages||jsonb_build_object('CLAIRVOYANT',now()) END WHERE user_id=$1`,
         [userId],
       );
-      await this.recordBadgeChange(m, userId, b, 'GRANTED', context, {
-        ...details,
-        regionCode,
-        rankingRunId: runId,
-      });
+      await this.recordBadgeChange(
+        m,
+        userId,
+        b,
+        'GRANTED',
+        context,
+        {
+          ...details,
+          regionCode,
+          rankingRunId: runId,
+        },
+        !held,
+      );
     } else if (!selected && old?.revoked_at === null) {
       await m.query(
         'UPDATE user_regional_badges SET revoked_at=now(),run_id=$4 WHERE user_id=$1 AND badge_id=$2 AND region_code=$3',
         [userId, b.id, regionCode, runId],
       );
-      await this.recordBadgeChange(m, userId, b, 'REVOKED', context, {
-        ...details,
-        regionCode,
-        rankingRunId: runId,
-      });
+      const [remaining] = await m.query(
+        'SELECT 1 FROM user_regional_badges WHERE user_id=$1 AND badge_id=$2 AND revoked_at IS NULL LIMIT 1',
+        [userId, b.id],
+      );
+      await this.recordBadgeChange(
+        m,
+        userId,
+        b,
+        'REVOKED',
+        context,
+        {
+          ...details,
+          regionCode,
+          rankingRunId: runId,
+        },
+        !remaining,
+      );
     } else if (selected)
       await m.query(
         'UPDATE user_regional_badges SET run_id=$4 WHERE user_id=$1 AND badge_id=$2 AND region_code=$3',
@@ -331,7 +359,8 @@ export class TitleService {
     if (BigInt(r.active) > 0n)
       await m.query(
         `INSERT INTO user_badges(user_id,badge_id,granted_at,revoked_at) VALUES($1,$2,now(),null)
-      ON CONFLICT(user_id,badge_id) DO UPDATE SET revoked_at=null`,
+      ON CONFLICT(user_id,badge_id) DO UPDATE SET granted_at=now(),revoked_at=null
+      WHERE user_badges.revoked_at IS NOT NULL`,
         [userId, b.id],
       );
     else if (r.total === '0')

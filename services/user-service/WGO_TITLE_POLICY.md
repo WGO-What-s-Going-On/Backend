@@ -77,7 +77,8 @@ LEGACY 행은 신원이 일치하는 원본 확인 replay로 한 번 보충할 �
 ## API와 Notification 인계
 
 기존 growth/credits/badges/history 및 Gateway 인증을 유지한다. 새 공개 경로나 위치 입력은 없다. `additionalPointsForGuaranteedEntry`는 다른 결과가 고정됐을 때 저장된 컷을 넘는 점수 차다. 기존 additionalSelectionsForGuaranteedEntry는 호환 alias이며 후보 이벤트 개수 보장이 아님을 Swagger에 명시한다. upToDate는 날짜·입력 revision·정책까지 검사한다.
-`user:events`의 USER_BADGE_GRANTED/REVOKED, USER_LEVEL_CHANGED, USER_CREDIT_CHANGED를 유지한다. 실제 자격 전환에서만 append-only history와 Outbox를 한 번 만든다. 천리안에는 regionCode/rank/score/rankingRunId/window/경쟁 인원 등 기존 메타데이터를 유지한다. 같은 상태 재계산은 획득 알림을 반복하지 않는다.
+`user:events`의 USER_BADGE_GRANTED/REVOKED, USER_LEVEL_CHANGED, USER_CREDIT_CHANGED를 유지한다. 지역별 자격 전환은 기존 append-only history에 모두 기록하되, 천리안 지급 이벤트는 실제 전체 칭호 보유 상태가 부재/회수 → 활성으로 바뀔 때만 발행한다. 다른 지역에서 이미 보유하면 추가 획득 이벤트를 발행하지 않고, 마지막 활성 지역 자격을 잃을 때만 회수 이벤트를 발행한다. 회수 후 재획득은 새 획득 이벤트를 발행한다. 전이를 발생시킨 지역의 regionCode/rank/score/rankingRunId/window/경쟁 인원 등 기존 메타데이터를 유지한다.
+지역 자격과 전체 칭호 요약은 같은 트랜잭션의 사용자 행 잠금으로 직렬화한다. 일반 칭호는 조건부 INSERT/UPDATE의 RETURNING 결과로 실제 보유 전이에서만 이력과 Outbox를 기록한다. 기존 활동 이벤트 Inbox 및 랭킹 실행/입력 revision 멱등성도 유지한다. 정책·획득 조건·보상 점수·기존 이력은 변경하지 않는다.
 물리 전달은 at-least-once이므로 Notification은 독립 group/Inbox에서 eventId 중복 제거 후 DB commit 뒤 XACK해야 한다. Notification 코드는 이번에 변경하지 않는다. 상세 envelope는 [REWARDS_CONTRACT.md](REWARDS_CONTRACT.md)를 따른다.
 
 ## 배포 전 확인
