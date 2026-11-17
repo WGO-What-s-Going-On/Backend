@@ -12,6 +12,7 @@ import {
   NotificationRecipientIndex,
   RecipientIndexUnavailable,
 } from './notification-recipient-index.js';
+import type { LocationGeoIndex } from './location-geo-index.js';
 import { observeRpc, rpcContext } from './logging.js';
 
 function notificationKeys(raw = process.env.MAP_NOTIFICATION_TRUSTED_JWKS) {
@@ -45,6 +46,7 @@ function notificationKeys(raw = process.env.MAP_NOTIFICATION_TRUSTED_JWKS) {
 export function registerNotificationGrpc(
   server: Server,
   index: NotificationRecipientIndex,
+  locations?: LocationGeoIndex,
 ) {
   const keys = notificationKeys();
   const pkg = loadPackageDefinition(
@@ -130,6 +132,40 @@ export function registerNotificationGrpc(
       throw new RecipientIndexUnavailable('Recipient storage failed');
     }
   };
+  if (locations) {
+    const locationPkg = loadPackageDefinition(
+      loadSync(
+        resolve(process.cwd(), 'contracts/map-location-recipients.proto'),
+        { longs: String },
+      ),
+    ) as any;
+    server.addService(
+      locationPkg.wgo.map.locations.v1.MapLocationRecipients.service,
+      {
+        FindNearbyLocationUsers: handler(
+          'FindNearbyLocationUsers',
+          async (input, check) => {
+            if (
+              !validCoordinates(input.latitude, input.longitude) ||
+              !Number.isFinite(input.participationRadiusM) ||
+              input.participationRadiusM < 1 ||
+              input.participationRadiusM > 10000 ||
+              !/^[1-9]\d*$/.test(input.authorId) ||
+              !Number.isSafeInteger(Number(input.authorId)) ||
+              !Number.isInteger(input.limit) ||
+              input.limit < 1 ||
+              input.limit > 50 ||
+              (input.afterUserId &&
+                (!/^[1-9]\d*$/.test(input.afterUserId) ||
+                  !Number.isSafeInteger(Number(input.afterUserId))))
+            )
+              throw new Error();
+            return storage(() => locations.find(input, check));
+          },
+        ),
+      },
+    );
+  }
   server.addService(
     pkg.wgo.map.notifications.v1.MapNotificationRecipients.service,
     {

@@ -79,7 +79,10 @@ export class GatewayAuthGuard implements CanActivate {
     // service key, never a forwarded user header or the Gateway private key.
     if (
       request.method === 'POST' &&
-      request.path === '/internal/notifications/blocks/check'
+      [
+        '/internal/notifications/blocks/check',
+        '/internal/notifications/nearby/eligibility',
+      ].includes(request.path)
     ) {
       if (
         request.rawHeaders.filter(

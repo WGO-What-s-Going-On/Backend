@@ -3,6 +3,7 @@ import type { Server } from '@grpc/grpc-js';
 import type { LocationStore } from './location.js';
 import { registerNotificationGrpc } from './notification-grpc.js';
 import { NotificationRecipientIndex } from './notification-recipient-index.js';
+import { LocationGeoIndex } from './location-geo-index.js';
 import { createLogger } from './observability/logging.js';
 
 // New notification configuration and connections must never prevent existing Map startup.
@@ -19,8 +20,9 @@ export function registerNotificationRecipients(
     commandsQueueMaxLength: 1000,
   });
   const index = new NotificationRecipientIndex(redis, store);
+  const locations = new LocationGeoIndex(redis, store);
   try {
-    registerNotificationGrpc(server, index);
+    registerNotificationGrpc(server, index, locations);
   } catch (error) {
     log.failure(
       'notification_index.configuration_failed',
@@ -42,7 +44,10 @@ export function registerNotificationRecipients(
   void redis
     .connect()
     .then(() => {
-      if (!stopping) index.start();
+      if (!stopping) {
+        index.start();
+        locations.start();
+      }
     })
     .catch((error) =>
       log.failure(
@@ -54,6 +59,7 @@ export function registerNotificationRecipients(
     );
   return async () => {
     stopping = true;
+    await locations.close();
     await index.close();
     if (redis.isReady) await redis.quit().catch(() => redis.destroy());
     else if (redis.isOpen) redis.destroy();

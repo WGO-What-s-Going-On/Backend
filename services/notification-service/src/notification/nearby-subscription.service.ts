@@ -26,6 +26,12 @@ export class NearbySubscriptionService {
   }
   async remove(userId: string) {
     await this.database.transaction(async (client) => {
+      // Older clients' explicit withdrawal must also opt out of the new audience.
+      await client.query(
+        `INSERT INTO notification_preferences(user_id,settings) VALUES($1,'{"nearby":false}')
+        ON CONFLICT(user_id) DO UPDATE SET settings=notification_preferences.settings || EXCLUDED.settings`,
+        [userId],
+      );
       // The row lock also serializes a concurrent fanout enqueue with withdrawal.
       await client.query(
         'DELETE FROM notification_nearby_subscriptions WHERE user_id=$1',

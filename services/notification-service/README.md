@@ -131,7 +131,7 @@ Event marker와 activity tombstone은 자동 만료시키지 않습니다. Strea
 | 기능 | 실제 코드 확인 결과 / 필요한 계약 |
 | --- | --- |
 | 신고 검토 결과 | REVIEWED 상태만 있고 실제 관리자 검토·결정/조치 완료 생산자는 없음 |
-| 주변 150m 활성화 | 구현/로컬 검증, 기본 OFF. 별도 위치 동의 UI·User 차단 조회 서비스 키 설정과 실제 배포 검증 필요 |
+| 주변 게시글 알림 활성화 | Map GEO 기반 150/250/350m, 별도 구독 불필요, nearby 기본 true. 기존 약관 동의·철회 검사 및 서비스 키/기능 플래그 설정 필요 |
 | 실시간 인앱 | Realtime Gateway의 사용자별 Notification 전달·인증 계약 없음 |
 
 답글·댓글 공감·후보/승리·칭호/레벨·버전 있는 STALE/재활성화·Post 실제 종료·신고 접수/취소·확정 삭제 제재를 구현했습니다. PostgreSQL을 알림 원본으로 사용하며 참여를 수신 동의로 보거나 ENDED/AI flagged를 확정 종료/제재로 해석하지 않습니다. 운영 GCP 검증과 로컬 검증을 구분합니다.
@@ -179,3 +179,5 @@ Gateway의 `pnpm docs:generate`는 기존 `NOTIFICATION_SERVICE_URL`의 문서�
 문서 수집 실패는 전체 갱신 실패이며 기존 파일을 보존한다.
 문서 계약 테스트는 외부 저장소 없이 `pnpm test test/openapi.test.ts`로 실행한다.
 실제 알림 처리에 필요한 PostgreSQL·Redis·FCM 설정은 위 실행 절차를 따른다.
+
+구독 없는 주변 알림의 계약·복구 한계·운영 적용 순서는 [GEO 적용 문서](../../docs/qa/NEARBY_LOCATION_GEO_ROLLOUT.md)를 따른다.

@@ -12,6 +12,7 @@ import { NotificationState } from '../redis/notification-state.js';
 import { PostEventHandler } from '../event-consumer/post-event.handler.js';
 import { NotificationBlockChecker } from './block-checker.js';
 import { nearbyEnabled } from './nearby.policy.js';
+import { NearbyEligibilityClient } from './nearby-eligibility.client.js';
 import { MapNearbyClient } from './map-nearby.client.js';
 interface Job {
   post_id: string;
@@ -21,10 +22,10 @@ interface Job {
   longitude: number;
   cursor_user_id: string;
   lease_id: string;
+  expires_at: Date;
 }
 interface Location {
   user_id: string;
-  revision: string;
 }
 @Injectable()
 export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
@@ -41,6 +42,9 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
     private readonly deliveries: PostEventHandler,
     private readonly config: ConfigService,
     private readonly map: MapNearbyClient = new MapNearbyClient(),
+    private readonly eligibility: NearbyEligibilityClient = new NearbyEligibilityClient(
+      config,
+    ),
   ) {}
   onModuleInit() {
     if (!this.config.get<string>('redis.url')) return;
@@ -75,8 +79,6 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
       this.nextCleanup = Date.now() + 60000;
     }
     if (!nearbyEnabled()) return;
-    // Rebuild from durable consent before taking a fanout lease, including after restarts/index loss.
-    await this.map.ensureIndex(this.database);
     const lease = randomUUID();
     const job = (
       await this.database.pool.query<Job>(
@@ -105,8 +107,10 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
       });
       const rows: Location[] = page.users.map((user) => ({
         user_id: user.userId,
-        revision: user.revision,
       }));
+      const eligible = await this.eligibility.eligible(
+        rows.map((row) => row.user_id),
+      );
       // At most five 2-second authority requests are in flight. A page stays within the durable lease.
       for (let offset = 0; offset < rows.length; offset += 5) {
         const group = rows.slice(offset, offset + 5);
@@ -114,6 +118,7 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
           group.map(async (location) => ({
             location,
             allowed:
+              eligible.has(location.user_id) &&
               location.user_id !== job.author_id &&
               (await this.blocks.allowed(location.user_id, job.author_id)),
           })),
@@ -199,14 +204,8 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
         );
         return false;
       }
-      const subscription = (
-        await client.query(
-          'SELECT revision FROM notification_nearby_subscriptions WHERE user_id=$1 AND expires_at>now() FOR UPDATE',
-          [location.user_id],
-        )
-      ).rows[0];
       let created = false;
-      if (allowed && subscription?.revision === location.revision) {
+      if (allowed) {
         await client.query(
           `INSERT INTO notification_nearby_limits(user_id,last_enqueued_at) VALUES($1,'-infinity') ON CONFLICT DO NOTHING`,
           [location.user_id],
@@ -237,7 +236,10 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
             body: '주변에 새로운 게시물이 등록되었습니다.',
             push: true,
             authorizationActorId: job.author_id,
-            deliveryData: { subscriptionRevision: location.revision },
+            deliveryData: {
+              nearbyAudiencePolicy: 'map-location-terms-v1',
+              nearbyExpiresAt: new Date(job.expires_at).toISOString(),
+            },
           });
           created = !!n?.created;
           if (created)
