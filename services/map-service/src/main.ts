@@ -36,7 +36,7 @@ http.listen(Number(process.env.HTTP_PORT ?? 3003));
 const close = async () => {
   if (stopping) return;
   stopping = true;
-  consumer.stop();
+  const consumerClosed = consumer.stop();
   const httpClosed = new Promise<void>((resolve) =>
     http.close(() => resolve()),
   );
@@ -50,7 +50,7 @@ const close = async () => {
       resolve();
     });
   });
-  await Promise.all([httpClosed, grpcClosed]);
+  await Promise.all([httpClosed, grpcClosed, consumerClosed]);
   await closeRecipients();
   await index.close();
   await store.close();
