@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { selectChanges } from './ci-lib.mjs';
+
+test('new recipient contracts select both Map and Notification regression suites', () => {
+  assert.equal(
+    readFileSync(
+      'services/map-service/contracts/map-notification.proto',
+      'utf8',
+    ),
+    readFileSync(
+      'services/notification-service/contracts/map-notification.proto',
+      'utf8',
+    ),
+  );
+  for (const path of [
+    'services/map-service/contracts/map-location-recipients.proto',
+    'services/map-service/src/location-geo-index.ts',
+    'services/user-service/src/users/nearby-eligibility.controller.ts',
+    'services/notification-service/src/notification/nearby-eligibility.client.ts',
+    'services/map-service/contracts/map-notification.proto',
+    'services/map-service/src/notification-recipient-index.ts',
+    'services/notification-service/contracts/map-notification.proto',
+  ]) {
+    const names = selectChanges([path]).matrix.include.map((s) => s.name);
+    assert.ok(names.includes('map-service'));
+    assert.ok(names.includes('notification-service'));
+  }
+});
+
+test('new location recipient proto copies stay identical', () => {
+  assert.equal(
+    readFileSync(
+      'services/map-service/contracts/map-location-recipients.proto',
+      'utf8',
+    ),
+    readFileSync(
+      'services/notification-service/contracts/map-location-recipients.proto',
+      'utf8',
+    ),
+  );
+});
+
+test(
+  'Notification integration installs Map first and stops on a failed prerequisite',
+  { skip: process.platform === 'win32' },
+  () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wgo-nearby-ci-'));
+    const log = join(dir, 'commands.jsonl');
+    try {
+      writeFileSync(
+        join(dir, 'pnpm'),
+        `#!/usr/bin/env node
+const fs=require('node:fs');
+const entry={cwd:process.cwd(),args:process.argv.slice(2)};
+fs.appendFileSync(process.env.COMMAND_LOG,JSON.stringify(entry)+'\\n');
+if(process.env.FAIL_MAP==='1'&&entry.cwd.endsWith('/map-service')&&entry.args.includes('build'))process.exit(9);
+`,
+        { mode: 0o755 },
+      );
+      const run = (fail) =>
+        spawnSync(
+          process.execPath,
+          ['scripts/ci-run.mjs', 'notification-service'],
+          {
+            env: {
+              ...process.env,
+              PATH: `${dir}:${process.env.PATH}`,
+              COMMAND_LOG: log,
+              FAIL_MAP: fail,
+            },
+            encoding: 'utf8',
+          },
+        );
+      assert.equal(run('0').status, 0);
+      const entries = readFileSync(log, 'utf8')
+        .trim()
+        .split('\n')
+        .map(JSON.parse);
+      assert.ok(entries[0].cwd.endsWith('/map-service'));
+      assert.deepEqual(entries[0].args, ['install', '--frozen-lockfile']);
+      assert.deepEqual(entries[1].args, ['run', 'build']);
+      assert.ok(
+        entries.some(
+          (e) =>
+            e.cwd.endsWith('/notification-service') &&
+            e.args.includes('test:integration'),
+        ),
+      );
+      writeFileSync(log, '');
+      assert.equal(run('1').status, 9);
+      assert.equal(readFileSync(log, 'utf8').trim().split('\n').length, 2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);

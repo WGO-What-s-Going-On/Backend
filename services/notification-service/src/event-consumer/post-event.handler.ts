@@ -14,6 +14,7 @@ import {
 } from '../persistence/postgres-event.store.js';
 import { NotificationState } from '../redis/notification-state.js';
 import type { PostEvent } from './post-event.js';
+import { NearbyEligibilityClient } from '../notification/nearby-eligibility.client.js';
 import { NotificationBlockChecker } from '../notification/block-checker.js';
 
 @Injectable()
@@ -29,6 +30,7 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
     @Inject(PUSH_SENDER) private readonly push: PushSender,
     @Optional() private readonly config?: ConfigService,
     @Optional() private readonly blocks?: NotificationBlockChecker,
+    @Optional() private readonly eligibility?: NearbyEligibilityClient,
   ) {}
   onModuleInit(): void {
     if (!this.config?.get<string>('redis.url')) return;
@@ -120,6 +122,22 @@ export class PostEventHandler implements OnModuleInit, OnModuleDestroy {
         }
         let result;
         try {
+          if (
+            delivery.message.data?.type === 'NEARBY_POST_CREATED' &&
+            delivery.message.data?.nearbyAudiencePolicy ===
+              'map-location-terms-v1'
+          ) {
+            if (!this.eligibility)
+              throw new Error('Nearby consent authority unavailable');
+            if (
+              !(await this.eligibility.eligible([delivery.message.userId])).has(
+                delivery.message.userId,
+              )
+            ) {
+              await this.store.finish(delivery, 'CANCELED');
+              continue;
+            }
+          }
           const actorId =
             delivery.message.authorizationActorId ??
             delivery.message.data?.actorId;

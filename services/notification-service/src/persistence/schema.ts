@@ -98,6 +98,7 @@ export async function migrate(pool: Pool): Promise<void> {
     await migrateCrossService(client);
     await migratePostNotifications(client);
     await migrateNearby(client);
+    await migrateNearbyMap(client);
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
@@ -106,3 +107,4 @@ export async function migrate(pool: Pool): Promise<void> {
     client.release();
   }
 }
+import { migrateNearbyMap } from './nearby-map.schema.js';

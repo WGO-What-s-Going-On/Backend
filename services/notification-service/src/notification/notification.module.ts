@@ -24,6 +24,8 @@ import { ModerationEventHandler } from '../event-consumer/moderation-event.handl
 import { NearbyController } from './nearby.controller.js';
 import { NearbySubscriptionService } from './nearby-subscription.service.js';
 import { NearbyWorker } from './nearby.worker.js';
+import { NearbyEligibilityClient } from './nearby-eligibility.client.js';
+import { MapNearbyClient } from './map-nearby.client.js';
 
 @Module({
   controllers: [
@@ -60,6 +62,8 @@ import { NearbyWorker } from './nearby.worker.js';
     ModerationEventHandler,
     NearbySubscriptionService,
     NearbyWorker,
+    MapNearbyClient,
+    NearbyEligibilityClient,
     NotificationStreamWorkers,
     PostEventHandler,
     PostEventConsumer,

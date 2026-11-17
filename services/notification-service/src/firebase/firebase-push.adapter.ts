@@ -51,6 +51,8 @@ export class FirebasePushAdapter implements PushSender {
               'authorizationActorId',
               'allowTerminal',
               'subscriptionRevision',
+              'nearbyAudiencePolicy',
+              'nearbyExpiresAt',
             ].includes(key),
         ),
       ),

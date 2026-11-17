@@ -1,0 +1,18 @@
+syntax = "proto3";
+package wgo.map.locations.v1;
+service MapLocationRecipients {
+  rpc FindNearbyLocationUsers(NearbyLocationUsersRequest) returns (NearbyLocationUsersResponse);
+}
+message NearbyLocationUsersRequest {
+  double latitude = 1;
+  double longitude = 2;
+  double participation_radius_m = 3;
+  int64 author_id = 4;
+  int32 limit = 5;
+  string after_user_id = 6;
+}
+message LocationRecipient { int64 user_id = 1; }
+message NearbyLocationUsersResponse {
+  repeated LocationRecipient users = 1;
+  string next_after_user_id = 2;
+}

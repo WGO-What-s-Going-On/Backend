@@ -11,7 +11,9 @@ import { NotificationEventWriter } from '../persistence/notification-event.write
 import { NotificationState } from '../redis/notification-state.js';
 import { PostEventHandler } from '../event-consumer/post-event.handler.js';
 import { NotificationBlockChecker } from './block-checker.js';
-import { nearbyEnabled, distanceM } from './nearby.policy.js';
+import { nearbyEnabled } from './nearby.policy.js';
+import { NearbyEligibilityClient } from './nearby-eligibility.client.js';
+import { MapNearbyClient } from './map-nearby.client.js';
 interface Job {
   post_id: string;
   event_id: string;
@@ -20,12 +22,10 @@ interface Job {
   longitude: number;
   cursor_user_id: string;
   lease_id: string;
+  expires_at: Date;
 }
 interface Location {
   user_id: string;
-  revision: string;
-  latitude: number;
-  longitude: number;
 }
 @Injectable()
 export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
@@ -41,6 +41,10 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
     private readonly state: NotificationState,
     private readonly deliveries: PostEventHandler,
     private readonly config: ConfigService,
+    private readonly map: MapNearbyClient = new MapNearbyClient(),
+    private readonly eligibility: NearbyEligibilityClient = new NearbyEligibilityClient(
+      config,
+    ),
   ) {}
   onModuleInit() {
     if (!this.config.get<string>('redis.url')) return;
@@ -86,19 +90,27 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
     ).rows[0];
     if (!job) return;
     try {
-      // A latitude index bounds candidate discovery; exact Haversine handles longitude wrapping and poles.
-      const rows = (
-        await this.database.pool.query<Location>(
-          `SELECT user_id,revision,latitude,longitude FROM notification_nearby_subscriptions
-     WHERE expires_at>now() AND captured_at>now()-interval '15 minutes' AND user_id COLLATE "C">$1 COLLATE "C"
-     AND latitude BETWEEN $2 AND $3 ORDER BY user_id COLLATE "C" LIMIT 50`,
-          [
-            job.cursor_user_id,
-            job.latitude - 151 / 111195,
-            job.latitude + 151 / 111195,
-          ],
+      const policy = (
+        await this.database.pool.query<{ participation_radius_m: number }>(
+          'SELECT participation_radius_m FROM notification_nearby_job_policy WHERE post_id=$1',
+          [job.post_id],
         )
-      ).rows;
+      ).rows[0];
+      if (!policy)
+        throw new Error('Nearby job participation radius unavailable; retry');
+      const page = await this.map.find({
+        latitude: job.latitude,
+        longitude: job.longitude,
+        participationRadiusM: policy.participation_radius_m,
+        authorId: job.author_id,
+        afterUserId: job.cursor_user_id,
+      });
+      const rows: Location[] = page.users.map((user) => ({
+        user_id: user.userId,
+      }));
+      const eligible = await this.eligibility.eligible(
+        rows.map((row) => row.user_id),
+      );
       // At most five 2-second authority requests are in flight. A page stays within the durable lease.
       for (let offset = 0; offset < rows.length; offset += 5) {
         const group = rows.slice(offset, offset + 5);
@@ -106,14 +118,8 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
           group.map(async (location) => ({
             location,
             allowed:
+              eligible.has(location.user_id) &&
               location.user_id !== job.author_id &&
-              distanceM(
-                job.latitude,
-                job.longitude,
-                location.latitude,
-                location.longitude,
-              ) <=
-                150 + 0.000001 &&
               (await this.blocks.allowed(location.user_id, job.author_id)),
           })),
         );
@@ -123,9 +129,14 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
         }
       }
       await this.database.pool.query(
-        `UPDATE notification_nearby_jobs SET status=$3,lease_id=NULL,lease_until=NULL,next_attempt_at=now()
+        `UPDATE notification_nearby_jobs SET status=$3,lease_id=NULL,lease_until=NULL,next_attempt_at=now(),cursor_user_id=$4
      WHERE post_id=$1 AND lease_id=$2`,
-        [job.post_id, lease, rows.length < 50 ? 'DONE' : 'PENDING'],
+        [
+          job.post_id,
+          lease,
+          page.nextAfterUserId ? 'PENDING' : 'DONE',
+          page.nextAfterUserId || rows.at(-1)?.user_id || job.cursor_user_id,
+        ],
       );
       await this.deliveries.dispatch(job.post_id);
       this.logger.success(
@@ -146,9 +157,21 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
     const subscriptions = await this.database.pool.query(
       `DELETE FROM notification_nearby_subscriptions WHERE user_id IN (SELECT user_id FROM notification_nearby_subscriptions WHERE expires_at<=now() LIMIT 1000)`,
     );
-    await this.database.pool.query(
-      `DELETE FROM notification_nearby_jobs WHERE post_id IN (SELECT post_id FROM notification_nearby_jobs WHERE expires_at<=now() OR status IN ('DONE','CANCELED') LIMIT 1000)`,
+    const jobs = await this.database.pool.query<{ status: string }>(
+      `DELETE FROM notification_nearby_jobs WHERE post_id IN (SELECT post_id FROM notification_nearby_jobs WHERE expires_at<=now() OR status IN ('DONE','CANCELED') LIMIT 1000) RETURNING status`,
     );
+    const expired = jobs.rows.filter((job) =>
+      ['PENDING', 'RUNNING'].includes(job.status),
+    ).length;
+    if (expired)
+      this.logger.emit({
+        event: 'nearby_jobs_expired',
+        outcome: 'skipped',
+        reasonCode: 'NEARBY_LOCATION_WINDOW_EXPIRED',
+        message:
+          'Nearby jobs exceeded the existing location-use window before completion',
+        count: expired,
+      });
     await this.database.pool.query(
       `DELETE FROM notification_nearby_limits WHERE user_id IN (SELECT user_id FROM notification_nearby_limits WHERE last_enqueued_at<now()-interval '30 days' LIMIT 1000)`,
     );
@@ -181,14 +204,8 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
         );
         return false;
       }
-      const subscription = (
-        await client.query(
-          'SELECT revision FROM notification_nearby_subscriptions WHERE user_id=$1 AND expires_at>now() FOR UPDATE',
-          [location.user_id],
-        )
-      ).rows[0];
       let created = false;
-      if (allowed && subscription?.revision === location.revision) {
+      if (allowed) {
         await client.query(
           `INSERT INTO notification_nearby_limits(user_id,last_enqueued_at) VALUES($1,'-infinity') ON CONFLICT DO NOTHING`,
           [location.user_id],
@@ -219,7 +236,10 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
             body: '주변에 새로운 게시물이 등록되었습니다.',
             push: true,
             authorizationActorId: job.author_id,
-            deliveryData: { subscriptionRevision: location.revision },
+            deliveryData: {
+              nearbyAudiencePolicy: 'map-location-terms-v1',
+              nearbyExpiresAt: new Date(job.expires_at).toISOString(),
+            },
           });
           created = !!n?.created;
           if (created)

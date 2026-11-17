@@ -638,14 +638,18 @@ export class PostgresEventStore {
         throw new BusyDeliveryError();
       const notificationId = current.message.data?.notificationId;
       const nearby = current.message.data?.type === 'NEARBY_POST_CREATED';
-      const subscription = nearby
-        ? (
-            await client.query(
-              'SELECT revision FROM notification_nearby_subscriptions WHERE user_id=$1 AND expires_at>now()',
-              [current.message.userId],
-            )
-          ).rows[0]
-        : undefined;
+      const locationAudience =
+        nearby &&
+        current.message.data?.nearbyAudiencePolicy === 'map-location-terms-v1';
+      const subscription =
+        nearby && !locationAudience
+          ? (
+              await client.query(
+                'SELECT revision FROM notification_nearby_subscriptions WHERE user_id=$1 AND expires_at>now()',
+                [current.message.userId],
+              )
+            ).rows[0]
+          : undefined;
       const notification = notificationId
         ? (
             await client.query<NotificationRow>(
@@ -657,8 +661,14 @@ export class PostgresEventStore {
       const cancel =
         (nearby &&
           (!nearbyEnabled() ||
-            subscription?.revision !==
-              current.message.data?.subscriptionRevision)) ||
+            (locationAudience
+              ? !Number.isFinite(
+                  Date.parse(current.message.data?.nearbyExpiresAt ?? ''),
+                ) ||
+                Date.parse(current.message.data?.nearbyExpiresAt ?? '') <=
+                  now.getTime()
+              : subscription?.revision !==
+                current.message.data?.subscriptionRevision))) ||
         (current.message.data?.type === 'BOARD_STALE' &&
           Date.parse(current.message.data.scheduledCloseAt ?? '') <=
             now.getTime()) ||
