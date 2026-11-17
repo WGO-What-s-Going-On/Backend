@@ -18,6 +18,10 @@ test('new recipient contracts select both Map and Notification regression suites
     ),
   );
   for (const path of [
+    'services/map-service/contracts/map-location-recipients.proto',
+    'services/map-service/src/location-geo-index.ts',
+    'services/user-service/src/users/nearby-eligibility.controller.ts',
+    'services/notification-service/src/notification/nearby-eligibility.client.ts',
     'services/map-service/contracts/map-notification.proto',
     'services/map-service/src/notification-recipient-index.ts',
     'services/notification-service/contracts/map-notification.proto',
@@ -26,6 +30,19 @@ test('new recipient contracts select both Map and Notification regression suites
     assert.ok(names.includes('map-service'));
     assert.ok(names.includes('notification-service'));
   }
+});
+
+test('new location recipient proto copies stay identical', () => {
+  assert.equal(
+    readFileSync(
+      'services/map-service/contracts/map-location-recipients.proto',
+      'utf8',
+    ),
+    readFileSync(
+      'services/notification-service/contracts/map-location-recipients.proto',
+      'utf8',
+    ),
+  );
 });
 
 test(

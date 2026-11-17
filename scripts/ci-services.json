@@ -40,12 +40,17 @@
     {
       "prefixes": [
         "services/map-service/contracts/map-notification.proto",
+        "services/map-service/contracts/map-location-recipients.proto",
+        "services/map-service/src/location-geo-index.ts",
+        "services/user-service/src/users/nearby-eligibility.controller.ts",
+        "services/notification-service/src/notification/nearby-eligibility.client.ts",
+        "services/notification-service/contracts/map-location-recipients.proto",
         "services/map-service/src/notification-",
         "services/notification-service/contracts/map-notification.proto",
         "services/post-service/src/post/application/commands.ts",
         "services/notification-service/src/notification/map-nearby.client.ts"
       ],
-      "services": ["map-service", "notification-service"]
+      "services": ["map-service", "notification-service", "user-service"]
     },
     {
       "prefixes": [

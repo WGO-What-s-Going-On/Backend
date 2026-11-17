@@ -9,6 +9,7 @@ import { PostEventHandler } from '../../src/event-consumer/post-event.handler.js
 import { NotificationBlockChecker } from '../../src/notification/block-checker.js';
 import { parsePostEvent } from '../../src/event-consumer/post-event.js';
 import { wire } from '../helpers/post-events.js';
+import type { NearbyEligibilityClient } from '../../src/notification/nearby-eligibility.client.js';
 import type { MapNearbyClient } from '../../src/notification/map-nearby.client.js';
 
 describe('explicit 150m nearby subscriptions and bounded durable fanout', () => {
@@ -49,6 +50,9 @@ describe('explicit 150m nearby subscriptions and bounded durable fanout', () => 
       };
     },
   } as unknown as MapNearbyClient;
+  const eligibility = {
+    eligible: async (ids: string[]) => new Set(ids),
+  } as NearbyEligibilityClient;
   const location = (latitude = 37.5, longitude = 127) => ({
     enabled: true,
     locationConsent: true,
@@ -80,6 +84,7 @@ describe('explicit 150m nearby subscriptions and bounded durable fanout', () => 
       { send },
       undefined,
       blocks,
+      eligibility,
     );
     worker = new NearbyWorker(
       h.database,
@@ -89,6 +94,7 @@ describe('explicit 150m nearby subscriptions and bounded durable fanout', () => 
       delivery,
       h.config,
       map,
+      eligibility,
     );
   });
   afterEach(async () => {
@@ -229,6 +235,7 @@ describe('explicit 150m nearby subscriptions and bounded durable fanout', () => 
       delivery,
       h.config,
       map,
+      eligibility,
     );
     await Promise.all([worker.runOnce(), other.runOnce()]);
     expect(
