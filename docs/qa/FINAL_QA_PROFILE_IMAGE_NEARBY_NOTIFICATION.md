@@ -4,10 +4,11 @@
 
 ## 작업 기준과 보존 범위
 
-- 별도 worktree `WGO/qa-final`, 브랜치 `fix/final-qa-profile-image-nearby-notification`.
+- 현재 작업 폴더는 기존 `WGO/Backend`, 브랜치는 `fix/final-qa-profile-image-nearby-notification`이다.
+  처음 만들었던 별도 `WGO/qa-final` worktree는 제거하고 두 기능 커밋은 그대로 보존했다.
 - 기준은 로컬 보관 `origin/main`의 `a8d4480b3d197c69c06f1f3f6523c066fb2626f5`다.
   원격 Git 작업 금지에 따라 fetch/원격 최신 여부 재조회는 하지 않았다.
-- 원래 `WGO/Backend`의 dev, 작업 트리 및 기존 커밋 이력은 그대로 둔다.
+- 기존 dev 브랜치와 커밋 이력은 보존했으며, 기존 `WGO/Backend` 작업 폴더만 새 작업 브랜치로 전환했다.
 - push, PR, merge, 배포, 운영 데이터/객체/Secret/IAM/기능 플래그 변경, 실제 FCM은 실행하지 않았다.
   GCP/GKE 진단은 공개 설정·정책과 실제 Pod의 권한 실패를 읽기 전용으로 확인했다.
 - 기준 main의 기존 파일을 Git 정규화 hash로 비교했다. Map **51개** 중 변경은 main.ts/store.ts뿐이며,
