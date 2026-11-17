@@ -18,6 +18,8 @@ export class PostConsumer {
   private stopped = false;
   private failures = 0;
   private lastMetrics = 0;
+  private reader?: ReturnType<PostIndex['redis']['duplicate']>;
+  private running?: Promise<void>;
   constructor(private readonly index: PostIndex) {}
 
   async initialize(): Promise<void> {
@@ -30,8 +32,11 @@ export class PostConsumer {
     }
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
+    // Abort a blocked read/reconnect without interrupting writes or ACKs on index.redis.
+    if (this.reader?.isOpen) this.reader.destroy();
+    await this.running?.catch(() => undefined);
   }
 
   async metrics(): Promise<{
@@ -67,52 +72,87 @@ export class PostConsumer {
     };
   }
 
-  async run(): Promise<void> {
-    await this.initialize();
-    while (!this.stopped) {
-      try {
-        // 먼저 중단된 배달을 회수하고, 이후 신규 이벤트를 같은 그룹의 다른 소비자와 나눈다.
-        const claimed = await this.index.redis.xAutoClaim(
-          POST_STREAM,
-          POST_GROUP,
-          this.name,
-          1000,
-          '0-0',
-          { COUNT: 20 },
-        );
-        for (const entry of claimed.messages)
-          if (entry) await this.process(entry);
-        const batches = (await this.index.redis.xReadGroup(
-          POST_GROUP,
-          this.name,
-          { key: POST_STREAM, id: '>' },
-          { COUNT: 20, BLOCK: 1000 },
-        )) as Array<{ messages: Entry[] }> | null;
-        for (const batch of batches ?? [])
-          for (const entry of batch.messages) await this.process(entry);
-        if (Date.now() - this.lastMetrics > 30000) {
-          this.lastMetrics = Date.now();
-          const metrics = await this.metrics();
-          log.success('consumer.metrics', 'Map consumer metrics.', {
-            consumerGroup: POST_GROUP,
-            pending: metrics.pending,
-            oldestPendingIdleMs: metrics.oldestIdleMs,
-            failed: metrics.failures,
-            count: metrics.deadLetters,
-          });
-        }
-      } catch (error) {
-        this.failures++;
+  run(): Promise<void> {
+    if (this.running) return this.running;
+    if (this.stopped) return Promise.resolve();
+    this.running = this.poll();
+    return this.running;
+  }
+
+  private async poll(): Promise<void> {
+    // BLOCK holds its socket. Keep searches, claims, ACKs and DLQ on index.redis.
+    const reader = this.index.redis.duplicate({
+      name: `${this.name}-reader`,
+      disableOfflineQueue: true,
+    });
+    this.reader = reader;
+    reader.on('error', (error) => {
+      if (!this.stopped)
         log.failure(
-          'consumer.poll.failed',
+          'consumer.reader.failed',
           error,
-          'STREAM_POLL_FAILED',
-          'Map consumer polling failed.',
+          'STREAM_READ_FAILED',
+          'Map blocking reader connection failed.',
           { consumerGroup: POST_GROUP },
           true,
         );
-        await delay(500);
+    });
+    try {
+      await reader.connect();
+      if (this.stopped) return;
+      await this.initialize();
+      while (!this.stopped) {
+        try {
+          // 먼저 중단된 배달을 회수하고, 이후 신규 이벤트를 같은 그룹의 다른 소비자와 나눈다.
+          const claimed = await this.index.redis.xAutoClaim(
+            POST_STREAM,
+            POST_GROUP,
+            this.name,
+            1000,
+            '0-0',
+            { COUNT: 20 },
+          );
+          for (const entry of claimed.messages)
+            if (entry) await this.process(entry);
+          if (this.stopped) break;
+          const batches = (await reader.xReadGroup(
+            POST_GROUP,
+            this.name,
+            { key: POST_STREAM, id: '>' },
+            { COUNT: 20, BLOCK: 1000 },
+          )) as Array<{ messages: Entry[] }> | null;
+          for (const batch of batches ?? [])
+            for (const entry of batch.messages) await this.process(entry);
+          if (Date.now() - this.lastMetrics > 30000) {
+            this.lastMetrics = Date.now();
+            const metrics = await this.metrics();
+            log.success('consumer.metrics', 'Map consumer metrics.', {
+              consumerGroup: POST_GROUP,
+              pending: metrics.pending,
+              oldestPendingIdleMs: metrics.oldestIdleMs,
+              failed: metrics.failures,
+              count: metrics.deadLetters,
+            });
+          }
+        } catch (error) {
+          if (this.stopped) break;
+          this.failures++;
+          log.failure(
+            'consumer.poll.failed',
+            error,
+            'STREAM_POLL_FAILED',
+            'Map consumer polling failed.',
+            { consumerGroup: POST_GROUP },
+            true,
+          );
+          await delay(500);
+        }
       }
+    } catch (error) {
+      if (!this.stopped) throw error;
+    } finally {
+      if (reader.isOpen) reader.destroy();
+      this.reader = undefined;
     }
   }
 
