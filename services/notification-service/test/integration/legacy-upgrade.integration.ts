@@ -19,7 +19,7 @@ it('upgrades a populated v1 layout while preserving read state, tokens, preferen
     // Reconstruct the exact v1 columns/PK in this UUID test schema only. The
     // stored business rows remain in place while the production migration runs.
     await h.database.transaction(async (c) => {
-      await c.query(`DROP TABLE notification_nearby_jobs,notification_nearby_subscriptions,notification_nearby_limits,
+      await c.query(`DROP TABLE notification_nearby_job_policy,notification_nearby_jobs,notification_nearby_subscriptions,notification_nearby_limits,
     notification_comment_states,notification_lifecycle_states,notification_event_inbox,notification_stream_starts,notification_business_keys;
     ALTER TABLE notification_activities DROP COLUMN details;
     ALTER TABLE notification_posts DROP COLUMN paused;

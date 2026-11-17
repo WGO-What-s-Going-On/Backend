@@ -39,6 +39,16 @@
   "contractRules": [
     {
       "prefixes": [
+        "services/map-service/contracts/map-notification.proto",
+        "services/map-service/src/notification-",
+        "services/notification-service/contracts/map-notification.proto",
+        "services/post-service/src/post/application/commands.ts",
+        "services/notification-service/src/notification/map-nearby.client.ts"
+      ],
+      "services": ["map-service", "notification-service"]
+    },
+    {
+      "prefixes": [
         "services/map-service/contracts/",
         "services/post-service/contracts/map-authorization.proto"
       ],

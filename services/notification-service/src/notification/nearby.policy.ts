@@ -48,4 +48,14 @@ export async function scheduleNearby(client: PoolClient, event: PostEvent) {
       expires,
     ],
   );
+  if (
+    Number.isFinite(event.participationRadiusM) &&
+    event.participationRadiusM! >= 1 &&
+    event.participationRadiusM! <= 10000
+  )
+    await client.query(
+      `INSERT INTO notification_nearby_job_policy(post_id,participation_radius_m)
+      SELECT post_id,$2 FROM notification_nearby_jobs WHERE post_id=$1 ON CONFLICT DO NOTHING`,
+      [event.aggregateId, event.participationRadiusM],
+    );
 }

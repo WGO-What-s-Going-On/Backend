@@ -1,4 +1,5 @@
 import { advanceMovement, type MovementState } from './movement.js';
+import { notificationLocationSaved } from './notification-location-events.js';
 import { cassandraOptions } from './cassandra-config.js';
 import cassandra from 'cassandra-driver';
 import { createClient } from 'redis';
@@ -89,6 +90,7 @@ export class CassandraLocationStore implements LocationStore {
     );
     // Cassandra 기록이 성공한 뒤에만 캐시를 바꾸고, 역순 완료된 쓰기는 Lua에서 거른다.
     await this.cacheLatest(userId, saved, updateId, 300).catch(() => undefined);
+    notificationLocationSaved(userId);
     return saved;
   }
 
