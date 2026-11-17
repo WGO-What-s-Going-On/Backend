@@ -28,8 +28,8 @@ if (mode === 'install')
   run(manager === 'pnpm' ? ['install', '--frozen-lockfile'] : ['ci']);
 else if (mode === 'build') run(['run', 'build']);
 else {
-  // Semantic tests import Map's compiled modules, including its own dependencies.
-  if (name === 'post-service') {
+  // Cross-service tests load Map modules and their own dependency installation.
+  if (name === 'post-service' || name === 'notification-service') {
     for (const prerequisite of ['install', 'build']) {
       const result = spawnSync(
         process.execPath,

@@ -42,6 +42,7 @@ export interface PostEvent {
   closedAt?: string | null;
   latitude?: number;
   longitude?: number;
+  participationRadiusM?: number;
   // Set by the consumer's durable rollout boundary, never read from producer JSON.
   suppressNotifications?: boolean;
 }
@@ -162,6 +163,7 @@ export function parsePostEvent(
         Math.abs(value.post.longitude) <= 180, 'created post payload');
       event.latitude = value.post.latitude as number;
       event.longitude = value.post.longitude as number;
+      event.participationRadiusM = value.post.radiusM as number;
     } else if (type === 'PostUpdated') {
       require(positive(value.postVersion) &&
         (value.post.closedAt === null ||

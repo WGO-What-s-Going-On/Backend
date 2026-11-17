@@ -4,11 +4,13 @@ import { createGrpcServer, createHttpServer, listenGrpc } from './server.js';
 import { CassandraLocationStore } from './store.js';
 import { PostIndex } from './post-index.js';
 import { PostConsumer } from './post-consumer.js';
+import { registerNotificationRecipients } from './notification-runtime.js';
 
 const store = new CassandraLocationStore();
 // Validate trusted keys before starting external connections or consumers.
 const index = new PostIndex();
 const grpc = createGrpcServer(store, index);
+const closeRecipients = registerNotificationRecipients(grpc, store);
 await store.connect();
 await index.connect();
 const consumer = new PostConsumer(index);
@@ -49,6 +51,7 @@ const close = async () => {
     });
   });
   await Promise.all([httpClosed, grpcClosed]);
+  await closeRecipients();
   await index.close();
   await store.close();
 };
