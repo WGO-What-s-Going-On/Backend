@@ -62,6 +62,64 @@ export class ActivityService {
         input.postId,
       ]);
       await this.titles.lock(m);
+      // These title inputs never pass through RewardEngine or alter v2 activity validity.
+      if (input.voteSelection || input.hiddenContent) {
+        if (input.voteSelection) {
+          const [previous] = await m.query(
+            'SELECT * FROM title_vote_selections WHERE post_id=$1 AND user_id=$2',
+            [input.postId, input.actorId],
+          );
+          if (
+            previous &&
+            BigInt(previous.version) === BigInt(input.version) &&
+            previous.comment_id !== input.voteSelection.commentId
+          )
+            throw new ConflictingRewardEvent(
+              'Conflicting vote selection version',
+            );
+          await m.query(
+            `INSERT INTO title_vote_selections(post_id,user_id,version,comment_id,event_id) VALUES($1,$2,$3,$4,$5)
+            ON CONFLICT(post_id,user_id) DO UPDATE SET version=EXCLUDED.version,comment_id=EXCLUDED.comment_id,event_id=EXCLUDED.event_id
+            WHERE title_vote_selections.version<EXCLUDED.version`,
+            [
+              input.postId,
+              input.actorId,
+              input.version,
+              input.voteSelection.commentId,
+              input.eventId,
+            ],
+          );
+        } else if (input.hiddenContent) {
+          await m.query(
+            `INSERT INTO title_hidden_content(kind,target_id,post_id,version,event_id) VALUES($1,$2,$3,$4,$5)
+            ON CONFLICT(kind,target_id) DO UPDATE SET version=EXCLUDED.version,event_id=EXCLUDED.event_id
+            WHERE title_hidden_content.version<EXCLUDED.version`,
+            [
+              input.hiddenContent.kind,
+              input.hiddenContent.targetId,
+              input.postId,
+              input.version,
+              input.eventId,
+            ],
+          );
+        }
+        if (this.titles.v3.enabled) {
+          const affected: Array<{ id: string }> = input.voteSelection
+            ? [{ id: input.actorId }]
+            : await m.query(
+                `
+            SELECT DISTINCT id FROM (SELECT actor_id AS id FROM user_activities WHERE post_id=$1
+            UNION SELECT beneficiary_id FROM user_activities WHERE post_id=$1) a WHERE id IS NOT NULL ORDER BY id`,
+                [input.postId],
+              );
+          for (const { id } of affected)
+            await this.titles.syncUser(m, id, {
+              eventId: input.eventId,
+              correlationId: input.correlationId,
+            });
+        }
+        return;
+      }
       if (input.regionUpdate) {
         await this.titles.recordRegion(
           m,
@@ -237,9 +295,12 @@ export class ActivityService {
           correlation_id: correlationId,
         });
     // A reaction changes its actor and recipient, not every previous participant's
-    // title metrics. Parent deletion is the case that invalidates all affected children.
+    // title metrics. Parent deletion invalidates children; a late parent creation
+    // can complete v3 winner eligibility after child events have already arrived.
     const affected =
-      !trigger || (trigger.postStatus && trigger.postStatus !== 'ACTIVE')
+      !trigger ||
+      (trigger.postStatus &&
+        (trigger.postStatus !== 'ACTIVE' || this.titles.v3.enabled))
         ? beneficiaries
         : trigger.kind === 'COMMENT' && !trigger.active
           ? activities
@@ -304,7 +365,12 @@ export class ActivityService {
   }
 
   async refreshUserTitles(userId: string): Promise<void> {
-    if (!this.engine.policy.enabled && !this.titles.settings.enabled) return;
+    if (
+      !this.engine.policy.enabled &&
+      !this.titles.settings.enabled &&
+      !this.titles.v3.enabled
+    )
+      return;
     await this.db.transaction(async (m) => {
       await this.titles.lock(m);
       const users = await this.lockRewardUsers(m, [userId]);
@@ -323,6 +389,9 @@ export class ActivityService {
       await this.titles.syncUser(m, userId, {
         eventId: `reward-title:${userId}:${Date.now()}`,
         correlationId: 'reward-title-reconciliation',
+        ...(this.titles.v3.enabled
+          ? { notificationMode: 'silent' as const }
+          : {}),
       });
     });
   }
@@ -345,8 +414,18 @@ export class ActivityService {
     };
   }
   async summary(userId: string): Promise<GrowthResponse> {
+    if (this.titles.v3.enabled)
+      return this.db.transaction('REPEATABLE READ', (m) =>
+        this.summaryIn(m, userId),
+      );
+    return this.summaryIn(this.db.manager, userId);
+  }
+  private async summaryIn(
+    m: import('typeorm').EntityManager,
+    userId: string,
+  ): Promise<GrowthResponse> {
     // A single snapshot keeps balances and their progress calculation consistent.
-    const [row] = await this.db.query(
+    const [row] = await m.query(
       `SELECT u.id,g.credits,g.growth_score,g.level,g.policy_version FROM users u
       LEFT JOIN user_growth g ON g.user_id=u.id WHERE u.id=$1`,
       [userId],
@@ -366,7 +445,7 @@ export class ActivityService {
         level === null || p.levels[level + 1] === undefined
           ? null
           : String(p.levels[level + 1]),
-      titles: await this.titles.progress(this.db.manager, userId),
+      titles: await this.titles.progress(m, userId),
     };
   }
   async history(

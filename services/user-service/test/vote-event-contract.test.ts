@@ -56,6 +56,48 @@ function wire(source: ReturnType<typeof row>) {
   };
 }
 describe('Post producer / User vote contract', () => {
+  it.each(['PostCommentUpdated', 'ContentModerationApplied'])(
+    'acknowledges actual %s wire facts without changing activity or rewards',
+    (eventType) => {
+      const now = new Date();
+      const source = {
+        ...row('candidate'),
+        eventType,
+        payload:
+          eventType === 'PostCommentUpdated'
+            ? {
+                activityVersion: 2,
+                comment: {
+                  postId,
+                  commentId,
+                  authorId: 42,
+                  content: 'edited',
+                  status: 'ACTIVE',
+                  createdAt: now,
+                  updatedAt: now,
+                },
+              }
+            : {
+                decision: {
+                  postId,
+                  moderationDecisionId: `decision_${'a'.repeat(64)}`,
+                  outcome: 'APPLIED',
+                  reviewedVersion: 1,
+                  processedAt: now,
+                },
+              },
+      };
+      const fields = {
+        eventId: source.eventId,
+        eventType,
+        data: serializePostEvent(source),
+      };
+      expect(parsePostEvent(fields)).toBeNull();
+      expect(() =>
+        parsePostEvent({ ...fields, eventId: `evt_${randomUUID()}` }),
+      ).toThrow();
+    },
+  );
   it.each(['candidate', 'vote'] as const)(
     'consumes actual %s serialization and source time rather than envelope time',
     (kind) => {

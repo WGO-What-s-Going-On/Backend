@@ -20,7 +20,8 @@
     "seed:terms": "nest build && node dist/database/seeds/seed-terms.js",
     "seed:terms:run": "node dist/database/seeds/seed-terms.js",
     "seed:badges": "nest build && node dist/database/seeds/seed-badges.js",
-    "rewards:reconcile": "nest build && node dist/rewards/reconcile.js"
+    "rewards:reconcile": "nest build && node dist/rewards/reconcile.js",
+    "titles:compare": "node dist/rewards/title-v3-reconcile.js"
   },
   "dependencies": {
     "@google-cloud/storage": "8.4.0",

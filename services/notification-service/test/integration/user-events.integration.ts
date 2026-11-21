@@ -36,6 +36,28 @@ describe('User stream → PostgreSQL inbox → mock FCM', () => {
     };
   }
   const items = async () => (await h.notifications.list('42', 100)).items;
+  it('acknowledges silent v3 reconciliation without a notification, unread count or push', async () => {
+    await consumer.initialize();
+    const f = fields('USER_BADGE_GRANTED', {
+      policyVersion: 'wgo-titles-v3',
+      badgeCode: 'NEWS_SOURCE',
+      notificationMode: 'silent',
+    });
+    await h.redis.xAdd('user:events', '*', f);
+    await consumer.pollOnce();
+    await handler.handle(f);
+    expect(await items()).toHaveLength(0);
+    expect(await h.notifications.unread('42')).toBe(0);
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      (await h.database.pool.query('SELECT * FROM notification_event_inbox'))
+        .rowCount,
+    ).toBe(1);
+    expect(
+      (await h.redis.xPending('user:events', 'user-notification')).pending,
+    ).toBe(0);
+    expect(await h.redis.xLen('notification:user:dead')).toBe(0);
+  });
   beforeEach(async () => {
     h = await harness();
     ['user:events', 'notification:user:dead', 'notification:unread:42'].forEach(

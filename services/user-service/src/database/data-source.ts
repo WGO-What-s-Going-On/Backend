@@ -1,4 +1,5 @@
 import { ActivateWgoTitles1793400000000 } from './migrations/1793400000000-ActivateWgoTitles.js';
+import { AddTitlePolicyV31795300000000 } from './migrations/1795300000000-AddTitlePolicyV3.js';
 import { CompleteActivityRewards1793360000000 } from './migrations/1793360000000-CompleteActivityRewards.js';
 import 'reflect-metadata';
 import { StoreVoteActivitySnapshots1793650000000 } from './migrations/1793650000000-StoreVoteActivitySnapshots.js';
@@ -42,6 +43,7 @@ export default new DataSource({
     ActivateWgoTitles1793400000000,
     StoreVoteActivitySnapshots1793650000000,
     ApplyRegionalTitlePolicyV21793651000000,
+    AddTitlePolicyV31795300000000,
   ],
   synchronize: false,
   poolSize: database.poolSize,

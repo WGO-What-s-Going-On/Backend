@@ -22,6 +22,8 @@ import {
 } from './refresh-token.js';
 import { RedisSessionStore } from './redis-session.store.js';
 import { parseUserId } from '../user-id.js';
+import { TitleService } from '../rewards/title.service.js';
+import { titleV3Enabled } from '../rewards/title-v3.js';
 
 const KAKAO_PROVIDER = 'KAKAO';
 const MAX_CREATE_ATTEMPTS = 5;
@@ -286,6 +288,15 @@ export class AuthService {
         updatedAt: now,
       });
       await manager.getRepository(OAuthAccountEntity).save(account);
+
+      if (titleV3Enabled()) {
+        const titles = new TitleService();
+        await titles.lock(manager);
+        await titles.syncUser(manager, user.id, {
+          eventId: `signup:${user.id}`,
+          correlationId: `signup:${user.id}`,
+        });
+      }
 
       return user;
     });

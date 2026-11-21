@@ -37,6 +37,8 @@ export function parseUserEvent(
   );
   const p = v.payload,
     type = v.type;
+  if (p.notificationMode !== undefined)
+    check(p.notificationMode === 'silent', 'notification mode');
   if (
     [
       'USER_BADGE_GRANTED',

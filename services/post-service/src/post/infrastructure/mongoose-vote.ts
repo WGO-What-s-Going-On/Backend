@@ -16,6 +16,19 @@ import {
 
 @Injectable()
 export class MongooseVote {
+  private readonly selectionEvents = (() => {
+    const flag = process.env.POST_VOTE_SELECTION_EVENTS_ENABLED;
+    if (
+      flag !== undefined &&
+      flag !== '' &&
+      flag !== 'true' &&
+      flag !== 'false'
+    )
+      throw new Error(
+        'POST_VOTE_SELECTION_EVENTS_ENABLED must be true or false',
+      );
+    return flag === 'true';
+  })();
   constructor(
     @InjectConnection() private readonly connection: Connection,
     @InjectModel('Post') private readonly posts: Model<any>,
@@ -329,6 +342,28 @@ export class MongooseVote {
         { $set: { vote: { ...vote, candidates } }, $inc: { voteRevision: 1 } },
         { session },
       );
+      if (this.selectionEvents) {
+        const now = new Date();
+        await this.outbox.create(
+          [
+            {
+              ...event(
+                postId,
+                'PostVoteSelectionChanged',
+                {
+                  voteSelection: { postId, userId, commentId, updatedAt: now },
+                  activityVersion: (post.voteRevision ?? 0) + 1,
+                },
+                now,
+              ),
+              status: 'PENDING',
+              nextAttemptAt: now,
+              createdAt: now,
+            },
+          ],
+          { session },
+        );
+      }
       return this.view({ ...vote, candidates }, commentId);
     });
   }

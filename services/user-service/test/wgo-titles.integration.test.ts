@@ -412,10 +412,12 @@ describe('Confirmed WGO titles / real PostgreSQL and Redis', () => {
     expect((await service.summary('1')).titles.highestAchievedStage).toBe(2);
   }, 30000);
   it('does not treat 100 AGREE reactions on a single comment as 10 qualified comments', async () => {
+    // This exercises 100 real DB transitions; the unchanged v2 control exceeds
+    // 30 seconds on Windows/Node 24. Keep the aggregation assertions intact.
     await qualifyingComments(1, 100);
     expect(await has('REPORTER')).toBe(false);
     expect((await titles.metrics(db.manager, '1')).reporter_comments).toBe('1');
-  }, 30000);
+  }, 60000);
 
   it('can disable regional updates without disabling confirmed titles, and can explicitly disable title evaluation', async () => {
     titles = new TitleService({

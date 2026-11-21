@@ -68,6 +68,7 @@ export function serializePostEvent(row: Record<string, any>): string {
       PostCommentReactionRemoved: 'commentReaction',
       PostVoteWon: 'vote',
       PostVoteCandidateSelected: 'candidate',
+      PostVoteSelectionChanged: 'voteSelection',
       PostUpdated: 'post',
       PostCreated: 'post',
       PostDeleted: 'post',
@@ -128,6 +129,13 @@ export function serializePostEvent(row: Record<string, any>): string {
         throw new Error('Invalid comment reaction');
     }
     if (
+      key === 'voteSelection' &&
+      (!user(value.activityVersion) ||
+        !date(target.updatedAt) ||
+        !(target.commentId === null || id(target.commentId, 'comment')))
+    )
+      throw new Error('Invalid vote selection');
+    if (
       key === 'vote' &&
       (!id(target.commentId, 'comment') ||
         target.resultId !== target.postId ||
@@ -161,6 +169,7 @@ export function serializePostEvent(row: Record<string, any>): string {
       PostCommentReactionRemoved: ['createdAt', 'removedAt'],
       PostVoteWon: ['closedAt'],
       PostVoteCandidateSelected: ['selectedAt'],
+      PostVoteSelectionChanged: ['updatedAt'],
       PostUpdated: [],
       PostCreated: [],
       PostDeleted: ['deletedAt'],

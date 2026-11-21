@@ -17,6 +17,7 @@ export interface ActivityInput {
     | 'POST'
     | 'COMMENT'
     | 'PARTICIPATION'
+    | 'VOTE_SELECTION'
     | 'POST_REACTION'
     | 'COMMENT_REACTION'
     | 'VOTE_CANDIDATE'
@@ -35,6 +36,8 @@ export interface ActivityInput {
   postRegion?: PostRegionSnapshot;
   regionUpdate?: { version: number; region: PostRegionSnapshot | null };
   postStatus?: 'ACTIVE' | 'DELETED' | 'EXPIRED';
+  voteSelection?: { commentId: string | null };
+  hiddenContent?: { kind: 'POST' | 'COMMENT'; targetId: string };
 }
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const id = (v: unknown, p: string) =>
@@ -74,6 +77,68 @@ export function parsePostEvent(
       fields.eventId === v.eventId &&
       fields.eventType === v.eventType,
   );
+  // Editing text and moderation acknowledgements contain no reward/title state.
+  // Acknowledge these known producer facts instead of filling the reward DLQ.
+  if (
+    ['PostCommentUpdated', 'ContentModerationApplied'].includes(
+      v.eventType as string,
+    )
+  )
+    return null;
+  if (v.eventType === 'PostVoteSelectionChanged') {
+    const s = v.voteSelection;
+    check(
+      record(s) &&
+        s.postId === v.aggregateId &&
+        positive(s.userId) &&
+        (s.commentId === null || id(s.commentId, 'comment')) &&
+        date(s.updatedAt) &&
+        positive(v.activityVersion),
+    );
+    return {
+      eventId: String(v.eventId),
+      correlationId: String(v.correlationId),
+      postId: String(v.aggregateId),
+      key: `vote-selection:${v.aggregateId}:${s.userId}`,
+      kind: 'VOTE_SELECTION',
+      actorId: String(s.userId),
+      beneficiaryId: null,
+      reactionType: null,
+      version: v.activityVersion as number,
+      active: s.commentId !== null,
+      voteSelection: { commentId: s.commentId as string | null },
+    };
+  }
+  if (v.eventType === 'PostHidden' || v.eventType === 'PostCommentHidden') {
+    const post = v.eventType === 'PostHidden';
+    const target = post ? v.post : v.comment;
+    check(
+      record(target) &&
+        target.postId === v.aggregateId &&
+        positive(target.authorId) &&
+        date(target.hiddenAt) &&
+        typeof v.moderationDecisionId === 'string' &&
+        v.moderationDecisionId.trim() &&
+        positive(post ? v.postVersion : v.activityVersion) &&
+        (post || id(target.commentId, 'comment')),
+    );
+    return {
+      eventId: String(v.eventId),
+      correlationId: String(v.correlationId),
+      postId: String(v.aggregateId),
+      key: post ? String(v.aggregateId) : String(target.commentId),
+      kind: post ? 'POST' : 'COMMENT',
+      actorId: String(target.authorId),
+      beneficiaryId: null,
+      reactionType: null,
+      version: (post ? v.postVersion : v.activityVersion) as number,
+      active: false,
+      hiddenContent: {
+        kind: post ? 'POST' : 'COMMENT',
+        targetId: post ? String(v.aggregateId) : String(target.commentId),
+      },
+    };
+  }
   if (
     v.eventType === 'PostRegionResolved' &&
     regionContract === 'post-region-v1'
