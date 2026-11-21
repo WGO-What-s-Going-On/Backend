@@ -101,7 +101,7 @@ Node24/pnpm10, 전용 PostgreSQL18·Redis8·MongoDB8 replica set, mock FCM을 �
 | User | USER_NOTIFICATION_TRUSTED_JWKS. 기존 Gateway trusted JWKS 유지 |
 | Post | POST_MODERATION_TRUSTED_JWKS. 기존 HTTP/WS/Map 인증 유지 |
 | Moderation | MODERATION_SERVICE_PRIVATE_JWK, MODERATION_POST_REPORT_TARGET_URL. 기존 Gateway trusted JWKS/Redis 원본 유지 |
-| 기능 flag | NOTIFICATION_USER_EVENTS_ENABLED=true, NOTIFICATION_MODERATION_EVENTS_ENABLED=true, NEARBY_NOTIFICATIONS_ENABLED=false, NEARBY_MIN_INTERVAL_SECONDS=600 |
+| 기능 flag | NOTIFICATION_USER_EVENTS_ENABLED=true, NOTIFICATION_MODERATION_EVENTS_ENABLED=true, NEARBY_NOTIFICATIONS_ENABLED=false. 주변 알림은 게시물마다 시간 간격 제한 없이 예약 |
 
 내부 URL은 코드에 명시한 읽기 전용 endpoint 전체 경로다. 서비스마다 별도 ES256 private JWK를 Secret 경로로 공급하고 상대 서비스에는 공개 JWKS만 등록한다. Firebase 대상 프로젝트에는 `roles/firebasecloudmessaging.admin` 등 필요한 발송 권한을 확인한다. [공식 FCM 역할](https://docs.cloud.google.com/iam/docs/roles-permissions/firebasecloudmessaging)을 따른다. Cloud SQL Proxy GSA에는 `roles/cloudsql.client`/자동 IAM의 `roles/cloudsql.instanceUser`, IAM DB 사용자 등록 및 Notification DB 권한을 확인한다. [GKE 연결 문서](https://docs.cloud.google.com/sql/docs/postgres/connect-kubernetes-engine)를 따른다. Secret Manager를 사용하는 배포 주체의 secret 접근, Redis ACL/TLS, 서비스 간 네트워크도 배포 환경에서 검증한다. 키를 새로 발급하거나 실제 IAM 권한을 변경하지 않았다.
 
@@ -115,4 +115,4 @@ Node24/pnpm10, 전용 PostgreSQL18·Redis8·MongoDB8 replica set, mock FCM을 �
 
 ## 13. 배포 후 지표·미검증
 
-Stream lag, PEL oldest age/재전달 횟수, DLQ 증가, Inbox commit/DB lock·pool, delivery due age·lease 만료·FCM partial/invalid/permanent 결과, unread 원본-캐시, 위치 만료 cleanup backlog·fanout lag/페이지 크기·인가 실패·throttle를 관측한다. 실제 GKE 다중 Pod drain, Cloud SQL 대용량 migration/연결·IAM, Redis failover/RPO, 실제 Firebase 프로젝트 발송·PWA 기기 수신은 미검증이다. **구현 완료 / 로컬 통합 검증 완료 / 실제 GCP 미검증**을 구분한다.
+Stream lag, PEL oldest age/재전달 횟수, DLQ 증가, Inbox commit/DB lock·pool, delivery due age·lease 만료·FCM partial/invalid/permanent 결과, unread 원본-캐시, 위치 만료 cleanup backlog·fanout lag/페이지 크기·인가 실패를 관측한다. 실제 GKE 다중 Pod drain, Cloud SQL 대용량 migration/연결·IAM, Redis failover/RPO, 실제 Firebase 프로젝트 발송·PWA 기기 수신은 미검증이다. **구현 완료 / 로컬 통합 검증 완료 / 실제 GCP 미검증**을 구분한다.
