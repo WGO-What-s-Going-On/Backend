@@ -24,6 +24,8 @@ export class UserEventHandler {
       event.eventId,
       { type: event.type },
       async (client) => {
+        // Policy reconciliation keeps audit/outbox events without notifying historic achievements again.
+        if (p.notificationMode === 'silent') return [];
         const badge = ['USER_BADGE_GRANTED', 'USER_BADGE_REVOKED'].includes(
           event.type,
         );

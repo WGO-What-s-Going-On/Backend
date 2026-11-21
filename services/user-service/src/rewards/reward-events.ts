@@ -4,6 +4,7 @@ import { OutboxEventEntity } from '../database/entities/outbox-event.entity.js';
 export interface RewardEventContext {
   eventId: string;
   correlationId: string;
+  notificationMode?: 'silent';
 }
 export async function emitRewardEvent(
   m: EntityManager,
@@ -26,7 +27,14 @@ export async function emitRewardEvent(
       version: 1,
       producer: 'user-service',
       correlationId: context.correlationId,
-      payload: { userId, sourceEventId: context.eventId, ...payload },
+      payload: {
+        userId,
+        sourceEventId: context.eventId,
+        ...payload,
+        ...(context.notificationMode
+          ? { notificationMode: context.notificationMode }
+          : {}),
+      },
     },
     status: 'PENDING',
     publishAttempts: 0,

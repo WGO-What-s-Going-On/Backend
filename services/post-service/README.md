@@ -306,3 +306,10 @@ GKE의 MongoDB는 인증과 TLS를 켠 단일 노드 replica set으로 실행한
 과거 누락 게시물은 셸 환경 변수를 설정한 뒤 `pnpm build`와 `pnpm region:backfill 100`을
 실행해 별도로 보정한다. 이 명령은 운영 데이터를 변경하며 성공한 행의 변경은 실패 후에도 유지한다.
 코드 변경만으로 backfill을 실행하거나 이미 저장된 투표 이벤트를 수정하지 않는다.
+
+## 칭호 v3 일반 투표 이벤트
+
+`POST_VOTE_SELECTION_EVENTS_ENABLED`의 기본값은 false다. User 소비자 준비 후에만
+true로 전환해 선택·변경·취소를 `PostVoteSelectionChanged`로 발행한다.
+선택/득표/Outbox는 같은 트랜잭션이며 기존 투표 응답과 알림 이벤트는 유지한다.
+정책과 배포 순서는 [칭호 v3 계약](../../docs/contracts/title-policy-v3.md)을 따른다.

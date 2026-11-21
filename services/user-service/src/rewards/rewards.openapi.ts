@@ -1,4 +1,9 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+export class TitleStatsResult {
+  @ApiProperty({ type: String }) participation!: string;
+  @ApiProperty({ type: String }) agreeReceived!: string;
+  @ApiProperty({ type: String }) picks!: string;
+}
 export class TitleStageResult {
   @ApiProperty() stage!: number;
   @ApiProperty() code!: string;
@@ -65,6 +70,9 @@ export class RegionalTitleReadinessResult {
   @ApiProperty({ type: [RegionalTitleResult] }) regions!: RegionalTitleResult[];
 }
 export class TitleProgressResult {
+  @ApiPropertyOptional({ description: 'v3 user snapshot has been evaluated' })
+  ready?: boolean;
+  @ApiPropertyOptional({ type: TitleStatsResult }) stats?: TitleStatsResult;
   @ApiProperty() enabled!: boolean;
   @ApiProperty() policyVersion!: string;
   @ApiProperty() currentStage!: number;

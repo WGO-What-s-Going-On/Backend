@@ -28,14 +28,21 @@ export class RewardMaintenanceWorker
     @Optional() private readonly titles: TitleService = new TitleService(),
   ) {}
   onApplicationBootstrap(): void {
-    if (!this.engine.policy.enabled && !this.titles.settings.enabled) return;
+    if (
+      !this.engine.policy.enabled &&
+      !this.titles.settings.enabled &&
+      !this.titles.v3.enabled
+    )
+      return;
     this.timer = setInterval(() => void this.run(), 1000);
     this.timer.unref();
   }
   run(): Promise<void> {
     if (
       this.stopping ||
-      (!this.engine.policy.enabled && !this.titles.settings.enabled)
+      (!this.engine.policy.enabled &&
+        !this.titles.settings.enabled &&
+        !this.titles.v3.enabled)
     )
       return Promise.resolve();
     this.running ??= this.batch()
@@ -56,12 +63,12 @@ export class RewardMaintenanceWorker
   }
   private async batch() {
     const users: Array<{ id: string; status: string }> = await this.db.query(
-      `SELECT u.id,u.status FROM users u WHERE u.id>$1 AND (
+      `SELECT u.id,u.status FROM users u WHERE u.id>$1 AND ($2::boolean OR
         EXISTS(SELECT 1 FROM user_activities a WHERE a.actor_id=u.id OR a.beneficiary_id=u.id)
         OR EXISTS(SELECT 1 FROM user_title_progress p WHERE p.user_id=u.id)
         OR EXISTS(SELECT 1 FROM user_badges b WHERE b.user_id=u.id AND b.revoked_at IS NULL))
         ORDER BY u.id LIMIT 20`,
-      [this.before],
+      [this.before, this.titles.v3.enabled],
     );
     this.before = users.at(-1)?.id ?? '0';
     let processed = 0;

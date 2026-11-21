@@ -223,6 +223,18 @@ describe('User OpenAPI contract', () => {
       '#/components/schemas/TitleProgressResult',
     );
     expect(
+      doc.components.schemas.TitleProgressResult.properties.ready.type,
+    ).toBe('boolean');
+    expect(
+      doc.components.schemas.TitleProgressResult.properties.stats.$ref,
+    ).toBe('#/components/schemas/TitleStatsResult');
+    expect(doc.components.schemas.TitleProgressResult.required).not.toContain(
+      'ready',
+    );
+    expect(
+      doc.components.schemas.TitleStatsResult.properties.agreeReceived.type,
+    ).toBe('string');
+    expect(
       doc.components.schemas.TitleProgressResult.properties
         .highestAchievedStage,
     ).toBeDefined();

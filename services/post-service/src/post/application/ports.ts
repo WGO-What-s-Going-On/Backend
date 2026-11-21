@@ -22,6 +22,7 @@ export type EventType =
   | 'PostCommentReactionRemoved'
   | 'PostVoteWon'
   | 'PostVoteCandidateSelected'
+  | 'PostVoteSelectionChanged'
   | 'PostUpdated'
   | 'PostCreated'
   | 'PostCommentCreated'

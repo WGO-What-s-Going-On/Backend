@@ -2,6 +2,7 @@ import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import { BADGE_CATALOG } from './badge-catalog.js';
 import { USER_REGIONAL_SCORE_CTES } from './regional-score.js';
+import { TitleV3, TITLE_V3_POLICY, type TitleV3Metrics } from './title-v3.js';
 import {
   ConflictingRewardEvent,
   InvalidRewardEvent,
@@ -24,6 +25,8 @@ export interface TitleMetrics {
   representative_wins: string;
 }
 export interface TitleProgress {
+  ready?: boolean;
+  stats?: TitleV3Metrics;
   enabled: boolean;
   policyVersion: string;
   currentStage: number;
@@ -73,12 +76,14 @@ export interface RegionalProgress {
 @Injectable()
 export class TitleService {
   readonly settings: TitleSettings;
+  readonly v3: TitleV3;
   constructor(@Optional() @Inject(TITLE_SETTINGS) settings?: TitleSettings) {
     this.settings = settings ?? loadTitleSettings();
+    this.v3 = new TitleV3();
   }
   async lock(m: EntityManager) {
     // Inputs, title transitions and ranking snapshots share this fence. No network I/O is done while held.
-    if (this.settings.enabled)
+    if (this.settings.enabled || this.v3.enabled)
       await m.query(
         "SELECT pg_advisory_xact_lock(hashtextextended('wgo-title-policy',0))",
       );
@@ -119,7 +124,7 @@ export class TitleService {
     userId: string,
     context: RewardEventContext,
   ) {
-    if (!this.settings.enabled) return;
+    if (!this.settings.enabled && !this.v3.enabled) return;
     const [user] = await m.query(
       'SELECT status FROM users WHERE id=$1 FOR UPDATE',
       [userId],
@@ -166,6 +171,20 @@ export class TitleService {
       (before && before.account_status !== user.status)
     )
       await this.markRankingDirty(m);
+    if (this.v3.enabled) {
+      await this.v3.sync(m, userId, (code, qualified) =>
+        this.changeBadge(
+          m,
+          userId,
+          code,
+          qualified,
+          context,
+          'TITLE_POLICY_V3',
+          TITLE_V3_POLICY.version,
+        ),
+      );
+      return;
+    }
     for (let i = 0; i < 3; i++)
       await this.changeBadge(
         m,
@@ -215,6 +234,7 @@ export class TitleService {
     qualifies: boolean,
     context: RewardEventContext,
     reason: string,
+    policyVersion: string = TITLE_POLICY.version,
   ) {
     const b = await this.badge(m, code);
     if (!b.active) qualifies = false;
@@ -226,18 +246,36 @@ export class TitleService {
         [userId, b.id],
       );
       if (!changed.length) return;
-      await this.recordBadgeChange(m, userId, b, 'GRANTED', context, {
-        reason,
-      });
+      await this.recordBadgeChange(
+        m,
+        userId,
+        b,
+        'GRANTED',
+        context,
+        {
+          reason,
+        },
+        true,
+        policyVersion,
+      );
     } else {
       const [changed] = await m.query(
         'UPDATE user_badges SET revoked_at=now() WHERE user_id=$1 AND badge_id=$2 AND revoked_at IS NULL RETURNING user_id',
         [userId, b.id],
       );
       if (!changed.length) return;
-      await this.recordBadgeChange(m, userId, b, 'REVOKED', context, {
-        reason,
-      });
+      await this.recordBadgeChange(
+        m,
+        userId,
+        b,
+        'REVOKED',
+        context,
+        {
+          reason,
+        },
+        true,
+        policyVersion,
+      );
     }
   }
   private async recordBadgeChange(
@@ -248,6 +286,7 @@ export class TitleService {
     context: RewardEventContext,
     details: Record<string, unknown>,
     publish = true,
+    policyVersion: string = TITLE_POLICY.version,
   ) {
     await m.query(
       `INSERT INTO user_badge_history(user_id,badge_id,action,policy_version,region_code,ranking_run_id,reason) VALUES($1,$2,$3,$4,$5,$6,$7)`,
@@ -255,7 +294,7 @@ export class TitleService {
         userId,
         b.id,
         action,
-        TITLE_POLICY.version,
+        policyVersion,
         details.regionCode ?? null,
         details.rankingRunId ?? null,
         details.reason ?? null,
@@ -264,7 +303,7 @@ export class TitleService {
     if (publish)
       await emitRewardEvent(m, userId, context, `USER_BADGE_${action}`, {
         badgeId: b.id,
-        policyVersion: TITLE_POLICY.version,
+        policyVersion,
         badgeCode: b.code,
         badgeName: b.name,
         stage: TITLE_CODES.indexOf(b.code as (typeof TITLE_CODES)[number]) + 1,
@@ -299,6 +338,7 @@ export class TitleService {
         ON CONFLICT(user_id,badge_id,region_code) DO UPDATE SET granted_at=now(),revoked_at=null,run_id=EXCLUDED.run_id`,
         [userId, b.id, regionCode, runId],
       );
+      if (this.v3.enabled) return;
       await m.query(
         `UPDATE user_title_progress SET highest_stage=4,
         achieved_stages=CASE WHEN achieved_stages?'CLAIRVOYANT' THEN achieved_stages ELSE achieved_stages||jsonb_build_object('CLAIRVOYANT',now()) END WHERE user_id=$1`,
@@ -322,6 +362,7 @@ export class TitleService {
         'UPDATE user_regional_badges SET revoked_at=now(),run_id=$4 WHERE user_id=$1 AND badge_id=$2 AND region_code=$3',
         [userId, b.id, regionCode, runId],
       );
+      if (this.v3.enabled) return;
       const [remaining] = await m.query(
         'SELECT 1 FROM user_regional_badges WHERE user_id=$1 AND badge_id=$2 AND revoked_at IS NULL LIMIT 1',
         [userId, b.id],
@@ -351,6 +392,7 @@ export class TitleService {
     userId: string,
     context: RewardEventContext,
   ) {
+    if (this.v3.enabled) return;
     const b = await this.badge(m, 'CLAIRVOYANT');
     const [r] = await m.query(
       'SELECT count(*) FILTER(WHERE revoked_at IS NULL)::text AS active,count(*)::text AS total FROM user_regional_badges WHERE user_id=$1 AND badge_id=$2',
@@ -530,7 +572,7 @@ export class TitleService {
       ),
     );
     const next = stages.find((s) => s.stage > currentStage);
-    return {
+    const result: TitleProgress = {
       enabled: this.settings.enabled,
       policyVersion: TITLE_POLICY.version,
       currentStage,
@@ -557,5 +599,8 @@ export class TitleService {
         regions,
       },
     };
+    return this.v3.enabled
+      ? { ...result, ...(await this.v3.progress(m, userId)) }
+      : result;
   }
 }
