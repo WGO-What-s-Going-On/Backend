@@ -77,6 +77,14 @@ export function parsePostEvent(
       fields.eventId === v.eventId &&
       fields.eventType === v.eventType,
   );
+  // Editing text and moderation acknowledgements contain no reward/title state.
+  // Acknowledge these known producer facts instead of filling the reward DLQ.
+  if (
+    ['PostCommentUpdated', 'ContentModerationApplied'].includes(
+      v.eventType as string,
+    )
+  )
+    return null;
   if (v.eventType === 'PostVoteSelectionChanged') {
     const s = v.voteSelection;
     check(
