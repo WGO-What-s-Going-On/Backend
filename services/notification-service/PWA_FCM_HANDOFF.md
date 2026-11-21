@@ -8,7 +8,7 @@
 4. 포그라운드 `onMessage`, 백그라운드/닫힌 탭의 service worker 수신, OS 알림 표시, 클릭 후 actionPath/commentId 이동과 알림함 재동기화를 각각 기록한다. Firebase의 [수신 상태별 동작](https://firebase.google.com/docs/cloud-messaging/web/receive-messages)을 따른다. 서버가 notification payload를 보내므로 SDK 자동 표시와 수동 showNotification을 중복 실행하지 않는다. data.notificationId로 인앱 표시를 중복 제거한다. 서버 Web notification tag도 같은 ID를 사용하지만 외부 전송의 exactly-once 보장은 아니다.
 5. iOS/iPadOS에서는 홈 화면에 추가한 웹 앱에서 사용자 동작으로 권한 요청을 시험한다. 지원 조건은 [WebKit의 Web Push 설명](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/)과 실제 대상 OS/브라우저에서 확인한다.
 6. token 해제·무효 token·두 기기 부분 실패, 종류별 설정 OFF, 게시글 mute, 양방향 차단, 사용자 격리, 댓글 삭제/공감 취소/종료를 시험한다. 이미 FCM에 인계되거나 기기에 표시된 Push를 서버가 회수한다고 가정하지 않는다. 전송 전 대기 작업 취소와 구분한다.
-7. 주변 알림은 별도 opt-in·위치 이용 목적 동의 UI와 브라우저 위치 권한을 확인한 뒤에만 활성화한다. 신선한 위치로150m 안/밖, 본인 제외, 철회·만료·갱신과 대기 Push 취소, 기본10분 제한을 실제 기기에서 시험한다. 과거 약관이나 게시글 참여로 동의를 대신하지 않는다.
+7. 주변 알림은 별도 opt-in·위치 이용 목적 동의 UI와 브라우저 위치 권한을 확인한 뒤에만 활성화한다. 신선한 위치로150m 안/밖, 본인 제외, 철회·만료·갱신과 대기 Push 취소, 같은 작성자의 연속 게시물마다 시간 간격 제한 없이 알림이 도착하는지와 같은 게시물의 중복 방지를 실제 기기에서 시험한다. 과거 약관이나 게시글 참여로 동의를 대신하지 않는다.
 8. 서버는 기존 ADC/Workload Identity를 사용하고 대상 Firebase 프로젝트의 발송 권한을 확인한다. [FCM 서버 인증](https://firebase.google.com/docs/cloud-messaging/send/v1-api)과 [Firebase Cloud Messaging API Admin 역할](https://docs.cloud.google.com/iam/docs/roles-permissions/firebasecloudmessaging)을 따른다. 정적 운영 서비스 계정 JSON 키를 새로 만들거나 앱에 넣는 절차가 아니다.
 
 검증 기록에는 환경·앱/브라우저/OS 버전·테스트 시각·원본 eventId·notificationId·FCM 응답·실제 화면/클릭 결과를 남긴다. 기기 실수신이 확인되기 전에는 실제 GCP/PWA 검증 완료로 표시하지 않는다.

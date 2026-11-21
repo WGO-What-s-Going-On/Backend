@@ -8,7 +8,7 @@
 4. User의 `USER_NOTIFICATION_TRUSTED_JWKS`, Post의 `POST_MODERATION_TRUSTED_JWKS` 공개키를 먼저 등록한다. Notification/Moderation에는 각자의 별도 private JWK·전체 내부 URL을 공급한다. Gateway private key를 재사용하지 않는다. 서비스 간 네트워크/2초 timeout/404·401·503을 검증한다.
 5. 새 Notification Consumer를 배포하고 readiness(DB v4 + 실행하는 모든 stream 연결), PEL/DLQ/delivery를 확인한다. User/Moderation 기능 flag가 false인 환경에서도 먼저 prepare해 시작점을 보존한 후 true로 활성화한다. Post 기존 group은 유지한다.
 6. Post 답글 부모 작성자 문맥과 Moderation 버전/실제 예정 시각 생산자 확장을 배포한다. 과거 v1은 호환하지만 없는 수신자/시각을 추정하지 않는다. 과거 projection이 필요한 대상은 명시적으로 원본 재조정 후 제한된 재처리 대상으로 선정한다.
-7. 주변 알림은 기본 `NEARBY_NOTIFICATIONS_ENABLED=false`. 명시적 opt-in·별도 위치 목적 동의 UI, HTTPS 위치 권한, User 차단 인가 키와 설정을 검증한 후 true로 전환한다. 기존 약관/참여/거주 지역으로 동의를 대체하지 않는다. 기본 사용자별 최소 예약 간격600초, 허용60..86400초다.
+7. 주변 알림은 기본 `NEARBY_NOTIFICATIONS_ENABLED=false`. 명시적 opt-in·별도 위치 목적 동의 UI, HTTPS 위치 권한, User 차단 인가 키와 설정을 검증한 후 true로 전환한다. 기존 약관/참여/거주 지역으로 동의를 대체하지 않는다. 수신 조건을 만족하는 새 게시물마다 시간 간격 제한 없이 알림을 예약하며, 같은 게시물·수신자의 중복 예약은 방지한다. 기존 `NEARBY_MIN_INTERVAL_SECONDS` 설정은 더 이상 사용하지 않는다. 이전 버전과의 호환을 위해 기존 제한 테이블은 보존한다.
 
 운영 Secret·DB·Redis·GCP 배포는 이 작업에서 수정/실행하지 않았다. 이전 버전으로 단순 이미지 rollback해 새 기능을 계속 처리하지 않는다. 새 기능을 먼저 OFF하고 drain한 뒤 스키마를 보존해 이전 동작으로 복구한다. schema down/drop이나 group 재설정은 하지 않는다.
 
@@ -36,4 +36,4 @@ FCM 작업은 PostgreSQL PENDING/SENDING/60초 lease/SENT/FAILED/CANCELED다. �
 
 알림은 생성 후30일 논리 TTL, 목록/unread가 항상 DB 원본으로 검증된다. `pnpm db:cleanup`을 CronJob으로 반복해1000행씩 물리 정리한다. 처리 Inbox/업무 키/삭제 tombstone은 임의 만료하지 않는다. 주변 좌표는 최대15분만 유효하며 구독/만료 job을1분 주기1000행 batch로 정리한다. 작업 완료/취소 좌표도 정리한다. backlog와 physical expiry를 감시한다. 로그에는 원문·토큰·JWK·좌표를 출력하지 않는다. DLQ 원문에는 댓글/개인정보가 있을 수 있으므로 접근을 제한한다.
 
-모니터링 대상: stream lag/PEL oldest age/deliveriesCounter, DLQ 건수·증가, DB Inbox commit 실패·lock 대기·pool 사용률, delivery 상태별 건수/due age/lease 만료/FCM partial retry·invalid·permanent 결과, unread DB-캐시 편차, 위치 구독 만료 backlog, fanout PENDING/RUNNING age·페이지 크기·인가 실패·사용자 throttle. GCP FCM 권한/실수신·Redis failover/RPO·실제 Cloud SQL 재연결·GKE 다중 Pod 종료 유예는 배포 환경에서 별도로 검증한다.
+모니터링 대상: stream lag/PEL oldest age/deliveriesCounter, DLQ 건수·증가, DB Inbox commit 실패·lock 대기·pool 사용률, delivery 상태별 건수/due age/lease 만료/FCM partial retry·invalid·permanent 결과, unread DB-캐시 편차, 위치 구독 만료 backlog, fanout PENDING/RUNNING age·페이지 크기·인가 실패. GCP FCM 권한/실수신·Redis failover/RPO·실제 Cloud SQL 재연결·GKE 다중 Pod 종료 유예는 배포 환경에서 별도로 검증한다.

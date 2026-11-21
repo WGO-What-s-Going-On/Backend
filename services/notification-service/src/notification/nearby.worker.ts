@@ -206,48 +206,25 @@ export class NearbyWorker implements OnModuleInit, OnModuleDestroy {
       }
       let created = false;
       if (allowed) {
-        await client.query(
-          `INSERT INTO notification_nearby_limits(user_id,last_enqueued_at) VALUES($1,'-infinity') ON CONFLICT DO NOTHING`,
-          [location.user_id],
-        );
-        const throttle = Number(process.env.NEARBY_MIN_INTERVAL_SECONDS ?? 600);
-        if (
-          !Number.isSafeInteger(throttle) ||
-          throttle < 60 ||
-          throttle > 86400
-        )
-          throw new Error('Invalid nearby throttle');
-        const limit = (
-          await client.query(
-            "SELECT last_enqueued_at<=now()-($2::int*interval '1 second') AS eligible FROM notification_nearby_limits WHERE user_id=$1 FOR UPDATE",
-            [location.user_id, throttle],
-          )
-        ).rows[0];
-        if (limit.eligible) {
-          const n = await this.writer.write(client, {
-            stream: 'post:events',
-            eventId: job.event_id,
-            businessKey: `nearby:${job.post_id}:${location.user_id}`,
-            userId: location.user_id,
-            postId: job.post_id,
-            type: 'NEARBY_POST_CREATED',
-            category: 'nearby',
-            title: '주변 새 게시물',
-            body: '주변에 새로운 게시물이 등록되었습니다.',
-            push: true,
-            authorizationActorId: job.author_id,
-            deliveryData: {
-              nearbyAudiencePolicy: 'map-location-terms-v1',
-              nearbyExpiresAt: new Date(job.expires_at).toISOString(),
-            },
-          });
-          created = !!n?.created;
-          if (created)
-            await client.query(
-              'UPDATE notification_nearby_limits SET last_enqueued_at=now() WHERE user_id=$1',
-              [location.user_id],
-            );
-        }
+        // Each new post can notify immediately; the business key deduplicates retries.
+        const n = await this.writer.write(client, {
+          stream: 'post:events',
+          eventId: job.event_id,
+          businessKey: `nearby:${job.post_id}:${location.user_id}`,
+          userId: location.user_id,
+          postId: job.post_id,
+          type: 'NEARBY_POST_CREATED',
+          category: 'nearby',
+          title: '주변 새 게시물',
+          body: '주변에 새로운 게시물이 등록되었습니다.',
+          push: true,
+          authorizationActorId: job.author_id,
+          deliveryData: {
+            nearbyAudiencePolicy: 'map-location-terms-v1',
+            nearbyExpiresAt: new Date(job.expires_at).toISOString(),
+          },
+        });
+        created = !!n?.created;
       }
       await client.query(
         'UPDATE notification_nearby_jobs SET cursor_user_id=$3 WHERE post_id=$1 AND lease_id=$2',

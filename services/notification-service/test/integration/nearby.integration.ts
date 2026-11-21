@@ -131,7 +131,7 @@ describe('explicit 150m nearby subscriptions and bounded durable fanout', () => 
         .rowCount,
     ).toBe(0);
   });
-  it('uses an inclusive 150m radius, excludes author and blocked recipients, and throttles separate posts', async () => {
+  it('uses an inclusive 150m radius, excludes author and blocked recipients, and sends consecutive posts', async () => {
     const north = (metres: number) =>
       37.5 + ((metres / 6371000) * 180) / Math.PI;
     expect(distanceM(37.5, 127, north(150), 127)).toBeCloseTo(150, 6);
@@ -155,8 +155,34 @@ describe('explicit 150m nearby subscriptions and bounded durable fanout', () => 
     expect(JSON.stringify(send.mock.calls[0]?.[0])).not.toContain('latitude');
     await create('post_next');
     await worker.runOnce();
-    expect(await items()).toHaveLength(1);
-    expect(send).toHaveBeenCalledOnce();
+    expect(await items()).toHaveLength(2);
+    expect(await items('1')).toHaveLength(0);
+    expect(await items('3')).toHaveLength(0);
+    expect(await items('4')).toHaveLength(0);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+  it('ignores legacy cooldown state and settings while deduplicating each post', async () => {
+    vi.stubEnv('NEARBY_MIN_INTERVAL_SECONDS', '86400');
+    await subscriptions.save('2', location());
+    await h.database.pool.query(
+      'INSERT INTO notification_nearby_limits(user_id,last_enqueued_at) VALUES($1,now())',
+      ['2'],
+    );
+    for (const [postId, author] of [
+      ['post_first', 1],
+      ['post_second', 1],
+      ['post_other_author', 3],
+    ] as const) {
+      const event = parsePostEvent(
+        wire('PostCreated', { postId, author }).data,
+      )!;
+      await store.apply(event);
+      await worker.runOnce();
+      await store.apply(event);
+      await worker.runOnce();
+    }
+    expect(await items()).toHaveLength(3);
+    expect(send).toHaveBeenCalledTimes(3);
   });
   it('stops enqueuing on authority failure and safely resumes the same durable job', async () => {
     await subscriptions.save('2', location());
