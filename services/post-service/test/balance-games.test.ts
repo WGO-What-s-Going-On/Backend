@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   balanceContentHash,
   validateBalanceGames,
@@ -32,6 +34,38 @@ export const games = [
   },
 ];
 describe('three administrator-only fixed balance polls', () => {
+  it('validates the revised approved manifest and rejects the previous copy hash', () => {
+    const manifest = JSON.parse(
+      readFileSync(
+        resolve('../../docs/deployment/cau-balance-games.manifest.json'),
+        'utf8',
+      ),
+    );
+    const third = manifest.balanceGames[2];
+    expect(third.title).toBe('🎲 A+ 독박 vs B+ 버스');
+    expect(third.choices).toEqual(['A+ 독박', 'B+ 버스']);
+    expect(third.content).toContain(
+      'B. 자료조사·PPT·발표 아무것도 안 하고 팀원 덕에 B+',
+    );
+    expect(third.content).not.toContain('내 몫은 성실히');
+    expect(balanceContentHash(manifest.balanceGames)).toBe(
+      manifest.balanceApproval.contentSha256,
+    );
+    validateBalanceManifest(manifest, true);
+    expect(() =>
+      validateBalanceManifest(
+        {
+          ...manifest,
+          balanceApproval: {
+            ...manifest.balanceApproval,
+            contentSha256:
+              '0102dd91950cb7f4d4ff55eb3ac7bc7ca3f0c96446de2c9e9264494674b1dfae',
+          },
+        },
+        true,
+      ),
+    ).toThrow('approval');
+  });
   it('reserves separate IDs and accepts option keys only in their vote route', () => {
     expect(new Set([...CAMPUS_POST_IDS, ...BALANCE_POST_IDS]).size).toBe(5);
     for (const id of BALANCE_POST_IDS) {

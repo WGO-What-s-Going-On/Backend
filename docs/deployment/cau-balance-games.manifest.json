@@ -21,12 +21,12 @@
     },
     {
       "title": "🎲 A+ 독박 vs B+ 버스",
-      "content": "이번 팀플, 당신의 자리는?\n\nA. 자료조사·PPT·발표 내가 다 하고 A+\nB. 내 몫은 성실히 했는데 에이스가 다 해줘서 B+\n\n내 학점은 A+인데 내 표정은 F… 그래도 A? 댓글로 변론해주세요.",
+      "content": "이번 팀플, 당신의 자리는?\n\nA. 자료조사·PPT·발표 내가 다 하고 A+\nB. 자료조사·PPT·발표 아무것도 안 하고 팀원 덕에 B+\n\n내 학점은 A+인데 내 표정은 F… 그래도 A? 댓글로 변론해주세요.",
       "choices": ["A+ 독박", "B+ 버스"]
     }
   ],
   "balanceApproval": {
-    "contentSha256": "0102dd91950cb7f4d4ff55eb3ac7bc7ca3f0c96446de2c9e9264494674b1dfae",
-    "approvedAt": "2026-11-24T13:23:48.762Z"
+    "contentSha256": "b790f66ead7f3a4d867b99d024181ed32ec2d404485ce1eb4b59ed1818bc1755",
+    "approvedAt": "2026-11-24T13:47:55.738Z"
   }
 }

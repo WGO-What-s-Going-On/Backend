@@ -8,7 +8,7 @@
 | `post_3b16ea1a-4de6-4a2c-85be-56a64ada2034` | 올 A+ vs 월금공강 | 올 A+ / 월금공강 |
 | `post_3b16ea1a-4de6-4a2c-85be-56a64ada2035` | A+ 독박 vs B+ 버스 | A+ 독박 / B+ 버스 |
 
-제목·본문·선택지는 [승인 manifest](./cau-balance-games.manifest.json)에 독립 필드로 저장한다. 2026-11-24 대화에서 주제 2·3의 원문을 사용자가 승인했다. 원문 변경 시 `balanceApproval` 해시를 자동 갱신하지 말고 다시 확인받는다. 내용 확인용 SHA-256은 JSON의 `balanceGames`를 title/content/choices 순서로 정규화해 산출한다. 이는 운영자 확인 장치이며 공개 API의 권한 검증을 대체하지 않는다.
+제목·본문·선택지는 [승인 manifest](./cau-balance-games.manifest.json)에 독립 필드로 저장한다. 2026-11-24 대화에서 주제 2·3의 원문을 사용자가 승인했고, 후속 요청에 따라 3번 B 본문만 `자료조사·PPT·발표 아무것도 안 하고 팀원 덕에 B+`로 수정해 해시를 갱신했다. 제목과 고정 A/B 및 나머지 문구는 유지했다. 원문 변경 시 `balanceApproval` 해시를 자동 갱신하지 말고 다시 확인받는다. 내용 확인용 SHA-256은 JSON의 `balanceGames`를 title/content/choices 순서로 정규화해 산출한다. 이는 운영자 확인 장치이며 공개 API의 권한 검증을 대체하지 않는다.
 
 ## 후보 표현 및 투표 계약
 
@@ -38,13 +38,17 @@ Frontend PR #5는 운영 미배포 상태다. 추가 프론트 PR은 #5 위에 �
 
 현재 CD는 main push에서 실제 클러스터를 대상으로 staging 작업을 자동 실행한다. 변경 파일을 실제 `selectChanges`/`deploymentWaves`에 넣으면 이번에는 세 서비스가 같은 wave이며, **동시성 1의 실제 순서는 Post → Notification → Moderation**이다. Post는 User/Map에만 배포 의존성이 있고 이번에는 두 서비스가 변경되지 않아, 이전 캠퍼스 배포의 순서와 달라진다. 동시성이 높으면 세 서비스가 병렬로 배포될 수 있다. 신규 세 글이 없는 동안의 혼합 배포는 기존 글과 호환된다. **생성 이후 구 Notification/Moderation은 신규 ID를 거절하고, 구 Post는 고정 후보 종료를 처리하지 못한다. 따라서 세 서비스의 모든 consumer/worker Pod가 새 digest로 완전히 교체되기 전에는 절대 생성하지 않는다.** 기존 두 글은 새/구 코드 모두 지원한다.
 
-중요한 배포 사전 조건: 현재 CD는 Notification 소스 변경 시 SQL 스키마 변경이 없어도 migration Job을 항상 만든다. 이전 배포에서 이 Job의 app 25m + proxy 10m가 단일 노드의 잔여 CPU 예약량을 초과했다. 이전 한 번의 10m 승인을 이번 배포에 재사용하지 않는다. 이번 PR에는 migration/인프라 수정이 없다. **현 CD의 불필요한 migration Job과 자원 제약을 안전하게 처리할 승인된 배포 경로를 병합 전에 확정해야 한다.** 노드 증설·리소스 조정·Consumer 중지로 우회하지 않는다. 병합만 먼저 해 자동 CD를 실패시키지 않는다.
+Notification 스키마에 새 migration은 필요하지 않다. 2026-11-24 22:48~22:52 KST 읽기 전용 운영 점검에서 버전 1~5, 필요한 테이블 19개와 주요 추가 컬럼, 정상 인덱스를 확인했다. 운영 이미지의 migration 빌드 파일 6개(schema/cross-service/post-notifications/nearby/nearby-map/migrate) 해시도 준비된 버전과 전부 일치했다. 일반 CD는 소스 변경 시 schema 변경과 무관하게 migration Job을 항상 실행한다. 현재 경로를 유지하면 이 Job의 멱등적 스키마 재확인 작업이 여전히 실행되며, 이번 작업에서 CD를 우회하거나 변경하지 않는다. 운영에서 migration 함수 자체는 실행하지 않았다.
+
+같은 점검에서 단일 노드 allocatable CPU 1930m / 예약 1905m로 여유 25m를 확인했다. 기본 migration app 25m + native SQL proxy 10m = 35m는 부족하며, **이번 Notification migration Pod의 app requests만 10m로 낮춘 총 20m는 현재 예약 자원 안에 들어간다.** 메모리는 노드 약 690Mi / namespace requests 672Mi 여유에 필요량 448Mi가 들어가고, namespace limits 여유 1056Mi에 필요량 640Mi도 들어간다. ephemeral-storage와 Pod 수 쿼터도 충족했다. 25m/10m Job 사양 모두 서버 dry-run admission을 통과했고 앱 CPU limit=1, memory request=384Mi/limit=512Mi 및 proxy 사양이 유지됨을 확인했다. 서버 dry-run은 scheduler 실행이나 실제 migration 성공을 보장하지 않는다.
+
+Pod resize API와 patch 권한을 확인했고, 이전 배포에서는 동일한 Pending Pod resize 방식으로 성공한 기록이 있다. **실제 조정은 이번 배포 승인 이후, 새 Notification migration Job/Pod에만 적용한다.** 이전 승인을 재사용하거나 지금 운영 Pod를 변경하지 않는다. 새 Job 이름이 승인된 merge SHA 앞 12자리 + CD의 8자리 hex suffix와 일치하고, 소유 Job UID·새 이미지 digest·Pending/미배정·Insufficient cpu 이벤트·원래 25m requests를 검증해야 한다. 직전 노드/쿼터/메모리 여유를 다시 대조한 뒤 `pods/resize` 서버 dry-run에서 CPU requests 외 변경이 없을 때만 10m로 조정한다. CPU limit·메모리·SQL proxy·Job template·기존 Deployment 리소스·노드 수는 유지한다. 다른 자원 문제, 권한 거부 또는 migration 실패가 생기면 중단하고 원인을 보고한다. 실제 새 Pod의 resize dry-run 및 Job 완료 검증은 배포 승인 후 수행할 단계다.
 
 배포가 승인되면 다음 순서로 실행한다.
 
 1. 운영 작성자 1의 nickname=머준/ACTIVE와 좌표/Map resolveRegion을 읽기 전용으로 다시 대조한다. 기존 전체 데이터와 두 기존 ID의 baseline/해시, 새 세 ID 미점유를 확인하고 Post MongoDB 및 Moderation Redis의 새 백업을 검증한다. 오래된 이전 백업을 새 실행의 백업으로 대체하지 않는다.
-2. 위 migration Job 문제의 승인된 처리 경로를 확정한 뒤 해당 세 서비스만 배포한다. 새 digest와 release/source SHA, readiness, 구/종료 중 Pod 부재, Outbox/Stream/소비자 오류·DLQ를 확인한다. 운영 리소스 변경은 없다.
-3. #5 및 후속 프론트를 배포하고 정상 사용자 위치에서 350m UI를 확인한다. 운영 생성 승인 없이는 생성하지 않는다.
+2. 병합·자동 CD 및 위 일회성 Notification Migration Pod 조정 승인을 받은 뒤 해당 세 서비스만 배포한다. 새 Job이 나타날 때의 CPU 예약량을 다시 확인하고 위 조건대로만 조정한다. Job 정상 완료 뒤 기존 CD를 이어가며 새 digest와 release/source SHA, readiness, 구/종료 중 Pod 부재, Outbox/Stream/소비자 오류·DLQ를 확인한다. 기존 서비스 Deployment 리소스와 노드 수 변경은 없다.
+3. Frontend #5를 main에 병합한 뒤에만 #6을 main 기준으로 정리해 검토·병합·배포한다. #6을 #5 브랜치로 먼저 병합해 기존 PR 내용을 바꾸지 않는다. Vercel 배포 권한과 완료 상태, 정상 사용자 위치에서 350m UI를 확인한다. 운영 생성 승인 없이는 생성하지 않는다.
 4. `node scripts/campus-rollout-evidence.mjs <explicit-context> wgo-demo <new-post-digest> <new-moderation-digest> <new-notification-digest>`를 읽기 전용으로 실행한다. 출력의 `rollout`을 manifest 사본에 포함한다. 완료된 Job은 ownerReferences.kind=Job과 Succeeded/Failed를 함께 확인한 경우에만 Pod 수에서 제외한다. 실행 중 Job 및 구/종료 중 application Pod는 계속 차단한다.
 5. 새 Post 이미지의 기존 운영 환경에서 아래 dry-run을 수행한다. 스크립트는 매번 User gRPC 및 Map region을 대조하고 기존 postId 유니크 인덱스를 확인한다. 명시적 MONGODB_URI/USER_GRPC_ADDRESS/MAP_GRPC_ADDRESS와 기존 서비스 인증을 사용하며 Secret을 파일/로그로 복사하지 않는다.
 
