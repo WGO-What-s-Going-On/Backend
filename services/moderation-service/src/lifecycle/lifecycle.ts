@@ -1,3 +1,4 @@
+import { isCampusEvent } from './campus-events.js';
 export type LifecycleState = 'ACTIVE' | 'STALE' | 'CLOSED';
 export type LifecycleEventType =
   | 'BOARD_STALE'
@@ -5,6 +6,8 @@ export type LifecycleEventType =
   | 'BOARD_CLOSED';
 
 export interface LifecycleProjection {
+  lifecyclePolicy?: 'CAU_CAMPUS_2026_30D';
+  expiresAt?: string;
   postId: string;
   postAuthorId?: string;
   state: LifecycleState;
@@ -176,6 +179,8 @@ export function evaluateLifecycle(
 ): LifecycleDecision {
   const timestamp = now.getTime();
   if (current.state === 'CLOSED') return { projection: current };
+  // The Post expiry worker owns this campaign's deadline; keep content moderation active.
+  if (isCampusEvent(current)) return { projection: current };
   const assessment = assessEnded(current, now);
   if (
     current.state === 'STALE' &&

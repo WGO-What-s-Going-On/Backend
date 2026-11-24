@@ -26,7 +26,17 @@ export class ModerationPostEventProcessor implements PostEventProcessor {
             event.aggregateId,
             event.postVersion,
           );
-        if (event.post?.authorId)
+        if (event.post?.lifecyclePolicy && event.post.expiresAt)
+          await this.lifecycle.initialize(
+            event.aggregateId,
+            event.occurredAt,
+            event.post.authorId ? String(event.post.authorId) : undefined,
+            {
+              lifecyclePolicy: event.post.lifecyclePolicy,
+              expiresAt: event.post.expiresAt,
+            },
+          );
+        else if (event.post?.authorId)
           await this.lifecycle.initialize(
             event.aggregateId,
             event.occurredAt,

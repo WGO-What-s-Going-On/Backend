@@ -1,4 +1,5 @@
 import { closeVote } from './vote.js';
+import { isCampusEvent } from '../domain/campus-events.js';
 import { PostNotFoundError } from '../domain/post.js';
 import { event } from './event.js';
 import type { PostUnitOfWork } from './ports.js';
@@ -23,6 +24,9 @@ export class ApplyModerationLifecycle {
       // v1에는 순서 버전이 없다. 유예 상태를 복제하거나 종료된 게시물을 되살리지 않는다.
       if (input.eventType !== 'BOARD_CLOSED' || post.status !== 'ACTIVE')
         return;
+      // Old Moderation Pods may still publish closure during a rolling upgrade.
+      // Only ExpirationWorker (or normal moderation/deletion) ends these two posts.
+      if (isCampusEvent(post)) return;
       const now = new Date();
       const postVersion = post.postVersion + 1;
       await tx.commands.fenceActivities(post.postId, post.bucketCount);
