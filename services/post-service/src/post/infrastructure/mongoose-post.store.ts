@@ -30,6 +30,7 @@ import type {
   StoredPostReactionType,
 } from '../domain/post.js';
 import { OutboxWorker } from './outbox.worker.js';
+import { isCampusEvent } from '../domain/campus-events.js';
 
 class MongoQueries implements PostStateQueries {
   constructor(
@@ -51,6 +52,11 @@ class MongoQueries implements PostStateQueries {
           voteCandidateIds: (post.vote?.candidates ?? []).map(
             (candidate: { commentId: string }) => candidate.commentId,
           ),
+          ...(post.lifecyclePolicy
+            ? { lifecyclePolicy: post.lifecyclePolicy }
+            : {}),
+          createdAt: post.createdAt,
+          voteStatus: post.vote?.status,
           postId: post.postId,
           status: post.status,
           closedAt: post.closedAt ?? null,
@@ -350,7 +356,7 @@ class MongoCommands implements PostCommands {
           ...post,
           bucketCount: this.bucketCount,
           vote: {
-            status: 'PENDING',
+            status: isCampusEvent(post) ? 'NONE' : 'PENDING',
             candidates: [],
             selectedAt: null,
             closedAt: null,

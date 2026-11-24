@@ -28,6 +28,7 @@ import {
 } from './errors.js';
 import { event } from './event.js';
 import type { PartitionStrategy } from './partition.js';
+import { CAMPUS_POST_IDS, isCampusEvent } from '../domain/campus-events.js';
 import type {
   LocationAuthorization,
   PostStateQueries,
@@ -49,6 +50,29 @@ async function active(transaction: PostTransaction, postId: string) {
   const post = await transaction.queries.findPost(postId);
   requireActive(post);
   return post;
+}
+
+async function authorizeCampusReaction(
+  queries: PostStateQueries,
+  authorization: LocationAuthorization | undefined,
+  postId: string,
+  actor: number,
+) {
+  if (!CAMPUS_POST_IDS.some((id) => id === postId)) return;
+  const post = await queries.findPost(postId);
+  requireActive(post);
+  if (!isCampusEvent(post)) return;
+  if (!authorization || !post.locationSnapshot || post.radiusM !== 350)
+    throw new ParticipationUnavailableError(
+      'Campus location authorization unavailable',
+    );
+  await authorization.assertCanJoin(
+    actor,
+    postId,
+    post.locationSnapshot.latitude,
+    post.locationSnapshot.longitude,
+    post.radiusM,
+  );
 }
 
 export class CreatePost {
@@ -265,6 +289,7 @@ export class CreateReaction {
     private readonly unitOfWork: PostUnitOfWork,
     private readonly queries: PostStateQueries,
     private readonly partitionStrategy: PartitionStrategy,
+    private readonly authorization?: LocationAuthorization,
   ) {}
 
   async execute(
@@ -272,6 +297,12 @@ export class CreateReaction {
     userId: number,
     type: PostReactionType,
   ): Promise<ReactionRecord> {
+    await authorizeCampusReaction(
+      this.queries,
+      this.authorization,
+      postId,
+      userId,
+    );
     const now = new Date();
     const reaction = createReaction(postId, userId, type, now);
     try {
@@ -352,6 +383,7 @@ export class CreateCommentReaction {
   constructor(
     private readonly unitOfWork: PostUnitOfWork,
     private readonly queries: PostStateQueries,
+    private readonly authorization?: LocationAuthorization,
   ) {}
 
   async execute(
@@ -360,6 +392,12 @@ export class CreateCommentReaction {
     userId: number,
     type: CommentReactionType,
   ): Promise<CommentReactionRecord> {
+    await authorizeCampusReaction(
+      this.queries,
+      this.authorization,
+      postId,
+      userId,
+    );
     const reaction = createCommentReaction(
       postId,
       commentId,

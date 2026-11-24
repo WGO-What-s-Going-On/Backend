@@ -1,0 +1,22 @@
+{
+  "eventId": "evt_f83851f8-8721-423c-a6eb-73cc0ba04630",
+  "aggregateId": "post_3b16ea1a-4de6-4a2c-85be-56a64ada2031",
+  "eventType": "PostCreated",
+  "schemaVersion": 1,
+  "producer": "post-service",
+  "correlationId": "req_f83851f8-8721-423c-a6eb-73cc0ba04630",
+  "occurredAt": "2026-11-24T00:00:00.000Z",
+  "postVersion": 1,
+  "post": {
+    "postId": "post_3b16ea1a-4de6-4a2c-85be-56a64ada2031",
+    "authorId": 42,
+    "title": "LOCAL CONTRACT FIXTURE",
+    "content": "Synthetic coordinates and author; never use for deployment.",
+    "latitude": 0,
+    "longitude": 0,
+    "radiusM": 350,
+    "category": "NEWS",
+    "expiresAt": "2026-12-24T00:00:00.000Z",
+    "lifecyclePolicy": "CAU_CAMPUS_2026_30D"
+  }
+}

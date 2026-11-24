@@ -1,5 +1,11 @@
 # Moderation rollout, scheduling and recovery
 
+The two reserved CAU campaign IDs with validated `CAU_CAMPUS_2026_30D` creation
+policy retain active/due membership with the actual Post expiry as their due score.
+They skip only inactivity/ENDED decisions; terminal source facts and content
+moderation remain authoritative. Do not create them while old Moderation Pods
+share the consumer group. See [campaign rollout](../../../docs/deployment/campus-events.md).
+
 ## Due index migration
 
 The scheduler now polls once per second and claims at most 100 **due IDs**, not all

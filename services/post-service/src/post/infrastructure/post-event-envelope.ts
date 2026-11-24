@@ -1,5 +1,6 @@
 import { PostReactionType } from '../domain/post.js';
 
+import { CAMPUS_DURATION_MS, isCampusEvent } from '../domain/campus-events.js';
 export class InvalidOutboxEvent extends Error {}
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -83,6 +84,20 @@ export function serializePostEvent(row: Record<string, any>): string {
     };
     const key = types[value.eventType];
     const target = key ? value[key] : undefined;
+    if (
+      object(target) &&
+      target.lifecyclePolicy !== undefined &&
+      (value.eventType !== 'PostCreated' ||
+        !isCampusEvent({
+          postId: value.aggregateId,
+          lifecyclePolicy: target.lifecyclePolicy,
+        }) ||
+        target.radiusM !== 350 ||
+        !date(target.expiresAt) ||
+        Date.parse(target.expiresAt) - Date.parse(value.occurredAt) !==
+          CAMPUS_DURATION_MS)
+    )
+      throw new Error('Invalid campus policy');
     if (!object(target) || target.postId !== value.aggregateId)
       throw new Error('Invalid event type or target');
     if (!user(target.authorId ?? target.userId ?? target.winnerAuthorId))

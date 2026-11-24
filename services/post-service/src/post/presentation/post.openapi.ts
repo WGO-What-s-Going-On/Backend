@@ -139,6 +139,12 @@ export class CountersResponse {
 }
 
 export class PostResponse {
+  @ApiPropertyOptional({
+    enum: ['CAU_CAMPUS_2026_30D'],
+    description:
+      'Only the two reserved administrator-created CAU campaign posts. Not accepted by create/edit APIs.',
+  })
+  lifecyclePolicy?: string;
   @ApiProperty({ type: DisplayPositionBody, nullable: true })
   displayPosition!: DisplayPositionBody | null;
   @ApiProperty({ type: CoverFocusBody, nullable: true })

@@ -29,9 +29,11 @@ export class LifecycleService {
     postId: string,
     occurredAt: string,
     postAuthorId?: string,
+    policy?: Pick<LifecycleProjection, 'lifecyclePolicy' | 'expiresAt'>,
   ): Promise<boolean> {
     return this.repository.create({
       postId,
+      ...policy,
       ...(postAuthorId ? { postAuthorId } : {}),
       state: 'ACTIVE',
       createdAt: occurredAt,
