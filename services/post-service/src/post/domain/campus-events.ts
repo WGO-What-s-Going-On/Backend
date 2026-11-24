@@ -1,17 +1,32 @@
-// This one-off campaign is deliberately limited to these two reserved identities.
+// Reserved administrator-created campaigns; never accepted from public creation.
 export const CAMPUS_POLICY = 'CAU_CAMPUS_2026_30D' as const;
 export const CAMPUS_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 export const CAMPUS_POST_IDS = [
   'post_3b16ea1a-4de6-4a2c-85be-56a64ada2031',
   'post_3b16ea1a-4de6-4a2c-85be-56a64ada2032',
 ] as const;
+export const BALANCE_POST_IDS = [
+  'post_3b16ea1a-4de6-4a2c-85be-56a64ada2033',
+  'post_3b16ea1a-4de6-4a2c-85be-56a64ada2034',
+  'post_3b16ea1a-4de6-4a2c-85be-56a64ada2035',
+] as const;
+export const BALANCE_OPTION_IDS = ['option_A', 'option_B'] as const;
+export function isBalanceEvent(post: {
+  postId: string;
+  lifecyclePolicy?: unknown;
+}): boolean {
+  return (
+    post.lifecyclePolicy === CAMPUS_POLICY &&
+    BALANCE_POST_IDS.some((id) => id === post.postId)
+  );
+}
 export function isCampusEvent(post: {
   postId: string;
   lifecyclePolicy?: unknown;
 }): boolean {
   return (
     post.lifecyclePolicy === CAMPUS_POLICY &&
-    CAMPUS_POST_IDS.some((id) => id === post.postId)
+    [...CAMPUS_POST_IDS, ...BALANCE_POST_IDS].some((id) => id === post.postId)
   );
 }
 export const CAMPUS_CONTENT = [

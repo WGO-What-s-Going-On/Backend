@@ -63,6 +63,7 @@ import { ReadPosts } from './application/queries.js';
 import { PostErrorFilter } from './presentation/post-error.filter.js';
 import {
   commentInput,
+  voteSelectionId,
   commentEditInput,
   commentMediaInput,
   parentCommentInput,
@@ -251,7 +252,7 @@ export class PostController {
     return this.votes.choose(
       postId(id),
       userId(header),
-      commentId((body as VoteBody).commentId),
+      voteSelectionId(id, (body as VoteBody).commentId),
     );
   }
 

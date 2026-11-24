@@ -28,7 +28,11 @@ import {
 } from './errors.js';
 import { event } from './event.js';
 import type { PartitionStrategy } from './partition.js';
-import { CAMPUS_POST_IDS, isCampusEvent } from '../domain/campus-events.js';
+import {
+  BALANCE_POST_IDS,
+  CAMPUS_POST_IDS,
+  isCampusEvent,
+} from '../domain/campus-events.js';
 import type {
   LocationAuthorization,
   PostStateQueries,
@@ -58,7 +62,8 @@ async function authorizeCampusReaction(
   postId: string,
   actor: number,
 ) {
-  if (!CAMPUS_POST_IDS.some((id) => id === postId)) return;
+  if (![...CAMPUS_POST_IDS, ...BALANCE_POST_IDS].some((id) => id === postId))
+    return;
   const post = await queries.findPost(postId);
   requireActive(post);
   if (!isCampusEvent(post)) return;

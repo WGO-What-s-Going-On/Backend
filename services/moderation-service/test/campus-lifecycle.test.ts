@@ -18,6 +18,60 @@ const base: LifecycleProjection = {
   reactionHistoryComplete: true,
 };
 describe('reserved campus lifecycle', () => {
+  it.each([3, 4, 5])(
+    'keeps reserved balance %s ACTIVE for 30 days despite ENDED',
+    (suffix) => {
+      const postId = `post_3b16ea1a-4de6-4a2c-85be-56a64ada203${suffix}`;
+      const p = {
+        ...base,
+        postId,
+        lifecyclePolicy: CAMPUS_POLICY,
+        expiresAt,
+        reactions: Object.fromEntries(
+          Array.from({ length: 5 }, (_, i) => [
+            String(i + 1),
+            {
+              userId: i + 1,
+              type: 'ENDED' as const,
+              active: true,
+              version: 1,
+              createdAt,
+            },
+          ]),
+        ),
+      };
+      for (const hours of [0, 1, 2, 24, 719.99, 720])
+        expect(
+          evaluateLifecycle(
+            p,
+            new Date(Date.parse(createdAt) + hours * 3600000),
+          ),
+        ).toEqual({ projection: p });
+      const value = {
+        eventId: 'evt_test',
+        eventType: 'PostCreated',
+        aggregateId: postId,
+        schemaVersion: 1,
+        producer: 'post-service',
+        correlationId: 'test',
+        occurredAt: createdAt,
+        post: {
+          postId,
+          authorId: 1,
+          radiusM: 350,
+          expiresAt,
+          lifecyclePolicy: CAMPUS_POLICY,
+        },
+      };
+      expect(
+        parsePostEvent({
+          eventId: value.eventId,
+          eventType: value.eventType,
+          data: JSON.stringify(value),
+        })?.post?.lifecyclePolicy,
+      ).toBe(CAMPUS_POLICY);
+    },
+  );
   it.each([1, 2, 24, 719.99, 720])(
     'keeps campaign ACTIVE after %s hours; Post owns expiry',
     (hours) => {

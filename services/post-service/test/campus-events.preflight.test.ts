@@ -52,6 +52,26 @@ function manifest(): CampusManifest {
   };
 }
 describe('administrator creation rollout gate', () => {
+  it.each(['Succeeded', 'Failed'])(
+    'accepts a terminal %s Job without treating it as an old consumer',
+    (phase) => {
+      const m = manifest();
+      const job = structuredClone(m.rollout!.pods[0]);
+      job.metadata.ownerReferences = [{ kind: 'Job', name: 'local-migration' }];
+      job.status.phase = phase;
+      job.status.containerStatuses[0].ready = false;
+      job.spec.containers[0].image = 'old-job';
+      m.rollout!.pods.push(job);
+      expect(validateCampusManifest(m, true, now)).toBe(m);
+      job.status.phase = 'Running';
+      expect(() => validateCampusManifest(m, true, now)).toThrow('Pods remain');
+      job.status.phase = phase;
+      job.metadata.ownerReferences = [
+        { kind: 'ReplicaSet', name: 'old-consumer' },
+      ];
+      expect(() => validateCampusManifest(m, true, now)).toThrow('Pods remain');
+    },
+  );
   it('accepts only a fully rolled out three-consumer snapshot', () =>
     expect(validateCampusManifest(manifest(), true, now).authorId).toBe(42));
   it.each(['notification-service', 'post-service', 'moderation-service'])(

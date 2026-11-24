@@ -8,6 +8,7 @@ import { event } from '../application/event.js';
 import { LOCATION_AUTHORIZATION } from '../application/ports.js';
 import { Inject } from '@nestjs/common';
 import { PostNotFoundError } from '../domain/post.js';
+import { isBalanceEvent } from '../domain/campus-events.js';
 import {
   VoteUnavailableError,
   type VoteCandidate,
@@ -60,6 +61,7 @@ export class MongooseVote {
     const result = await this.transaction(async (session) => {
       const post = await this.posts.findOne({ postId }).session(session).lean();
       if (!post || post.vote?.status !== 'PENDING') return null;
+      if (isBalanceEvent(post)) return null;
       if (
         post.status !== 'ACTIVE' ||
         post.closedAt != null ||

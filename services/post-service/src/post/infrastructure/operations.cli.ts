@@ -18,7 +18,7 @@ import {
 } from './post.schemas.js';
 import { OutboxWorker } from './outbox.worker.js';
 import { OutboxRecovery } from './outbox-recovery.js';
-import { CAMPUS_POST_IDS } from '../domain/campus-events.js';
+import { BALANCE_POST_IDS, CAMPUS_POST_IDS } from '../domain/campus-events.js';
 
 async function main() {
   const [command, id, value, extra, ...rest] = process.argv.slice(2);
@@ -98,8 +98,12 @@ async function main() {
       return;
     }
     if (command === 'vote-requeue' && id) {
-      if (CAMPUS_POST_IDS.some((reserved) => reserved === id))
-        throw new Error('Campus event voting is disabled');
+      if (
+        [...CAMPUS_POST_IDS, ...BALANCE_POST_IDS].some(
+          (reserved) => reserved === id,
+        )
+      )
+        throw new Error('Reserved campus voting cannot be requeued');
       // 후보 부족이 로그로 확인된 ID만 운영자가 명시한다. 마감 이력은 자동 추정하지 않는다.
       const result = await db.model('Post', PostSchema, 'posts').updateOne(
         {

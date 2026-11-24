@@ -1,4 +1,12 @@
+import {
+  balanceContentHash,
+  validateBalanceGames,
+  type BalanceGameCopy,
+} from '../application/create-balance-games.js';
+
 export interface CampusManifest {
+  balanceGames?: BalanceGameCopy[];
+  balanceApproval?: { contentSha256: string; approvedAt: string };
   authorId: number;
   expectedNickname: string;
   location: {
@@ -18,6 +26,30 @@ export interface CampusManifest {
   };
 }
 
+export function validateBalanceManifest(
+  m: CampusManifest,
+  apply: boolean,
+  now = new Date(),
+): void {
+  validateBalanceGames(m.balanceGames);
+  if (
+    m.authorId !== 1 ||
+    m.location.latitude !== 37.5047225 ||
+    m.location.longitude !== 126.9565323
+  )
+    throw new Error('Verified balance author/location required');
+  if (
+    apply &&
+    (!m.balanceApproval ||
+      m.balanceApproval.contentSha256 !== balanceContentHash(m.balanceGames) ||
+      !Number.isFinite(Date.parse(m.balanceApproval.approvedAt)) ||
+      Date.parse(m.balanceApproval.approvedAt) > now.getTime())
+  )
+    throw new Error(
+      'Final titles, bodies and choices require explicit approval of this content hash',
+    );
+}
+
 // Read-only kubectl snapshots are supplied by the operator after completing rollout.
 // An old consumer sharing the stream could initialize a campaign without its policy.
 export function validateCampusManifest(
@@ -30,7 +62,14 @@ export function validateCampusManifest(
     !m ||
     !Number.isSafeInteger(m.authorId) ||
     m.authorId <= 0 ||
-    m.expectedNickname !== '머준'
+    (m.expectedNickname !== '머준' &&
+      // The owner confirmed this rename for the three balance posts; ID stays pinned.
+      !(
+        m.expectedNickname === 'WGO' &&
+        m.authorId === 1 &&
+        Array.isArray(m.balanceGames) &&
+        m.balanceGames.length === 3
+      ))
   )
     throw new Error(
       'Approved authorId and exact expectedNickname are required',
@@ -89,10 +128,17 @@ export function validateCampusManifest(
     const labels = d.spec.selector.matchLabels;
     if (!labels || !Object.keys(labels).length)
       throw new Error('Deployment selector is required');
-    const pods = r.pods.filter((v) =>
-      Object.entries(labels).every(
-        ([k, value]) => v.metadata?.labels?.[k] === value,
-      ),
+    const pods = r.pods.filter(
+      (v) =>
+        // Finished migration/expiry Jobs share app labels but cannot consume events.
+        // Running/Pending Jobs and every old/terminating application Pod still block apply.
+        !(
+          v.metadata?.ownerReferences?.some((o: any) => o.kind === 'Job') &&
+          ['Succeeded', 'Failed'].includes(v.status?.phase)
+        ) &&
+        Object.entries(labels).every(
+          ([k, value]) => v.metadata?.labels?.[k] === value,
+        ),
     );
     if (
       pods.length !== d.spec.replicas ||

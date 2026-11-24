@@ -2,6 +2,10 @@ import { mediaIds } from '../media/media.policy.js';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { CommentReactionType, PostReactionType } from '../domain/post.js';
 import type { PostInput } from '../domain/post.js';
+import {
+  BALANCE_POST_IDS,
+  BALANCE_OPTION_IDS,
+} from '../domain/campus-events.js';
 
 type Body = Record<string, unknown>;
 
@@ -124,6 +128,16 @@ export function commentReactionType(value: unknown): CommentReactionType {
 
 export function participantInput(raw: unknown): void {
   fields(object(raw), []);
+}
+
+export function voteSelectionId(postId: string, value: string): string {
+  // Only these three boards use non-comment option keys; comment routes stay strict.
+  if (
+    BALANCE_POST_IDS.some((id) => id === postId) &&
+    BALANCE_OPTION_IDS.some((id) => id === value)
+  )
+    return value;
+  return commentId(value);
 }
 
 export function commentId(value: string): string {

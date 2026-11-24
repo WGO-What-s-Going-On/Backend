@@ -30,7 +30,11 @@ import type {
   StoredPostReactionType,
 } from '../domain/post.js';
 import { OutboxWorker } from './outbox.worker.js';
-import { isCampusEvent } from '../domain/campus-events.js';
+import {
+  BALANCE_OPTION_IDS,
+  isBalanceEvent,
+  isCampusEvent,
+} from '../domain/campus-events.js';
 
 class MongoQueries implements PostStateQueries {
   constructor(
@@ -57,6 +61,10 @@ class MongoQueries implements PostStateQueries {
             : {}),
           createdAt: post.createdAt,
           voteStatus: post.vote?.status,
+          voteKind: post.vote?.kind,
+          voteCandidateContents: post.vote?.candidates?.map(
+            (c: { content: string }) => c.content,
+          ),
           postId: post.postId,
           status: post.status,
           closedAt: post.closedAt ?? null,
@@ -349,6 +357,11 @@ class MongoCommands implements PostCommands {
   }
 
   async insertPost(post: NewPostRecord): Promise<void> {
+    const fixed = isBalanceEvent(post);
+    if (fixed && (!post.balanceChoices || post.balanceChoices.length !== 2))
+      throw new Error(
+        'Reserved balance posts require two administrator-approved options',
+      );
     await this.attachMedia(post.mediaIds, post.authorId, post.postId);
     await this.posts.create(
       [
@@ -356,9 +369,18 @@ class MongoCommands implements PostCommands {
           ...post,
           bucketCount: this.bucketCount,
           vote: {
-            status: isCampusEvent(post) ? 'NONE' : 'PENDING',
-            candidates: [],
-            selectedAt: null,
+            ...(fixed ? { kind: 'FIXED_AB' } : {}),
+            status: fixed ? 'OPEN' : isCampusEvent(post) ? 'NONE' : 'PENDING',
+            // commentId remains the existing wire selection key. These options are not comments.
+            candidates: fixed
+              ? post.balanceChoices!.map((content, i) => ({
+                  commentId: BALANCE_OPTION_IDS[i],
+                  content,
+                  votes: 0,
+                  scoreAtSelection: 0,
+                }))
+              : [],
+            selectedAt: fixed ? post.createdAt : null,
             closedAt: null,
             winner: null,
           },
@@ -669,14 +691,17 @@ class MongoCommands implements PostCommands {
             : second
           : null
         : null;
-    // 승리한 댓글 작성자를 결과 확정과 같은 스냅샷에서 확인한다.
-    const comment = winner
-      ? await this.comments
-          .findOne({ postId, commentId: winner.commentId })
-          .session(this.session)
-          .lean()
-      : null;
-    if (winner && !comment) throw new Error('Winning comment is missing');
+    const fixed = isBalanceEvent(post) && vote.kind === 'FIXED_AB';
+    // Fixed options have no comment author and must never produce reward events.
+    const comment =
+      winner && !fixed
+        ? await this.comments
+            .findOne({ postId, commentId: winner.commentId })
+            .session(this.session)
+            .lean()
+        : null;
+    if (winner && !fixed && !comment)
+      throw new Error('Winning comment is missing');
     await this.posts.updateOne(
       { postId },
       {
@@ -698,7 +723,7 @@ class MongoCommands implements PostCommands {
       tie: Boolean(first && second && first.votes === second.votes),
       totalVotes: Number(first?.votes ?? 0) + Number(second?.votes ?? 0),
     });
-    return winner
+    return winner && !fixed
       ? {
           postId,
           resultId: postId,
