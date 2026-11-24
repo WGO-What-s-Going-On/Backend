@@ -6,8 +6,11 @@ import type { LifecycleRepository } from './lifecycle.repository.js';
 import type { LifecycleEvent, LifecycleProjection } from './lifecycle.js';
 
 const INDEX = 'moderation:lifecycle:posts';
+import { isCampusEvent } from './campus-events.js';
 export const DUE_INDEX = 'moderation:lifecycle:due';
 function dueAt(p: LifecycleProjection): number {
+  // Keep active/due membership consistent, scheduled at the actual Post deadline.
+  if (isCampusEvent(p)) return Date.parse(p.expiresAt!);
   return p.state === 'STALE' && p.staleAt
     ? Date.parse(p.staleAt) + 600_000
     : Math.max(

@@ -1,5 +1,6 @@
 ﻿import type { ReactionType } from '../lifecycle/lifecycle.js';
 
+import { CAMPUS_POLICY, isCampusEvent } from '../lifecycle/campus-events.js';
 export type PostEventType =
   | 'PostCreated'
   | 'PostUpdated'
@@ -31,7 +32,12 @@ export interface PostEvent {
   occurredAt: string;
   activityVersion?: number;
   postVersion?: number;
-  post?: { postId: string; authorId?: number };
+  post?: {
+    postId: string;
+    authorId?: number;
+    lifecyclePolicy?: typeof CAMPUS_POLICY;
+    expiresAt?: string | null;
+  };
   comment?: {
     commentId: string;
     postId: string;
@@ -133,6 +139,20 @@ export function parsePostEvent(
         : value.post;
   if (!record(payload) || payload.postId !== value.aggregateId)
     throw new Error(`Invalid ${type} payload`);
+  if (
+    payload.lifecyclePolicy !== undefined &&
+    (type !== 'PostCreated' ||
+      !isCampusEvent({
+        postId: String(value.aggregateId),
+        lifecyclePolicy: payload.lifecyclePolicy,
+        expiresAt: payload.expiresAt,
+      }) ||
+      !date(payload.expiresAt) ||
+      Date.parse(payload.expiresAt) - Date.parse(value.occurredAt) !==
+        2592000000 ||
+      payload.radiusM !== 350)
+  )
+    throw new Error('Invalid campus lifecycle policy');
   if (
     type === 'PostCreated' &&
     payload.authorId !== undefined &&

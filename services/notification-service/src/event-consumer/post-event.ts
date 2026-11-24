@@ -158,7 +158,17 @@ export function parsePostEvent(
         Number.isFinite(value.post.longitude) &&
         typeof value.post.radiusM === 'number' &&
         value.post.radiusM > 0 &&
-        value.post.expiresAt === null &&
+        (value.post.expiresAt === null ||
+          (value.post.lifecyclePolicy === 'CAU_CAMPUS_2026_30D' &&
+            [
+              'post_3b16ea1a-4de6-4a2c-85be-56a64ada2031',
+              'post_3b16ea1a-4de6-4a2c-85be-56a64ada2032',
+            ].includes(event.aggregateId) &&
+            value.post.radiusM === 350 &&
+            date(value.post.expiresAt) &&
+            Date.parse(value.post.expiresAt) -
+              Date.parse(value.occurredAt as string) ===
+              2592000000)) &&
         Math.abs(value.post.latitude) <= 90 &&
         Math.abs(value.post.longitude) <= 180, 'created post payload');
       event.latitude = value.post.latitude as number;

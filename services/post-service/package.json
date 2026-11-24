@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "post:operations": "node dist/post/infrastructure/operations.cli.js",
+    "campus-events": "node dist/post/infrastructure/campus-events.cli.js",
     "semantic:command": "node dist/post/semantic/cli.js",
     "semantic:model:prepare": "pnpm build && node dist/post/semantic/prepare-model.js",
     "semantic:model:test": "RUN_EMBEDDING_MODEL=1 vitest run test/embedding-model.test.ts",

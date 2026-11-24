@@ -1,5 +1,11 @@
 # Post Service 비동기 이벤트 계약
 
+중앙대 캠퍼스 챌린지의 예약된 두 PostCreated에만 선택 필드
+`post.lifecyclePolicy="CAU_CAMPUS_2026_30D"`가 추가된다. `post.expiresAt`은
+생성 시각 + 30일이며 envelope v1과 기존 활동 이벤트는 유지한다.
+기존 Notification은 생성 시 expiresAt=null만 허용하므로 새 소비자를 먼저 배포해야 한다.
+정확한 대상 ID, 검증 및 혼합 Pod 제한은 [운영 절차](../../../docs/deployment/campus-events.md)를 따른다.
+
 기준일: 2026-10-06. Post Service가 Redis Streams로 발행하는 활동 이벤트와
 Notification·User Service 연동을 위한 확장안을 기록한다.
 

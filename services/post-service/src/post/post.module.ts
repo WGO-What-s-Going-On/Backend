@@ -170,9 +170,12 @@ import {
     },
     {
       provide: CreateCommentReaction,
-      useFactory: (unitOfWork: PostUnitOfWork, queries: PostStateQueries) =>
-        new CreateCommentReaction(unitOfWork, queries),
-      inject: [POST_UNIT_OF_WORK, POST_STATE_QUERIES],
+      useFactory: (
+        unitOfWork: PostUnitOfWork,
+        queries: PostStateQueries,
+        authorization: LocationAuthorization,
+      ) => new CreateCommentReaction(unitOfWork, queries, authorization),
+      inject: [POST_UNIT_OF_WORK, POST_STATE_QUERIES, LOCATION_AUTHORIZATION],
     },
     {
       provide: CreateReaction,
@@ -180,8 +183,14 @@ import {
         unitOfWork: PostUnitOfWork,
         queries: PostStateQueries,
         partition: PartitionStrategy,
-      ) => new CreateReaction(unitOfWork, queries, partition),
-      inject: [POST_UNIT_OF_WORK, POST_STATE_QUERIES, PARTITION_STRATEGY],
+        authorization: LocationAuthorization,
+      ) => new CreateReaction(unitOfWork, queries, partition, authorization),
+      inject: [
+        POST_UNIT_OF_WORK,
+        POST_STATE_QUERIES,
+        PARTITION_STRATEGY,
+        LOCATION_AUTHORIZATION,
+      ],
     },
     {
       provide: JoinPost,

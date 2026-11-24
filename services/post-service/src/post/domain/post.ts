@@ -2,6 +2,9 @@ import { mediaIds as validateMediaIds } from '../media/media.policy.js';
 export type PostStatus = 'ACTIVE' | 'EXPIRED' | 'DELETED' | 'HIDDEN';
 
 export interface PostState {
+  lifecyclePolicy?: string;
+  createdAt?: Date;
+  voteStatus?: string;
   title: string;
   content: string;
   voteCandidateIds?: string[];
@@ -48,6 +51,7 @@ export interface PostRegion {
 export type NewPostRecord = PostRecord & { region: PostRegion };
 
 export interface PostRecord {
+  lifecyclePolicy?: string;
   displayPosition?: DisplayPosition | null;
   coverFocus?: CoverFocus | null;
   region?: PostRegion;
