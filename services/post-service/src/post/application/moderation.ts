@@ -25,7 +25,7 @@ export class ApplyModerationLifecycle {
       if (input.eventType !== 'BOARD_CLOSED' || post.status !== 'ACTIVE')
         return;
       // Old Moderation Pods may still publish closure during a rolling upgrade.
-      // Only ExpirationWorker (or normal moderation/deletion) ends these two posts.
+      // Only ExpirationWorker (or normal moderation/deletion) ends reserved campus posts.
       if (isCampusEvent(post)) return;
       const now = new Date();
       const postVersion = post.postVersion + 1;

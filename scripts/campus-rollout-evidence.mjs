@@ -66,6 +66,10 @@ const pods = get('pods')
       namespace: p.metadata.namespace,
       labels: p.metadata.labels,
       deletionTimestamp: p.metadata.deletionTimestamp,
+      ownerReferences: p.metadata.ownerReferences?.map(({ kind, name }) => ({
+        kind,
+        name,
+      })),
     },
     spec: {
       containers: p.spec.containers.map(({ name, image }) => ({ name, image })),

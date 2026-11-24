@@ -163,6 +163,9 @@ export function parsePostEvent(
             [
               'post_3b16ea1a-4de6-4a2c-85be-56a64ada2031',
               'post_3b16ea1a-4de6-4a2c-85be-56a64ada2032',
+              'post_3b16ea1a-4de6-4a2c-85be-56a64ada2033',
+              'post_3b16ea1a-4de6-4a2c-85be-56a64ada2034',
+              'post_3b16ea1a-4de6-4a2c-85be-56a64ada2035',
             ].includes(event.aggregateId) &&
             value.post.radiusM === 350 &&
             date(value.post.expiresAt) &&

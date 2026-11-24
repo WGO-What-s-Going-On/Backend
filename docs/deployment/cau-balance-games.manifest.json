@@ -1,0 +1,32 @@
+{
+  "authorId": 1,
+  "expectedNickname": "머준",
+  "location": {
+    "building": "CAU_SEOUL_203",
+    "latitude": 37.5047225,
+    "longitude": 126.9565323,
+    "sourceUrl": "https://www.openstreetmap.org/way/367405916",
+    "verifiedAt": "2026-11-24T12:09:00.642504Z"
+  },
+  "balanceGames": [
+    {
+      "title": "🎲 [WGO 캠퍼스 밸런스게임] 송강 vs 종강",
+      "content": "이번 학기 나를 구원할 단 하나는?\n\n송강과 하루 데이트 vs 오늘 바로 종강.\n\n둘 다는 안 됩니다. 선택하고 댓글로 이유를 남겨주세요 👀\n\n※ 실제 경품 없이 상상으로 고르는 밸런스게임입니다.",
+      "choices": ["송강", "종강"]
+    },
+    {
+      "title": "🎲 올 A+ vs 월금공강",
+      "content": "다음 학기 하나만 보장된다면?\n\nA. 전 과목 A+, 대신 월~금 매일 등교\nB. 월·금 공강, 대신 전 과목 B+\n\n성적표를 살릴까, 주말을 늘릴까. 하나 고르고 이유를 남겨주세요.",
+      "choices": ["올 A+", "월금공강"]
+    },
+    {
+      "title": "🎲 A+ 독박 vs B+ 버스",
+      "content": "이번 팀플, 당신의 자리는?\n\nA. 자료조사·PPT·발표 내가 다 하고 A+\nB. 내 몫은 성실히 했는데 에이스가 다 해줘서 B+\n\n내 학점은 A+인데 내 표정은 F… 그래도 A? 댓글로 변론해주세요.",
+      "choices": ["A+ 독박", "B+ 버스"]
+    }
+  ],
+  "balanceApproval": {
+    "contentSha256": "0102dd91950cb7f4d4ff55eb3ac7bc7ca3f0c96446de2c9e9264494674b1dfae",
+    "approvedAt": "2026-11-24T13:23:48.762Z"
+  }
+}

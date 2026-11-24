@@ -1,12 +1,20 @@
 import { ApiProperty } from '@nestjs/swagger';
 
 export class VoteBody {
-  @ApiProperty({ example: 'comment_123e4567-e89b-12d3-a456-426614174000' })
+  @ApiProperty({
+    example: 'comment_123e4567-e89b-12d3-a456-426614174000',
+    description:
+      'Existing candidate selection key. Only the three reserved campus balance boards use option_A / option_B; these are not comment records.',
+  })
   commentId!: string;
 }
 
 export class VoteCandidateResponse {
-  @ApiProperty() commentId!: string;
+  @ApiProperty({
+    description:
+      'Candidate key; reserved balance choices use option_A / option_B without creating comments.',
+  })
+  commentId!: string;
   @ApiProperty() content!: string;
   @ApiProperty() scoreAtSelection!: number;
   @ApiProperty() votes!: number;

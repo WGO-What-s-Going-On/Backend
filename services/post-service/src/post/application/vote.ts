@@ -10,6 +10,7 @@ export interface VoteCandidate {
 }
 
 export interface VoteState {
+  kind?: 'FIXED_AB';
   status: 'PENDING' | 'OPEN' | 'CLOSED' | 'CANCELLED' | 'NONE';
   candidates: VoteCandidate[];
   selectedAt: Date | null;

@@ -142,7 +142,7 @@ export class PostResponse {
   @ApiPropertyOptional({
     enum: ['CAU_CAMPUS_2026_30D'],
     description:
-      'Only the two reserved administrator-created CAU campaign posts. Not accepted by create/edit APIs.',
+      'Only the five reserved administrator-created CAU campaign posts. Not accepted by create/edit APIs.',
   })
   lifecyclePolicy?: string;
   @ApiProperty({ type: DisplayPositionBody, nullable: true })

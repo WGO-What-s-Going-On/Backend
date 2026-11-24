@@ -5,6 +5,8 @@ export interface PostState {
   lifecyclePolicy?: string;
   createdAt?: Date;
   voteStatus?: string;
+  voteKind?: string;
+  voteCandidateContents?: string[];
   title: string;
   content: string;
   voteCandidateIds?: string[];
@@ -51,6 +53,8 @@ export interface PostRegion {
 export type NewPostRecord = PostRecord & { region: PostRegion };
 
 export interface PostRecord {
+  // Only the one-off administrator operation supplies these for the three reserved IDs.
+  balanceChoices?: readonly [string, string];
   lifecyclePolicy?: string;
   displayPosition?: DisplayPosition | null;
   coverFocus?: CoverFocus | null;

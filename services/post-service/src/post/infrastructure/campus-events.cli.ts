@@ -7,7 +7,14 @@ import { Client, credentials, loadPackageDefinition } from '@grpc/grpc-js';
 import { loadSync } from '@grpc/proto-loader';
 import { configuration } from '../../config/configuration.js';
 import { createCampusEvents } from '../application/create-campus-events.js';
-import { validateCampusManifest } from './campus-events.preflight.js';
+import {
+  createBalanceGames,
+  balanceContentHash,
+} from '../application/create-balance-games.js';
+import {
+  validateCampusManifest,
+  validateBalanceManifest,
+} from './campus-events.preflight.js';
 import { GrpcLocationAuthorization } from './grpc-location.authorization.js';
 import { mapMetadata, mapDeadline } from './map-service-auth.js';
 import { MongoosePostStore } from './mongoose-post.store.js';
@@ -28,17 +35,26 @@ async function main() {
   const args = process.argv.slice(2);
   if (
     args.length < 1 ||
-    args.length > 2 ||
-    (args[1] !== undefined && args[1] !== '--apply')
+    args.length > 3 ||
+    args
+      .slice(1)
+      .some((arg) => !['--apply', '--balance-games'].includes(arg)) ||
+    new Set(args).size !== args.length
   )
     throw new Error(
-      'Usage: campus-events <manifest.json> [--apply] (default: dry-run)',
+      'Usage: campus-events <manifest.json> [--balance-games] [--apply] (default: dry-run)',
     );
-  const apply = args[1] === '--apply';
+  const apply = args.includes('--apply');
+  const balance = args.includes('--balance-games');
   const manifest = validateCampusManifest(
     JSON.parse(await readFile(args[0]!, 'utf8')),
     apply,
   );
+  if (Boolean(manifest.balanceGames) !== balance)
+    throw new Error(
+      'Balance manifests require the explicit --balance-games operation',
+    );
+  if (balance) validateBalanceManifest(manifest, apply);
   // No default database/address is allowed for this privileged one-off operation.
   if (
     !process.env.MONGODB_URI ||
@@ -121,20 +137,32 @@ async function main() {
     );
     // Recheck freshness after remote preflight, immediately before opening the creation transaction.
     validateCampusManifest(manifest, apply);
-    const postsResult = await createCampusEvents(
-      store,
-      {
-        authorId: manifest.authorId,
-        latitude: manifest.location.latitude,
-        longitude: manifest.location.longitude,
-        region,
-      },
-      !apply,
-    );
+    if (balance) validateBalanceManifest(manifest, apply);
+    const input = {
+      authorId: manifest.authorId,
+      latitude: manifest.location.latitude,
+      longitude: manifest.location.longitude,
+      region,
+    };
+    const postsResult = balance
+      ? await createBalanceGames(store, input, manifest.balanceGames, !apply)
+      : await createCampusEvents(
+          store,
+          {
+            authorId: manifest.authorId,
+            latitude: manifest.location.latitude,
+            longitude: manifest.location.longitude,
+            region,
+          },
+          !apply,
+        );
     console.log(
       JSON.stringify({
         mode: apply ? 'apply' : 'dry-run',
         administratorCreation: true,
+        ...(balance
+          ? { contentSha256: balanceContentHash(manifest.balanceGames) }
+          : {}),
         posts: postsResult,
       }),
     );
