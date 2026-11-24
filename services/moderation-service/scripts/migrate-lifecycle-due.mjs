@@ -36,14 +36,23 @@ try {
     if (p.postId !== id || !['ACTIVE', 'STALE', 'CLOSED'].includes(p.state))
       throw new Error('Invalid lifecycle projection; page not complete');
     const waiting = !!p.pendingPublication;
+    const campus =
+      p.lifecyclePolicy === 'CAU_CAMPUS_2026_30D' &&
+      [
+        'post_3b16ea1a-4de6-4a2c-85be-56a64ada2031',
+        'post_3b16ea1a-4de6-4a2c-85be-56a64ada2032',
+      ].includes(id) &&
+      Number.isFinite(Date.parse(p.expiresAt));
     const due = waiting
       ? Date.parse(p.pendingPublication.occurredAt) + 60000
-      : p.state === 'STALE' && p.staleAt
-        ? Date.parse(p.staleAt) + 600000
-        : Math.max(
-            Date.parse(p.createdAt) + 3600000,
-            Date.parse(p.lastMeaningfulActivityAt) + 1800000,
-          );
+      : campus
+        ? Date.parse(p.expiresAt)
+        : p.state === 'STALE' && p.staleAt
+          ? Date.parse(p.staleAt) + 600000
+          : Math.max(
+              Date.parse(p.createdAt) + 3600000,
+              Date.parse(p.lastMeaningfulActivityAt) + 1800000,
+            );
     if (!Number.isFinite(due))
       throw new Error('Invalid lifecycle timestamps; page not complete');
     if (!apply) continue;

@@ -27,6 +27,9 @@ export class MongoosePostRead implements PostReadQueries {
       );
     return {
       postId: post.postId,
+      ...(post.lifecyclePolicy
+        ? { lifecyclePolicy: post.lifecyclePolicy }
+        : {}),
       authorId: post.authorId,
       anonymous: post.anonymous ?? false,
       closedAt: post.closedAt ?? null,

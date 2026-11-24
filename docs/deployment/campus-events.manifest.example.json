@@ -1,0 +1,12 @@
+{
+  "authorId": null,
+  "expectedNickname": "머준",
+  "location": {
+    "building": "CAU_SEOUL_203",
+    "latitude": null,
+    "longitude": null,
+    "sourceUrl": "https://www.cau.ac.kr/cms/FR_CON/index.do?MENU_ID=610",
+    "verifiedAt": null
+  },
+  "rollout": null
+}
