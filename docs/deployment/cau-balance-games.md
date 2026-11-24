@@ -46,7 +46,7 @@ Pod resize API와 patch 권한을 확인했고, 이전 배포에서는 동일한
 
 배포가 승인되면 다음 순서로 실행한다.
 
-1. 운영 작성자 1의 nickname=머준/ACTIVE와 좌표/Map resolveRegion을 읽기 전용으로 다시 대조한다. 기존 전체 데이터와 두 기존 ID의 baseline/해시, 새 세 ID 미점유를 확인하고 Post MongoDB 및 Moderation Redis의 새 백업을 검증한다. 오래된 이전 백업을 새 실행의 백업으로 대체하지 않는다.
+1. 운영 작성자 1의 nickname=WGO/ACTIVE와 좌표/Map resolveRegion을 읽기 전용으로 다시 대조한다. 소유자가 기존 머준 계정을 직접 WGO로 개명했음을 실행 직전 확인했다. ID는 1로 유지하며 실제 User gRPC 응답도 manifest의 WGO와 정확히 일치해야 한다. 이 별칭 허용은 authorId=1인 세 balanceGames 관리자 manifest에만 적용하며 계정 데이터를 변경하지 않는다. 기존 전체 데이터와 두 기존 ID의 baseline/해시, 새 세 ID 미점유를 읽기 전용으로 확인하고 Post MongoDB 및 Moderation Redis의 새 백업을 검증한다. 오래된 이전 백업을 새 실행의 백업으로 대체하지 않는다.
 2. 병합·자동 CD 및 위 일회성 Notification Migration Pod 조정 승인을 받은 뒤 해당 세 서비스만 배포한다. 새 Job이 나타날 때의 CPU 예약량을 다시 확인하고 위 조건대로만 조정한다. Job 정상 완료 뒤 기존 CD를 이어가며 새 digest와 release/source SHA, readiness, 구/종료 중 Pod 부재, Outbox/Stream/소비자 오류·DLQ를 확인한다. 기존 서비스 Deployment 리소스와 노드 수 변경은 없다.
 3. Frontend #5를 main에 병합한 뒤에만 #6을 main 기준으로 정리해 검토·병합·배포한다. #6을 #5 브랜치로 먼저 병합해 기존 PR 내용을 바꾸지 않는다. Vercel 배포 권한과 완료 상태, 정상 사용자 위치에서 350m UI를 확인한다. 운영 생성 승인 없이는 생성하지 않는다.
 4. `node scripts/campus-rollout-evidence.mjs <explicit-context> wgo-demo <new-post-digest> <new-moderation-digest> <new-notification-digest>`를 읽기 전용으로 실행한다. 출력의 `rollout`을 manifest 사본에 포함한다. 완료된 Job은 ownerReferences.kind=Job과 Succeeded/Failed를 함께 확인한 경우에만 Pod 수에서 제외한다. 실행 중 Job 및 구/종료 중 application Pod는 계속 차단한다.

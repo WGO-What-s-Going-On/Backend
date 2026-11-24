@@ -14,7 +14,10 @@ import {
   postInput,
   voteSelectionId,
 } from '../src/post/presentation/post.input.js';
-import { validateBalanceManifest } from '../src/post/infrastructure/campus-events.preflight.js';
+import {
+  validateBalanceManifest,
+  validateCampusManifest,
+} from '../src/post/infrastructure/campus-events.preflight.js';
 
 export const games = [
   {
@@ -42,6 +45,18 @@ describe('three administrator-only fixed balance polls', () => {
       ),
     );
     const third = manifest.balanceGames[2];
+    expect(manifest.authorId).toBe(1);
+    expect(manifest.expectedNickname).toBe('WGO');
+    validateCampusManifest(manifest, false);
+    expect(() =>
+      validateCampusManifest({ ...manifest, authorId: 2 }, false),
+    ).toThrow('authorId');
+    expect(() =>
+      validateCampusManifest({ ...manifest, balanceGames: undefined }, false),
+    ).toThrow('authorId');
+    expect(() =>
+      validateCampusManifest({ ...manifest, balanceGames: null }, false),
+    ).toThrow('authorId');
     expect(third.title).toBe('🎲 A+ 독박 vs B+ 버스');
     expect(third.choices).toEqual(['A+ 독박', 'B+ 버스']);
     expect(third.content).toContain(

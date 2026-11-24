@@ -62,7 +62,14 @@ export function validateCampusManifest(
     !m ||
     !Number.isSafeInteger(m.authorId) ||
     m.authorId <= 0 ||
-    m.expectedNickname !== '머준'
+    (m.expectedNickname !== '머준' &&
+      // The owner confirmed this rename for the three balance posts; ID stays pinned.
+      !(
+        m.expectedNickname === 'WGO' &&
+        m.authorId === 1 &&
+        Array.isArray(m.balanceGames) &&
+        m.balanceGames.length === 3
+      ))
   )
     throw new Error(
       'Approved authorId and exact expectedNickname are required',
