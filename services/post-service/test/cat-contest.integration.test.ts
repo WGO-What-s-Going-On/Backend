@@ -27,6 +27,7 @@ import { MongoosePostStore } from '../src/post/infrastructure/mongoose-post.stor
 import * as schema from '../src/post/infrastructure/post.schemas.js';
 import { MediaSchema } from '../src/post/media/media.schema.js';
 import { OutboxWorker } from '../src/post/infrastructure/outbox.worker.js';
+import { OutboxRecovery } from '../src/post/infrastructure/outbox-recovery.js';
 import { ExpirationWorker } from '../src/post/infrastructure/expiration.worker.js';
 import { MongooseVote } from '../src/post/infrastructure/mongoose-vote.js';
 import { ApplyModerationLifecycle } from '../src/post/application/moderation.js';
@@ -248,6 +249,59 @@ suite('one cat contest on isolated Mongo replica set / Redis DB13', () => {
     await expect(
       createCatContest(store, { ...input, authorId: 2 }, false),
     ).rejects.toThrow('author/location');
+  });
+  it('replays the quarantined creation through existing Outbox recovery without changing the post or original event', async () => {
+    const before = await posts.find().sort({ postId: 1 }).lean();
+    const event = (await outbox
+      .findOne({
+        aggregateId: CAT_CONTEST_POST_ID,
+        eventType: 'PostCreated',
+      })
+      .lean<{
+        eventId: string;
+        occurredAt: Date;
+        payload: Record<string, unknown>;
+      }>())!;
+    // 배포 전 검증 오류로 격리된 상황을 로컬 fixture에서만 재현한다.
+    await outbox.updateOne(
+      { eventId: event.eventId },
+      {
+        $set: {
+          status: 'FAILED',
+          attemptCount: 1,
+          totalAttempts: 1,
+          lastError: 'Error: Invalid campus policy',
+          failedAt: new Date(),
+        },
+      },
+    );
+    await new OutboxRecovery(outbox).retry(
+      event.eventId,
+      'Shared-deadline serializer fixed',
+    );
+    await publisher.publishPending();
+    const published = (await outbox
+      .findOne({ eventId: event.eventId })
+      .lean<{ streamId: string }>())!;
+    expect(published).toMatchObject({
+      status: 'PUBLISHED',
+      replayCount: 1,
+      eventId: event.eventId,
+      occurredAt: event.occurredAt,
+      payload: event.payload,
+      streamId: expect.any(String),
+    });
+    const entries = await redis.xRange(
+      'post:events',
+      published.streamId,
+      published.streamId,
+    );
+    expect(JSON.parse(entries[0]!.message.data!)).toMatchObject({
+      eventId: event.eventId,
+      occurredAt: created.toISOString(),
+      post: { postId: CAT_CONTEST_POST_ID, expiresAt: CAT_CONTEST_EXPIRES_AT },
+    });
+    expect(await posts.find().sort({ postId: 1 }).lean()).toEqual(before);
   });
   it('requires exactly one image per contest comment and rolls back invalid attachments; ordinary comments keep multi-media support', async () => {
     await new JoinPost(store, store, auth, partition).execute(
