@@ -1,6 +1,11 @@
 import { PostReactionType } from '../domain/post.js';
 
 import { CAMPUS_DURATION_MS, isCampusEvent } from '../domain/campus-events.js';
+import {
+  CAT_CONTEST_EXPIRES_AT,
+  CAT_CONTEST_LOCATION,
+  isCatContest,
+} from '../domain/cat-contest.js';
 export class InvalidOutboxEvent extends Error {}
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -93,8 +98,18 @@ export function serializePostEvent(row: Record<string, any>): string {
         }) ||
         target.radiusM !== 350 ||
         !date(target.expiresAt) ||
-        Date.parse(target.expiresAt) - Date.parse(value.occurredAt) !==
-          CAMPUS_DURATION_MS)
+        // 중냥이 한 건은 원본 행사와 마감을 공유한다. 기존 5개는 정확히 30일을 유지한다.
+        (isCatContest({
+          postId: value.aggregateId,
+          lifecyclePolicy: target.lifecyclePolicy,
+        })
+          ? target.authorId !== 1 ||
+            target.latitude !== CAT_CONTEST_LOCATION.latitude ||
+            target.longitude !== CAT_CONTEST_LOCATION.longitude ||
+            target.expiresAt !== CAT_CONTEST_EXPIRES_AT ||
+            Date.parse(value.occurredAt) >= Date.parse(target.expiresAt)
+          : Date.parse(target.expiresAt) - Date.parse(value.occurredAt) !==
+            CAMPUS_DURATION_MS))
     )
       throw new Error('Invalid campus policy');
     if (!object(target) || target.postId !== value.aggregateId)
