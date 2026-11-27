@@ -2,11 +2,11 @@
   "authorId": 1,
   "expectedNickname": "WGO",
   "location": {
-    "latitude": 37.505547607,
-    "longitude": 126.95470652,
+    "latitude": 37.50456,
+    "longitude": 126.95694,
     "building": "CAU_SEOUL_310_7ELEVEN",
-    "sourceUrl": "https://www.7-eleven.co.kr/util/storeLayerPop.asp?storeText=%EC%A4%91%EC%95%99%EB%8C%80%EA%B2%BD%EC%98%81%EA%B4%80&hiddentext=none",
-    "verifiedAt": "2026-11-27T12:39:50.003335Z"
+    "sourceUrl": "https://www.openstreetmap.org/?mlat=37.50456&mlon=126.95694#map=19/37.50456/126.95694",
+    "verifiedAt": "2026-11-27T12:50:03.952932Z"
   },
   "catContest": {
     "postId": "post_3b16ea1a-4de6-4a2c-85be-56a64ada2036",

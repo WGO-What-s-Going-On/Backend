@@ -2,8 +2,8 @@
 export const CAT_CONTEST_POST_ID = 'post_3b16ea1a-4de6-4a2c-85be-56a64ada2036';
 export const CAT_CONTEST_EXPIRES_AT = '2026-12-24T12:52:53.893Z';
 export const CAT_CONTEST_LOCATION = {
-  latitude: 37.505547607,
-  longitude: 126.95470652,
+  latitude: 37.50456,
+  longitude: 126.95694,
 } as const;
 export const CAT_CONTEST_COPY = {
   title: '🐱 중냥이 사진 콘테스트',

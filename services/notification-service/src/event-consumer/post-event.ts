@@ -164,8 +164,8 @@ export function parsePostEvent(
             value.post.lifecyclePolicy === 'CAU_CAMPUS_2026_30D' &&
             value.post.authorId === 1 &&
             value.post.radiusM === 350 &&
-            value.post.latitude === 37.505547607 &&
-            value.post.longitude === 126.95470652 &&
+            value.post.latitude === 37.50456 &&
+            value.post.longitude === 126.95694 &&
             value.post.expiresAt === '2026-12-24T12:52:53.893Z' &&
             Date.parse(value.occurredAt as string) <
               Date.parse(value.post.expiresAt)) ||

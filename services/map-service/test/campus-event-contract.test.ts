@@ -15,8 +15,8 @@ it('indexes the cat contest at its moved center and absolute common deadline', (
     eventType: e.eventType,
   });
   expect(post).toMatchObject({
-    latitude: 37.505547607,
-    longitude: 126.95470652,
+    latitude: 37.50456,
+    longitude: 126.95694,
     radiusM: 350,
     expiresAt: new Date('2026-12-24T12:52:53.893Z'),
   });
