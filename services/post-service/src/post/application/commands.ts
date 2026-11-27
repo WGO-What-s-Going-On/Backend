@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { CAT_CONTEST_POST_ID } from '../domain/cat-contest.js';
 import {
   createComment,
   createCommentReaction,
@@ -62,7 +63,11 @@ async function authorizeCampusReaction(
   postId: string,
   actor: number,
 ) {
-  if (![...CAMPUS_POST_IDS, ...BALANCE_POST_IDS].some((id) => id === postId))
+  if (
+    ![...CAMPUS_POST_IDS, ...BALANCE_POST_IDS, CAT_CONTEST_POST_ID].some(
+      (id) => id === postId,
+    )
+  )
     return;
   const post = await queries.findPost(postId);
   requireActive(post);

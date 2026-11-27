@@ -159,6 +159,16 @@ export function parsePostEvent(
         typeof value.post.radiusM === 'number' &&
         value.post.radiusM > 0 &&
         (value.post.expiresAt === null ||
+          // Only this contest shares the originals' absolute deadline rather than a new 30 days.
+          (event.aggregateId === 'post_3b16ea1a-4de6-4a2c-85be-56a64ada2036' &&
+            value.post.lifecyclePolicy === 'CAU_CAMPUS_2026_30D' &&
+            value.post.authorId === 1 &&
+            value.post.radiusM === 350 &&
+            value.post.latitude === 37.505547607 &&
+            value.post.longitude === 126.95470652 &&
+            value.post.expiresAt === '2026-12-24T12:52:53.893Z' &&
+            Date.parse(value.occurredAt as string) <
+              Date.parse(value.post.expiresAt)) ||
           (value.post.lifecyclePolicy === 'CAU_CAMPUS_2026_30D' &&
             [
               'post_3b16ea1a-4de6-4a2c-85be-56a64ada2031',

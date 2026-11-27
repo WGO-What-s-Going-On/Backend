@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { redisHarness } from './redis-harness.js';
 import { CAMPUS_POLICY } from '../../src/lifecycle/campus-events.js';
 import { parsePostEvent } from '../../src/event-consumer/post-event.js';
-it.each([1, 2, 3, 4, 5])(
+it.each([1, 2, 3, 4, 5, 6])(
   'retains reserved post %s policy, due deadline, ENDED, replay and expiry',
   async (suffix) => {
     const h = await redisHarness({
@@ -14,8 +14,12 @@ it.each([1, 2, 3, 4, 5])(
       }),
     });
     const id = `post_3b16ea1a-4de6-4a2c-85be-56a64ada203${suffix}`;
-    const created = '2026-11-24T00:00:00.000Z';
-    const expires = '2026-12-24T00:00:00.000Z';
+    const created =
+      suffix === 6 ? '2026-11-27T12:00:00.000Z' : '2026-11-24T00:00:00.000Z';
+    const expires =
+      suffix === 6 ? '2026-12-24T12:52:53.893Z' : '2026-12-24T00:00:00.000Z';
+    const commentAt = new Date(Date.parse(created) + 7200000).toISOString();
+    const reactionAt = new Date(Date.parse(created) + 10800000).toISOString();
     try {
       const input = {
         eventId: 'evt_campus',
@@ -27,7 +31,7 @@ it.each([1, 2, 3, 4, 5])(
         occurredAt: created,
         post: {
           postId: id,
-          authorId: 42,
+          authorId: suffix === 6 ? 1 : 42,
           radiusM: 350,
           expiresAt: expires,
           lifecyclePolicy: CAMPUS_POLICY,
@@ -51,7 +55,7 @@ it.each([1, 2, 3, 4, 5])(
         'comment_local',
         1,
         false,
-        '2026-11-24T02:00:00.000Z',
+        commentAt,
         'req_comment',
       );
       for (let i = 1; i <= 5; i++)
@@ -62,11 +66,11 @@ it.each([1, 2, 3, 4, 5])(
             type: 'ENDED',
             version: 1,
             active: true,
-            createdAt: '2026-11-24T03:00:00.000Z',
+            createdAt: reactionAt,
           },
-          '2026-11-24T03:00:00.000Z',
+          reactionAt,
           'req_ended',
-          new Date('2026-11-24T03:00:00.000Z'),
+          new Date(reactionAt),
         );
       await h.lifecycle.evaluate(id, new Date('2026-12-23T23:59:59.999Z'));
       await h.processor.process(e);

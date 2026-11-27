@@ -3,6 +3,49 @@ import { resolve } from 'node:path';
 import { expect, it } from 'vitest';
 import { parsePostCreated, parsePostStatus } from '../src/post-index.js';
 import { decide } from '../src/location.js';
+it('indexes the cat contest at its moved center and absolute common deadline', () => {
+  const e = JSON.parse(
+    readFileSync(
+      resolve('../../docs/contracts/fixtures/cat-contest-post-created.json'),
+      'utf8',
+    ),
+  );
+  const post = parsePostCreated(JSON.stringify(e), {
+    eventId: e.eventId,
+    eventType: e.eventType,
+  });
+  expect(post).toMatchObject({
+    latitude: 37.505547607,
+    longitude: 126.95470652,
+    radiusM: 350,
+    expiresAt: new Date('2026-12-24T12:52:53.893Z'),
+  });
+  const now = new Date(e.occurredAt);
+  expect(
+    decide(
+      {
+        latitude: post.latitude + 0.003,
+        longitude: post.longitude,
+        updatedAt: now,
+      },
+      post,
+      350,
+      now,
+    ).allowed,
+  ).toBe(true);
+  expect(
+    decide(
+      {
+        latitude: post.latitude + 0.004,
+        longitude: post.longitude,
+        updatedAt: now,
+      },
+      post,
+      350,
+      now,
+    ).allowed,
+  ).toBe(false);
+});
 it.each([1, 2, 3, 4, 5])(
   'indexes the existing PostCreated/Expired contract and honors a 350m authorization boundary (reserved %s)',
   (suffix) => {

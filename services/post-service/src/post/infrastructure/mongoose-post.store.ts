@@ -1,7 +1,8 @@
 import { createLogger, type LogFields } from '../../observability/logging.js';
 import { ConflictException } from '@nestjs/common';
 import type { MediaRecord } from '../media/media.schema.js';
-import { mediaIds } from '../media/media.policy.js';
+import { mediaIds, InvalidMediaError } from '../media/media.policy.js';
+import { CAT_CONTEST_POST_ID } from '../domain/cat-contest.js';
 import type { ModerationLifecycleEvent } from '../application/moderation.js';
 import { Injectable } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
@@ -330,12 +331,17 @@ class MongoCommands implements PostCommands {
     postId: string,
     commentId?: string,
   ) {
-    for (const id of mediaIds(ids)) {
+    const attachments = mediaIds(ids);
+    const catEntry = Boolean(commentId) && postId === CAT_CONTEST_POST_ID;
+    if (catEntry && attachments.length !== 1)
+      throw new InvalidMediaError('Cat contest comments accept one photo each');
+    for (const id of attachments) {
       // 소유권·미첨부 상태와 대상 저장을 같은 트랜잭션으로 묶어 중복 연결과 취소 경합을 막는다.
       const result = await this.media.updateOne(
         {
           mediaId: id,
           ownerId,
+          ...(catEntry ? { type: 'IMAGE' } : {}),
           status: 'READY',
           expiresAt: { $gt: new Date() },
         },

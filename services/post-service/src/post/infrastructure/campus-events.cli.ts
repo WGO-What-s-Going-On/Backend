@@ -7,6 +7,7 @@ import { Client, credentials, loadPackageDefinition } from '@grpc/grpc-js';
 import { loadSync } from '@grpc/proto-loader';
 import { configuration } from '../../config/configuration.js';
 import { createCampusEvents } from '../application/create-campus-events.js';
+import { createCatContest } from '../application/create-cat-contest.js';
 import {
   createBalanceGames,
   balanceContentHash,
@@ -14,6 +15,7 @@ import {
 import {
   validateCampusManifest,
   validateBalanceManifest,
+  validateCatContestManifest,
 } from './campus-events.preflight.js';
 import { GrpcLocationAuthorization } from './grpc-location.authorization.js';
 import { mapMetadata, mapDeadline } from './map-service-auth.js';
@@ -38,23 +40,31 @@ async function main() {
     args.length > 3 ||
     args
       .slice(1)
-      .some((arg) => !['--apply', '--balance-games'].includes(arg)) ||
+      .some(
+        (arg) => !['--apply', '--balance-games', '--cat-contest'].includes(arg),
+      ) ||
     new Set(args).size !== args.length
   )
     throw new Error(
-      'Usage: campus-events <manifest.json> [--balance-games] [--apply] (default: dry-run)',
+      'Usage: campus-events <manifest.json> [--balance-games | --cat-contest] [--apply] (default: dry-run)',
     );
   const apply = args.includes('--apply');
   const balance = args.includes('--balance-games');
+  const cat = args.includes('--cat-contest');
   const manifest = validateCampusManifest(
     JSON.parse(await readFile(args[0]!, 'utf8')),
     apply,
   );
-  if (Boolean(manifest.balanceGames) !== balance)
+  if (
+    (balance && cat) ||
+    Boolean(manifest.balanceGames) !== balance ||
+    Boolean(manifest.catContest) !== cat
+  )
     throw new Error(
-      'Balance manifests require the explicit --balance-games operation',
+      'Manifest must match exactly one explicit administrator operation',
     );
   if (balance) validateBalanceManifest(manifest, apply);
+  if (cat) validateCatContestManifest(manifest);
   // No default database/address is allowed for this privileged one-off operation.
   if (
     !process.env.MONGODB_URI ||
@@ -138,24 +148,27 @@ async function main() {
     // Recheck freshness after remote preflight, immediately before opening the creation transaction.
     validateCampusManifest(manifest, apply);
     if (balance) validateBalanceManifest(manifest, apply);
+    if (cat) validateCatContestManifest(manifest);
     const input = {
       authorId: manifest.authorId,
       latitude: manifest.location.latitude,
       longitude: manifest.location.longitude,
       region,
     };
-    const postsResult = balance
-      ? await createBalanceGames(store, input, manifest.balanceGames, !apply)
-      : await createCampusEvents(
-          store,
-          {
-            authorId: manifest.authorId,
-            latitude: manifest.location.latitude,
-            longitude: manifest.location.longitude,
-            region,
-          },
-          !apply,
-        );
+    const postsResult = cat
+      ? await createCatContest(store, input, !apply)
+      : balance
+        ? await createBalanceGames(store, input, manifest.balanceGames, !apply)
+        : await createCampusEvents(
+            store,
+            {
+              authorId: manifest.authorId,
+              latitude: manifest.location.latitude,
+              longitude: manifest.location.longitude,
+              region,
+            },
+            !apply,
+          );
     console.log(
       JSON.stringify({
         mode: apply ? 'apply' : 'dry-run',
