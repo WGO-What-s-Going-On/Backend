@@ -1,3 +1,4 @@
+import { isCatContest } from './cat-contest.js';
 // Reserved administrator-created campaigns; never accepted from public creation.
 export const CAMPUS_POLICY = 'CAU_CAMPUS_2026_30D' as const;
 export const CAMPUS_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -26,7 +27,10 @@ export function isCampusEvent(post: {
 }): boolean {
   return (
     post.lifecyclePolicy === CAMPUS_POLICY &&
-    [...CAMPUS_POST_IDS, ...BALANCE_POST_IDS].some((id) => id === post.postId)
+    ([...CAMPUS_POST_IDS, ...BALANCE_POST_IDS].some(
+      (id) => id === post.postId,
+    ) ||
+      isCatContest(post))
   );
 }
 export const CAMPUS_CONTENT = [

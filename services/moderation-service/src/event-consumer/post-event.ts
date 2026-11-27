@@ -1,6 +1,11 @@
 ﻿import type { ReactionType } from '../lifecycle/lifecycle.js';
 
-import { CAMPUS_POLICY, isCampusEvent } from '../lifecycle/campus-events.js';
+import {
+  CAMPUS_POLICY,
+  isCampusEvent,
+  CAT_CONTEST_POST_ID,
+  CAT_CONTEST_EXPIRES_AT,
+} from '../lifecycle/campus-events.js';
 export type PostEventType =
   | 'PostCreated'
   | 'PostUpdated'
@@ -148,8 +153,12 @@ export function parsePostEvent(
         expiresAt: payload.expiresAt,
       }) ||
       !date(payload.expiresAt) ||
-      Date.parse(payload.expiresAt) - Date.parse(value.occurredAt) !==
-        2592000000 ||
+      (value.aggregateId === CAT_CONTEST_POST_ID
+        ? payload.authorId !== 1 ||
+          payload.expiresAt !== CAT_CONTEST_EXPIRES_AT ||
+          Date.parse(value.occurredAt) >= Date.parse(CAT_CONTEST_EXPIRES_AT)
+        : Date.parse(payload.expiresAt) - Date.parse(value.occurredAt) !==
+          2592000000) ||
       payload.radiusM !== 350)
   )
     throw new Error('Invalid campus lifecycle policy');

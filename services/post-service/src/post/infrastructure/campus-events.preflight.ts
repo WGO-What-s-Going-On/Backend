@@ -3,8 +3,20 @@ import {
   validateBalanceGames,
   type BalanceGameCopy,
 } from '../application/create-balance-games.js';
+import {
+  CAT_CONTEST_COPY,
+  CAT_CONTEST_EXPIRES_AT,
+  CAT_CONTEST_LOCATION,
+  CAT_CONTEST_POST_ID,
+} from '../domain/cat-contest.js';
 
 export interface CampusManifest {
+  catContest?: {
+    postId: string;
+    title: string;
+    content: string;
+    expiresAt: string;
+  };
   balanceGames?: BalanceGameCopy[];
   balanceApproval?: { contentSha256: string; approvedAt: string };
   authorId: number;
@@ -24,6 +36,24 @@ export interface CampusManifest {
     deployments: any[];
     pods: any[];
   };
+}
+
+export function validateCatContestManifest(m: CampusManifest): void {
+  const c = m.catContest;
+  if (
+    !c ||
+    m.balanceGames !== undefined ||
+    m.authorId !== 1 ||
+    m.expectedNickname !== 'WGO' ||
+    c.postId !== CAT_CONTEST_POST_ID ||
+    c.title !== CAT_CONTEST_COPY.title ||
+    c.content !== CAT_CONTEST_COPY.content ||
+    c.expiresAt !== CAT_CONTEST_EXPIRES_AT ||
+    m.location.latitude !== CAT_CONTEST_LOCATION.latitude ||
+    m.location.longitude !== CAT_CONTEST_LOCATION.longitude ||
+    m.location.building !== 'CAU_SEOUL_310_7ELEVEN'
+  )
+    throw new Error('Exact administrator cat contest manifest required');
 }
 
 export function validateBalanceManifest(
@@ -63,12 +93,12 @@ export function validateCampusManifest(
     !Number.isSafeInteger(m.authorId) ||
     m.authorId <= 0 ||
     (m.expectedNickname !== '머준' &&
-      // The owner confirmed this rename for the three balance posts; ID stays pinned.
+      // The owner confirmed the official account's rename; privileged operations pin ID 1.
       !(
         m.expectedNickname === 'WGO' &&
         m.authorId === 1 &&
-        Array.isArray(m.balanceGames) &&
-        m.balanceGames.length === 3
+        ((Array.isArray(m.balanceGames) && m.balanceGames.length === 3) ||
+          m.catContest?.postId === CAT_CONTEST_POST_ID)
       ))
   )
     throw new Error(
@@ -77,7 +107,7 @@ export function validateCampusManifest(
   const p = m.location;
   if (
     !p ||
-    p.building !== 'CAU_SEOUL_203' ||
+    p.building !== (m.catContest ? 'CAU_SEOUL_310_7ELEVEN' : 'CAU_SEOUL_203') ||
     !Number.isFinite(p.latitude) ||
     !Number.isFinite(p.longitude) ||
     p.latitude < 37.5 ||
@@ -89,7 +119,7 @@ export function validateCampusManifest(
     Date.parse(p.verifiedAt) > now.getTime()
   )
     throw new Error(
-      'Verified Seorabeol Hall 203 coordinates and source evidence are required',
+      'Verified campus coordinates and source evidence are required',
     );
   if (!apply) return m;
   const r = m.rollout;
